@@ -127,6 +127,8 @@ Songs repeat the same sounds over and over, so for nearly every damaged one ther
 - **Best hits**: the app finds each drum sound (kick, snare, hi-hat and cymbals, toms) and every time it's played, picks the cleanest hit, and fills in what the vocals took from each smeared one, lined up to the sample and matched to how hard it was played. Works on the drum track, or on the separate kick, snare, toms and cymbals tracks when you split the drums.
 - **Repeated bars**: riffs and patterns an instrument plays again and again. Damaged repeats are replaced by the cleanest one, matched to the beat and level.
 
+Each row has **Apply** and **Add to review**. **Apply all** at the top does every repeated part in one go (or **Add all to Review** to listen first), and Undo takes the whole batch back in one step.
+
 ### Clean up a glitchy part
 
 Drag across a part that sounds glitchy or artifacted and choose **Clean up this part**. In one go the app looks for clicks and gaps there, prepares smoothing for the watery separation sound under the vocals, and rebuilds damaged drum hits and repeated bars from their cleanest copies. Everything lands in Review for you to hear first; apply what helps, reject the rest. If it's beyond saving, the same menu can keep the original recording there, try another model, or mute it.
@@ -211,6 +213,8 @@ Updates never touch your songs, projects or exports. The previous version is kep
 **The model light is red after a download.** The panel says what went wrong. Click **Try again**, or Settings → **Reinstall separation model**. The message says what went wrong; most often it's the internet connection or not enough disk space (it needs about 3 GB). If it says your Python isn't supported, install Python 3.12 or 3.13 from python.org.
 
 **MP3 files won't open.** ffmpeg is missing. Install it (step 3 above) and restart the app, or convert the song to WAV.
+
+**The app hangs or a download seems stuck.** Press **Stop** on the progress screen, or open **Troubleshooting and reset** (Settings, or the link at the bottom of the start screen). **Clear downloaded model files** fixes a model download that got cut off; **Restart the app** fixes most other hangs. If a start doesn't finish, the next one opens in safe mode by itself. Background tasks that show no progress for 15 minutes are stopped automatically.
 
 **Splitting is very slow.** Without a graphics card the app starts you on **Fast** separation, which takes a few minutes per song. **Best quality** runs four models in a row and can take 5–15 minutes on a CPU; change it in Settings → *Separation for new songs*. Re-opening a song you've split before is instant: the app reuses the earlier split.
 

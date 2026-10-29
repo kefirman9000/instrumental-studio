@@ -1,5 +1,13 @@
 # What's new
 
+## 1.11.0
+
+- **Apply all repeated parts at once.** The Repairability tab has **Apply all** (or **Add all to Review**) for every best version, drum hit and repeated bar together, plus **Apply all** for each list. Every row now has **Apply** next to **Add to review**, and neither one switches tabs any more. Undo takes a whole batch back in one step.
+- **No more hangs at startup or while splitting.** Every background task (model downloads, splitting, installs) is watched: if it shows no progress for 15 minutes it's stopped with an explanation instead of hanging. A **Stop** button and an elapsed timer are on the progress screen.
+- **Safe mode.** If a start doesn't finish, the next start skips the update check and the graphics-card check automatically, and says so.
+- **Troubleshooting and reset** (Settings, the start screen, or the progress screen): stop what's running, restart the app, clear downloaded model files (fixes a download that got cut off), reinstall the separation model, reset app settings, or close the open song. None of them touch your projects.
+- If the app stops answering, a panel offers to restart it.
+
 ## 1.10.0
 
 - **Best hits**: finds each repeated drum sound (kick, snare, hi-hat and cymbals, toms), picks its cleanest hit, and fills in what the vocals took from every smeared one, lined up to the sample and matched to how hard it was played.
