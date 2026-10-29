@@ -51,8 +51,8 @@ def check():
         with _open(f"https://api.github.com/repos/{REPO}/releases/latest") as r:
             rel = json.load(r)
     except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return {"current": __version__, "latest": None, "available": False, "message": "No releases published yet."}
+        if e.code == 404:   # no releases yet: the version on the main branch is the latest
+            return _check_branch()
         if e.code == 403:
             raise RuntimeError("GitHub is limiting update checks right now. Try again in an hour.") from e
         raise RuntimeError(f"GitHub answered {e.code} while checking for updates.") from e
@@ -62,6 +62,30 @@ def check():
         "name": rel.get("name") or f"Version {latest}", "notes": (rel.get("body") or "").strip(),
         "published": rel.get("published_at"), "url": rel.get("html_url"), "zip": rel.get("zipball_url"),
         "checked": time.time(),
+    }
+
+
+def _check_branch(branch="main"):
+    """Fallback when no GitHub release exists: read __version__ from the branch and use its zip."""
+    import base64
+    try:
+        with _open(f"https://api.github.com/repos/{REPO}/contents/studio/__init__.py?ref={branch}") as r:
+            src = base64.b64decode(json.load(r)["content"]).decode()
+        with _open(f"https://api.github.com/repos/{REPO}/commits/{branch}") as r:
+            commit = json.load(r)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"GitHub answered {e.code} while checking for updates.") from e
+    m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", src)
+    latest = m.group(1) if m else "0"
+    c = commit.get("commit", {})
+    return {
+        "current": __version__, "latest": latest, "available": _ver(latest) > _ver(__version__),
+        "name": f"Version {latest}",
+        "notes": "\n".join(l for l in (c.get("message") or "").splitlines()
+                           if not re.match(r"(Co-Authored-By|Claude-Session|Signed-off-by):", l)).strip(),
+        "published": (c.get("committer") or {}).get("date"),
+        "url": f"https://github.com/{REPO}/commits/{branch}",
+        "zip": f"https://api.github.com/repos/{REPO}/zipball/{branch}", "checked": time.time(),
     }
 
 
