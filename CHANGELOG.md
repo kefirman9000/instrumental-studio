@@ -1,5 +1,13 @@
 # What's new
 
+## 1.12.0
+
+- **Rebuild any part.** Drag across part of the song, pick an instrument (or all of them) and choose **Rebuild**: it's rebuilt from the bars where that instrument plays the same thing, even if nothing was flagged there. Every rebuilt bar goes to Review first.
+- **Blend two models.** Under **Try another model here**, tick **Blend half and half with the current split** to mix the other model's take with the one you have. Different models leave different artifacts, so a blend often hides both.
+- **Use the original's stereo sides.** Lead vocals sit in the middle of a mix, so the sides of the original song are mostly instruments. Drag across a part and choose **Use the original's stereo sides here** to bring back the width and detail the split lost. Listed in the Levels tab (full or half), and Undo takes it back.
+- **Leftover "s" sounds.** Find damage (and Clean up this part) now listens for the singer's "s", "sh" and "t" sounds left in the instruments and offers to remove them, under **Vocal leftovers**.
+- **Room around the singing.** "Use the original song here" now only takes over where nobody sings, staying 0.3 s clear before singing starts and 0.8 s after it stops, so breaths, pickup notes and reverb tails can't slip into the instrumental. Change both in Settings.
+
 ## 1.11.0
 
 - **Apply all repeated parts at once.** The Repairability tab has **Apply all** (or **Add all to Review**) for every best version, drum hit and repeated bar together, plus **Apply all** for each list. Every row now has **Apply** next to **Add to review**, and neither one switches tabs any more. Undo takes a whole batch back in one step.

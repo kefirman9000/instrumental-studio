@@ -77,12 +77,20 @@
       <button class="small" data-act="smooth" data-split-only title="Calms the warbling, watery sound separation leaves under the vocals. You review it before it's applied.">Smooth watery sound here</button>
       <button class="small" data-act="cleanup" data-split-only title="Finds clicks and gaps, smooths watery sound, and rebuilds damaged drum hits and repeated bars in this part. Everything goes to Review first.">Clean up this part (all of the below)</button>
       <button class="small" data-act="scan" data-split-only>Find clicks and gaps here</button>
+      <span class="pop-h" data-split-only data-rebuild>Rebuild from the rest of the song</span>
+      <div class="alt-row" data-split-only data-rebuild>
+        <select id="rebuildStem" aria-label="Which track"></select>
+        <button class="small" data-act="rebuild" title="Rebuilds this part from the bars where the same instrument plays the same thing, whether or not anyone sings here. Goes to Review first.">Rebuild</button>
+      </div>
       <span class="pop-h" data-split-only>Try another model here</span>
       <div class="alt-row" data-split-only>
         <select id="altMode" aria-label="Model"></select>
         <select id="altStem" aria-label="Which track"></select>
         <button class="small" data-act="alt">Try</button>
       </div>
+      <label class="check small alt-blend" data-split-only title="Mixes the other model's version half and half with the current one. Each model leaves different artifacts, so blending often hides both."><input type="checkbox" id="altBlend"><span>Blend half and half with the current split</span></label>
+      <span class="pop-h" data-split-only>Stereo</span>
+      <button class="small" data-act="sides" data-split-only title="Lead vocals sit in the middle of the mix, so the left-minus-right part of the original song is mostly instruments. Using it here brings back width and detail the split lost. Undo takes it back.">Use the original's stereo sides here</button>
       <span class="pop-h" data-split-only>Mute</span>
       <div class="mute-row" id="muteRow" data-split-only></div>
       <button class="ghost small" data-mode="">Cancel</button>
@@ -140,6 +148,9 @@
       <h3 class="panel-h">Kept parts</h3>
       <p class="help">Parts you keep are never repaired or re-levelled. Drag across the Sections bar above the timeline to keep a part.</p>
       <div id="keepList"></div>
+      <h3 class="panel-h" style="margin-top:14px">Original stereo sides</h3>
+      <p class="help">Parts that use the stereo width of the original song (its sides hold the instruments, not the lead vocal). Drag across the Sections bar to add one.</p>
+      <div id="sidesList"></div>
       <h3 class="panel-h" style="margin-top:14px">Muted parts</h3>
       <p class="help">Silence everything, or one instrument, in part of the song. Drag across the Sections bar and choose Mute, or use the M buttons in the table below.</p>
       <div id="muteList"></div>
@@ -159,6 +170,15 @@
       </div>
       <button class="ghost" id="btnApplySettings">Re-sort suggestions</button>
       <p class="help">Your own accept and reject decisions are kept when suggestions are re-sorted.</p>
+      <hr>
+      <div class="setting">
+        <label>Space kept around singing when a part uses the original song</label>
+        <span class="help">"Use the original song here" fades out this long before any singing starts and stays out this long after it stops, so breaths, pickup notes and reverb tails never sneak into the instrumental.</span>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <label class="small">Before <input type="number" id="guardBefore" min="0" max="3" step="0.1" style="width:64px"> s</label>
+          <label class="small">After <input type="number" id="guardAfter" min="0" max="5" step="0.1" style="width:64px"> s</label>
+        </div>
+      </div>
       <hr>
       <p class="help" id="engineInfo"></p>
       <button class="ghost" id="btnModelReinstall">Reinstall separation model</button>
