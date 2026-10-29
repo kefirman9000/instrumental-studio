@@ -2,6 +2,8 @@
 import os
 import shutil
 import subprocess
+
+from . import proc  # noqa: E402  (hidden windows on Windows)
 import sys
 import tempfile
 from math import gcd
@@ -50,7 +52,7 @@ def load_audio(path, sr=44100):
                 "Reading this file type needs ffmpeg. Install ffmpeg, or convert the song to .wav first.")
         cmd = ["ffmpeg", "-v", "error", "-i", path, "-f", "f32le", "-acodec", "pcm_f32le",
                "-ac", "2", "-ar", str(sr), "-"]
-        out = subprocess.run(cmd, capture_output=True)
+        out = proc.run(cmd, capture_output=True)
         if out.returncode != 0:
             raise RuntimeError("ffmpeg could not read the file: " + out.stderr.decode(errors="ignore")[-400:])
         data = np.frombuffer(out.stdout, dtype=np.float32).reshape(-1, 2).T.copy()
@@ -82,7 +84,7 @@ def save_audio(path, audio, sr, bits=32):
         tmp = os.path.join(td, "x.wav")
         wavfile.write(tmp, sr, pcm)
         extra = ["-b:a", "320k"] if ext in (".mp3", ".m4a", ".aac", ".ogg") else []
-        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", tmp, *extra, path], capture_output=True)
+        r = proc.run(["ffmpeg", "-v", "error", "-y", "-i", tmp, *extra, path], capture_output=True)
         if r.returncode != 0:
             raise RuntimeError(r.stderr.decode(errors="ignore")[-400:])
     return path

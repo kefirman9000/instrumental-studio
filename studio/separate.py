@@ -2,6 +2,8 @@
 import os
 import re
 import subprocess
+
+from . import proc  # noqa: E402  (hidden windows on Windows)
 import sys
 
 import numpy as np
@@ -36,7 +38,7 @@ def device_info():
             "m=getattr(torch.backends,'mps',None) and torch.backends.mps.is_available();"
             "print('cuda|'+torch.cuda.get_device_name(0) if c else 'mps|Apple GPU' if m else 'cpu|CPU')")
     try:
-        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+        r = proc.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
         dev, name = r.stdout.strip().split("|", 1)
     except Exception:
         dev, name = "cpu", "CPU"
@@ -51,7 +53,7 @@ def _run_model(wav_path, model, outdir, progress, frac0, frac1):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     log("Running: " + " ".join(cmd))
     progress(frac0, f"Loading {model} (downloads once, about 80-300 MB)")
-    p = subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    p = proc.popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail, passes, done_passes, last = [], 1, 0, 0.0
     for chunk in iter(lambda: p.stdout.readline(), ""):
         for line in re.split(r"[\r\n]", chunk):   # tqdm redraws with carriage returns
