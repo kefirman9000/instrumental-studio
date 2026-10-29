@@ -40,8 +40,9 @@ async function refreshState() {
   if (!sel.options.length) {
     for (const [k, v] of Object.entries(s.models)) sel.add(new Option(v, k));
     sel.value = localStorage.getItem("sepMode") || "4stem";
+    sel.dataset.auto = localStorage.getItem("sepMode") ? "" : "1";
   }
-  renderModel(s);
+  renderModel(s); renderSpeedTip();
   const rec = $("#recent"); rec.innerHTML = "";
   if (s.projects.length) {
     const h = document.createElement("h2"); h.textContent = "Recent songs"; rec.append(h);
@@ -163,7 +164,20 @@ async function startStems(folder, name) {
 }
 $("#btnDemo").onclick = async () => { try { await api.post("/api/demo"); watchJob(); } catch (e) { fail(e); } };
 $("#btnSongs").onclick = () => { stopPreview(); $("#player").pause(); showWelcome(true); };
-$("#sepMode").onchange = e => localStorage.setItem("sepMode", e.target.value);
+$("#sepMode").onchange = e => { localStorage.setItem("sepMode", e.target.value); e.target.dataset.auto = ""; renderSpeedTip(); };
+// Without a graphics card the best-quality model (4 passes) is slow, so start with Fast until the person picks
+function renderSpeedTip() {
+  const m = st.state?.model || {}, sel = $("#sepMode");
+  const cpu = m.installed && /CPU/i.test(m.device || "");
+  if (cpu && sel.dataset.auto) sel.value = "4stem_fast";
+  const tips = {
+    "4stem": cpu ? "Best quality runs four models in a row: on a CPU expect 5-15 minutes per song. Fast is about 4x quicker." : "Best quality runs four models in a row. Fast is about 4x quicker.",
+    "4stem_fast": "About 4x quicker than best quality, with slightly more vocal damage to repair.",
+    "6stem": "Adds guitar and piano lanes. Similar speed to Fast; the piano stem is less clean.",
+    "ensemble": "Runs two models and averages them: the least damage, but the slowest option.",
+  };
+  $("#speedTip").textContent = tips[sel.value] || "";
+}
 $("#btnReveal").onclick = () => api.post("/api/reveal", {});
 
 /* ------------------------------------------------------------------ busy */

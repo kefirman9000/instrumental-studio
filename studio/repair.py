@@ -109,8 +109,8 @@ def repair_window(stem, vocals, inst_sum, s0, s1, lags, conf, strength, bands, b
     n = hi - lo
     ch = stem.shape[0]
     Xt = [stft(segment(stem[c], lo, hi)) for c in range(ch)]
-    Vm = np.abs(stft(segment(vocals.mean(0), lo, hi)))
-    Im = np.abs(stft(segment(inst_sum.mean(0), lo, hi)))
+    Vm = np.abs(stft(segment(vocals, lo, hi).mean(0)))
+    Im = np.abs(stft(segment(inst_sum, lo, hi).mean(0)))
     r = Vm ** 2 / (Vm ** 2 + Im ** 2 + EPS)
     r_s = gaussian_filter(r, (2, 1))
 
@@ -123,8 +123,8 @@ def repair_window(stem, vocals, inst_sum, s0, s1, lags, conf, strength, bands, b
     donors = []
     for lag in lags:
         Xd = [stft(segment(stem[c], lo + lag, hi + lag)) for c in range(ch)]
-        Vd = np.abs(stft(segment(vocals.mean(0), lo + lag, hi + lag)))
-        Id = np.abs(stft(segment(inst_sum.mean(0), lo + lag, hi + lag)))
+        Vd = np.abs(stft(segment(vocals, lo + lag, hi + lag).mean(0)))
+        Id = np.abs(stft(segment(inst_sum, lo + lag, hi + lag).mean(0)))
         rd = gaussian_filter(Vd ** 2 / (Vd ** 2 + Id ** 2 + EPS), (2, 1))
         Dm2 = np.abs(np.mean(Xd, axis=0)) ** 2
         w = (1 - r_s) * (1 - rd)
@@ -185,7 +185,7 @@ def bleed_window(stem, vocals, s0, s1, strength=1.0):
     ch = stem.shape[0]
     Xs = [stft(segment(stem[c], lo, hi)) for c in range(ch)]
     S = np.abs(np.mean(Xs, axis=0))
-    V = np.abs(stft(segment(vocals.mean(0), lo, hi)))
+    V = np.abs(stft(segment(vocals, lo, hi).mean(0)))
     sel = slice(int(250 * N_FFT / 44100), int(5000 * N_FFT / 44100))
     s, v = S[sel], V[sel]
     m = v > np.percentile(v, 85)

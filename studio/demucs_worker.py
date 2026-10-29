@@ -48,15 +48,19 @@ def run(model_name, inp, outdir, device=None):
     wav = (wav - mean) / std
 
     dev = pick_device(device)
+    # on a CPU, split the song into chunks processed in parallel (Demucs' -j option)
+    cpu_jobs = max(1, min(4, (os.cpu_count() or 2) // 2))
     try:
         with torch.no_grad():
-            sources = apply_model(model, wav[None], device=dev, shifts=1, split=True, overlap=0.25, progress=True)[0]
+            sources = apply_model(model, wav[None], device=dev, shifts=1, split=True, overlap=0.25, progress=True,
+                                  num_workers=cpu_jobs if dev == "cpu" else 0)[0]
     except (RuntimeError, NotImplementedError) as e:
         if dev == "cpu":
             raise
         print(f"FALLBACK cpu ({e.__class__.__name__}: {str(e)[:120]})", flush=True)
         with torch.no_grad():
-            sources = apply_model(model, wav[None], device="cpu", shifts=1, split=True, overlap=0.25, progress=True)[0]
+            sources = apply_model(model, wav[None], device="cpu", shifts=1, split=True, overlap=0.25, progress=True,
+                                  num_workers=cpu_jobs)[0]
     sources = sources * std + mean
     os.makedirs(outdir, exist_ok=True)
     for name, src in zip(model.sources, sources):

@@ -142,20 +142,54 @@ def _job_song(path, mode):
     root = _slug(path)
     p = Project(root)
     p.meta["name"] = os.path.splitext(os.path.basename(path))[0]
-    first = not SEP.demucs_available()
-    _wait_for_model()
-    base = 0.32 if first else 0.02
-    _progress(base, "Loading song")
+    _progress(0.01, "Loading song")
     original, sr = load_audio(path)
-    work = os.path.join(root, "work")
-    os.makedirs(work, exist_ok=True)
-    stems, sr = SEP.separate(path, work, mode,
-                             lambda f, m: _progress(None if f is None else base + (0.52 - base) * f, m))
-    shutil.rmtree(work, ignore_errors=True)
+    digest = _file_hash(path)
+    p.meta.update(source_hash=digest, sep_mode=mode)
+    stems = _reuse_stems(digest, mode)
+    if stems:   # this exact file was split the same way before: skip the slow part
+        _progress(0.5, "Reusing the split from your earlier project of this song")
+    else:
+        _wait_for_model()
+        base = 0.02
+        work = os.path.join(root, "work")
+        os.makedirs(work, exist_ok=True)
+        stems, sr = SEP.separate(path, work, mode,
+                                 lambda f, m: _progress(None if f is None else base + (0.52 - base) * f, m))
+        shutil.rmtree(work, ignore_errors=True)
     p.meta["separation"] = SEP.MODELS[mode][0]
     p.set_stems(stems, sr, original, source=path)
     p.analyze(lambda f, m: _progress(0.53 + 0.47 * f, m))
     S.project = p
+
+
+def _file_hash(path):
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _reuse_stems(digest, mode):
+    """Stems from an earlier project of the same file split with the same model, or None."""
+    import numpy as np
+    for d in os.listdir(PROJECTS) if os.path.isdir(PROJECTS) else []:
+        pj = os.path.join(PROJECTS, d, "project.json")
+        try:
+            with open(pj) as f:
+                meta = json.load(f)["meta"]
+        except (OSError, ValueError, KeyError):
+            continue
+        if meta.get("source_hash") == digest and meta.get("sep_mode") == mode:
+            sd = os.path.join(PROJECTS, d, "stems")
+            try:
+                return {f[:-4]: np.load(os.path.join(sd, f)) for f in os.listdir(sd)
+                        if f.endswith(".npy") and not f.startswith("_")}
+            except OSError:
+                continue
+    return None
 
 
 def _job_stems(folder, name):
@@ -360,7 +394,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "path": dest, "folder": folder})
             d = self._json()
             if path == "/api/open_song":
-                if not SEP.demucs_available() and not S.model["installing"] and not d.get("confirm_model"):
+                if not SEP.demucs_available() and not _reuse_stems(_file_hash(d["path"]), d.get("mode", "4stem")):
                     return self._send(409, {"error": "need_model", "plan": _model_plan()})
                 _start_job(_job_song, d["path"], d.get("mode", "4stem"))
                 return self._send(200, {"ok": True})

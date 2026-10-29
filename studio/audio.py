@@ -8,6 +8,7 @@ from math import gcd
 
 import numpy as np
 from scipy import signal
+from scipy import fft as sfft
 from scipy.io import wavfile
 
 EPS = 1e-10
@@ -108,7 +109,7 @@ def stft(x):
     out = np.empty((N_FFT // 2 + 1, n_frames), dtype=np.complex64)
     step = 4096  # chunk to bound memory on long songs
     for i in range(0, n_frames, step):
-        out[:, i:i + step] = np.fft.rfft(frames[i:i + step] * _WIN, axis=1).T
+        out[:, i:i + step] = sfft.rfft(frames[i:i + step] * _WIN, axis=1, workers=-1).T
     return out
 
 
@@ -121,7 +122,7 @@ def istft(X, length):
     w2 = _WIN.astype(np.float64) ** 2
     step = 4096
     for i0 in range(0, n_frames, step):
-        fr = np.fft.irfft(X[:, i0:i0 + step].T, n=N_FFT, axis=1) * _WIN
+        fr = sfft.irfft(X[:, i0:i0 + step].T, n=N_FFT, axis=1, workers=-1) * _WIN
         for j, f in enumerate(fr):
             s = (i0 + j) * HOP
             out[s:s + N_FFT] += f

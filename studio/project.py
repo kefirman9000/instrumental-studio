@@ -174,10 +174,15 @@ class Project:
         self.level_floor = {}
         jobs = [(k, w) for k in inst_names for w in range(len(windows))]
         total = max(len(jobs), 1)
-        for n_done, (k, wi) in enumerate(jobs):
-            if n_done % 8 == 0:
-                progress(0.3 + 0.62 * n_done / total, f"Checking {k} for damage")
-            self._make_window_suggestions(k, wi)
+        # windows are independent; NumPy/SciPy release the GIL in the heavy parts, so threads scale
+        from concurrent.futures import ThreadPoolExecutor
+        for k in inst_names:
+            self._level_floor(k)
+        workers = max(1, min(8, (os.cpu_count() or 2)))
+        with ThreadPoolExecutor(workers) as pool:
+            for n_done, _ in enumerate(pool.map(lambda kw: self._make_window_suggestions(*kw), jobs)):
+                if n_done % 8 == 0:
+                    progress(0.3 + 0.62 * n_done / total, f"Checking {jobs[n_done][0]} for damage")
         progress(0.93, "Scoring sections")
         for k in inst_names:
             self._render_cache.pop(k, None)

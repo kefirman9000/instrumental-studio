@@ -141,7 +141,7 @@ Updates never touch your songs, projects or exports. The previous version is kep
 
 **MP3 files won't open.** ffmpeg is missing. Install it (step 3 above) and restart the app, or convert the song to WAV.
 
-**Splitting is very slow.** Without a graphics card, a 4-minute song can take 5–10 minutes. Settings → *Separation for new songs* → **Fast** is quicker but a little less clean.
+**Splitting is very slow.** Without a graphics card the app starts you on **Fast** separation, which takes a few minutes per song. **Best quality** runs four models in a row and can take 5–15 minutes on a CPU; change it in Settings → *Separation for new songs*. Re-opening a song you've split before is instant: the app reuses the earlier split.
 
 **"Can't verify GitHub's certificate" when checking for updates (Mac).** Open Applications → Python and double-click **Install Certificates.command**.
 
