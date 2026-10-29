@@ -293,9 +293,23 @@ function buildLanes() {
     cv.addEventListener("mousemove", e => laneHover(e, k));
     wrap.append(lane);
   }
-  $("#ruler").onclick = e => {
-    const t = xToTime(e, $("#ruler")); const si = st.ov.sections.findIndex(s => t >= s.start && t < s.end);
-    seek(t); if (si >= 0) setScope({ section: si });
+  const ruler = $("#ruler");
+  ruler.onmousedown = e => { st.drag = { t0: xToTime(e, ruler), t1: xToTime(e, ruler), moved: false }; hideKeepPop(); };
+  window.onmousemove = e => {
+    if (!st.drag) return;
+    st.drag.t1 = clamp(xToTime(e, ruler), 0, st.ov.meta.duration);
+    if (Math.abs(st.drag.t1 - st.drag.t0) * st.view.pps > 4) st.drag.moved = true;
+    if (st.drag.moved) renderLanes();
+  };
+  window.onmouseup = e => {
+    const d = st.drag; if (!d) return; st.drag = null;
+    if (!d.moved) {
+      const t = d.t0, si = st.ov.sections.findIndex(s => t >= s.start && t < s.end);
+      seek(t); if (si >= 0 && st.ov.stage === "detected") setScope({ section: si }); return;
+    }
+    const a = Math.min(d.t0, d.t1), b = Math.max(d.t0, d.t1);
+    if (b - a < 0.25) { renderLanes(); return; }
+    showKeepPop(a, b, e);
   };
   $("#voxCanvas").onclick = e => seek(xToTime(e, $("#voxCanvas")));
 }
@@ -340,6 +354,24 @@ function prepCanvas(cv) {
   const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); return [ctx, w, h];
 }
 
+function drawKept(ctx, w, h, label) {
+  for (const r of st.ov.mixer.keep || []) {
+    const x0 = Math.max(0, tToX(r.start)), x1 = Math.min(w, tToX(r.end)); if (x1 <= 0 || x0 >= w) continue;
+    const col = r.mode === "original" ? "159,196,255" : "139,148,165";
+    ctx.fillStyle = `rgba(${col},0.10)`; ctx.fillRect(x0, 0, x1 - x0, h);
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, h); ctx.clip();
+    ctx.strokeStyle = `rgba(${col},0.35)`; ctx.lineWidth = 1;
+    for (let x = x0 - h; x < x1; x += 7) { ctx.beginPath(); ctx.moveTo(x, h); ctx.lineTo(x + h, 0); ctx.stroke(); }
+    ctx.restore();
+    ctx.fillStyle = `rgba(${col},0.9)`; ctx.fillRect(x0, 0, 1.5, h); ctx.fillRect(x1 - 1.5, 0, 1.5, h);
+    if (label && x1 - x0 > 60) { ctx.font = "600 10.5px system-ui"; ctx.textBaseline = "top"; ctx.fillText(r.mode === "original" ? "Original song" : "No repairs", x0 + 5, 3); }
+  }
+  if (st.drag && st.drag.moved) {
+    const x0 = tToX(Math.min(st.drag.t0, st.drag.t1)), x1 = tToX(Math.max(st.drag.t0, st.drag.t1));
+    ctx.fillStyle = "rgba(240,176,74,0.18)"; ctx.fillRect(x0, 0, x1 - x0, h);
+    ctx.fillStyle = "#f0b04a"; ctx.fillRect(x0, 0, 1.5, h); ctx.fillRect(x1 - 1.5, 0, 1.5, h);
+  }
+}
 function renderRuler() {
   const [ctx, w, h] = prepCanvas($("#ruler"));
   ctx.fillStyle = "#151922"; ctx.fillRect(0, 0, w, h);
@@ -352,6 +384,7 @@ function renderRuler() {
     ctx.save(); ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, h); ctx.clip();
     ctx.fillStyle = "#e4e8ef"; ctx.fillText(s.name, x0 + 9, h / 2); ctx.restore();
   });
+  drawKept(ctx, w, h, false);
   // time ticks
   const step = [1, 2, 5, 10, 15, 30, 60].find(s => s * st.view.pps > 70) || 120;
   ctx.fillStyle = "#8b94a5"; ctx.font = "10.5px system-ui, sans-serif"; ctx.textBaseline = "bottom";
@@ -408,6 +441,7 @@ function renderLane(k) {
       ctx.setLineDash([]); ctx.globalAlpha = 1;
     }
   }
+  drawKept(ctx, w, h, true);
   if (st.picking && st.picking.stem === k && st.hoverT != null) {
     const sug = st.ov.suggestions.find(s => s.id === st.picking.id);
     const x0 = tToX(st.hoverT), x1 = tToX(st.hoverT + (sug.end - sug.start));
@@ -533,6 +567,79 @@ async function applyEdit(r, opt = {}) {
 }
 $("#btnUndo").onclick = () => edit("/api/undo", {});
 
+/* ---------- kept parts */
+function vocalsIn(a, b) {
+  const bt = st.ov.beats, va = st.ov.vocal_activity; let mx = 0;
+  for (let j = 0; j < va.length; j++) if (bt[j + 1] > a && bt[j] < b) mx = Math.max(mx, va[j]);
+  return mx;
+}
+function showKeepPop(a, b, e) {
+  const pop = $("#keepPop"), tl = $("#timeline").getBoundingClientRect();
+  $("#keepPopTitle").textContent = `Keep ${fmtP(a)} to ${fmtP(b)} as it is`;
+  const sung = st.ov.vocal_activity.length && vocalsIn(a, b) > 0.08;
+  const warn = $("#keepPopWarn");
+  warn.hidden = !sung;
+  warn.textContent = "There's singing in this part. Using the original song here keeps the vocals too.";
+  const split = st.ov.stems.length > 0;
+  pop.querySelector('[data-mode="no_edits"]').hidden = !split;
+  pop.style.left = Math.min(tl.width - 290, Math.max(180, e.clientX - tl.left - 135)) + "px";
+  pop.style.top = (e.clientY - tl.top + 14) + "px";
+  pop.hidden = false;
+  pop.querySelectorAll("button").forEach(btn => btn.onclick = () => {
+    hideKeepPop();
+    if (btn.dataset.mode) setKeep([...(st.ov.mixer.keep || []), { start: a, end: b, mode: btn.dataset.mode }]);
+    else renderLanes();
+  });
+}
+function hideKeepPop() { $("#keepPop").hidden = true; }
+async function setKeep(list) {
+  try { applyEdit(await api.post("/api/mixer", { keep: list })); } catch (e) { fail(e); }
+}
+function renderKeepList() {
+  const w = $("#keepList"), list = st.ov.mixer.keep || [];
+  w.innerHTML = list.length ? "" : `<p class="help">Nothing kept yet.</p>`;
+  list.forEach((r, i) => {
+    const d = document.createElement("div"); d.className = "keep-item";
+    d.innerHTML = `<i class="sw ${r.mode}"></i><span>${fmtP(r.start)} to ${fmtP(r.end)}</span>
+      <select><option value="original">Original song</option><option value="no_edits">Split, no repairs</option></select>
+      <button class="ghost small">Remove</button>`;
+    const sel = d.querySelector("select"); sel.value = r.mode;
+    if (!st.ov.stems.length) sel.querySelector('[value="no_edits"]').disabled = true;
+    sel.onchange = () => setKeep(list.map((x, j) => (j === i ? { ...x, mode: sel.value } : x)));
+    d.querySelector("button").onclick = () => setKeep(list.filter((_, j) => j !== i));
+    d.querySelector("span").onclick = () => { seek(r.start); };
+    w.append(d);
+  });
+}
+const inKept = s => (st.ov.mixer.keep || []).some(r => r.start <= s.start + 0.05 && r.end >= s.end - 0.05);
+
+/* ---------- quality tips */
+function renderTips() {
+  const tips = st.ov.tips || [], box = $("#tipsBox"), list = $("#tipsList");
+  box.hidden = !tips.length;
+  const actionable = tips.filter(t => t.action).length;
+  $("#tipCount").textContent = actionable ? `${actionable}` : "";
+  list.innerHTML = "";
+  for (const t of tips) {
+    const d = document.createElement("div"); d.className = "tip";
+    d.innerHTML = `<b></b><p></p>`;
+    d.querySelector("b").textContent = t.title; d.querySelector("p").textContent = t.detail;
+    if (t.button && t.action) {
+      const b = document.createElement("button"); b.className = "small"; b.textContent = t.button;
+      b.onclick = () => runTip(t.action); d.append(b);
+    }
+    list.append(d);
+  }
+}
+async function runTip(a) {
+  if (a.kind === "keep") return setKeep([...(st.ov.mixer.keep || []), ...a.ranges]);
+  if (a.kind === "bulk") return edit("/api/bulk", { action: a.action, types: ["repair"] });
+  if (a.kind === "lift") return edit("/api/mixer", { vocal_lift: { ...(st.ov.mixer.vocal_lift || {}), [a.stem]: a.db } });
+  if (a.kind === "filter") { st.filter = a.filter; st.scope = null; activateTab("review"); return renderReview(); }
+  if (a.kind === "detect") return $("#btnDetect").onclick();
+  if (a.kind === "resplit") { $("#sepMode").value = a.mode; localStorage.setItem("sepMode", a.mode); return $("#btnSplit").onclick(); }
+}
+
 /* ---------- steps: import -> split -> find damage -> review */
 function renderSteps() {
   const ov = st.ov, stage = ov.stage, m = st.state?.model || {};
@@ -627,7 +734,7 @@ $("#btnDetect").onclick = async () => {
 };
 
 function renderAll() {
-  renderSteps();
+  renderSteps(); renderTips(); renderKeepList();
   $("#btnUndo").disabled = !st.ov.can_undo;
   $("#btnUndo").title = st.ov.can_undo ? `Undo: ${st.ov.undo_label}` : "Nothing to undo";
   renderBadges(); renderLanes(); renderReview(); renderGrid(); renderLevels(); renderSettings();
@@ -717,7 +824,7 @@ function sugItem(s) {
   const d = document.createElement("div"); d.className = "sug" + (st.sel === s.id ? " sel" : ""); d.dataset.id = s.id;
   const color = st.ov.colors[s.stem] || "#888";
   const label = s.type === "bleed" ? `Remove vocal leftover from ${s.stem}` : `Rebuild ${s.stem}`;
-  d.innerHTML = `<div class="sug-row"><span class="dot" style="background:${color}"></span><span class="what"></span><span class="when">${fmtP(s.start)}</span><span class="pill ${s.status}${s.status === "pending" && s.recommended ? " recommended" : ""}">${statusText(s)}</span></div>`;
+  d.innerHTML = `<div class="sug-row"><span class="dot" style="background:${color}"></span><span class="what"></span><span class="when">${fmtP(s.start)}</span><span class="pill ${inKept(s) ? "kept" : s.status}${!inKept(s) && s.status === "pending" && s.recommended ? " recommended" : ""}">${inKept(s) ? "In a kept part" : statusText(s)}</span></div>`;
   d.querySelector(".what").textContent = label;
   if (st.sel !== s.id) { d.onclick = () => select(s.id); return d; }
 
@@ -912,7 +1019,7 @@ document.addEventListener("keydown", e => {
   if (!st.ov || $("#workspace").hidden || e.target.matches("input, select, textarea")) return;
   if (e.key === " ") { e.preventDefault(); togglePlay(); }
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (st.ov.can_undo) edit("/api/undo", {}); }
-  else if (e.key === "Escape") { if (st.picking) endPick(); else stopPreview(); }
+  else if (e.key === "Escape") { if (st.picking) endPick(); else if (!$("#keepPop").hidden) { hideKeepPop(); renderLanes(); } else stopPreview(); }
   else if (e.key === "j" || e.key === "k") {
     const items = $$("#sugList .sug").map(x => x.dataset.id); if (!items.length) return;
     const i = items.indexOf(st.sel); const n = e.key === "j" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);

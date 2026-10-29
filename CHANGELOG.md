@@ -1,5 +1,10 @@
 # What's new
 
+## 1.7.0
+
+- **Keep parts as they are.** Drag across the Sections bar to select part of the song, then use the original recording there, or keep the split with no repairs. Kept parts are hatched on the timeline and listed in the Levels tab.
+- **Suggestions for matching the rest of the song**, at the top of the Review tab: use the original recording where nobody sings, apply the recommended repairs, fill in an instrument that's still thinner under the vocals (measured against the same part elsewhere, lifting only the vocal range, only under the vocals), remove leftover singing, and more. Each is one click and can be undone.
+
 ## 1.6.0
 
 - Repairs are never applied without asking. After **Find damage**, every repair waits for you. Strong matches are marked **Recommended**, and **Apply recommended** applies them all in one click.
