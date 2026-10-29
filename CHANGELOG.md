@@ -1,5 +1,9 @@
 # What's new
 
+## 1.0.1
+
+- After an update, the Mac and Linux start files can still be double-clicked.
+
 ## 1.0.0
 
 The first version of Instrumental Studio.
