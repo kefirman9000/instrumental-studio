@@ -119,7 +119,7 @@
     <h1>Make an instrumental, then fix what the vocals took with them.</h1>
     <p class="lede">The song is split into drums, bass and the other instruments. Wherever the singing covered an instrument, the app finds the same instrument playing the same part elsewhere in the song and uses it to rebuild what was lost.</p>
     <div class="actions">
-      <button class="big primary" id="btnOpenSong"><b>Open a song</b><span>MP3, WAV, FLAC, M4A</span></button>
+      <button class="big primary" id="btnOpenSong"><b>Open a song</b><span>Or drag it into this window</span></button>
       <button class="big" id="btnOpenStems"><b>Use stems you already have</b><span>From UVR, Spleeter or another separator</span></button>
       <button class="big" id="btnDemo"><b>Try the demo song</b><span>Works right away</span></button>
     </div>
@@ -128,6 +128,7 @@
       <span id="modelMsg"></span>
       <div class="bar small-bar" id="modelBarWrap"><i id="modelBar"></i></div>
       <button class="ghost small" id="btnModelRetry" hidden>Try again</button>
+      <button class="small" id="btnModelGet" hidden>Download</button>
     </div>
     <div class="welcome-foot">
       <span class="dim" id="welcomeVer"></span>
@@ -168,6 +169,24 @@
 </dialog>
 
 
+
+<dialog id="dlgModel">
+  <form method="dialog">
+    <h2>Download the separation model?</h2>
+    <p>Splitting a song into instruments uses Demucs, a free model that runs on your own computer. It needs a one-time download of <b id="mdlSize"></b> and will be set up to run on <b id="mdlRunsOn"></b>.</p>
+    <p id="mdlNote" hidden></p>
+    <p>It downloads from the official Python package index and PyTorch, then the model files from Meta's servers. It takes a few minutes. You can keep using the app meanwhile.</p>
+    <div class="dlg-actions"><button value="cancel" class="ghost">Not now</button><button value="ok" class="primary" id="mdlOk">Download</button></div>
+  </form>
+</dialog>
+
+<div class="drop-zone" id="dropZone" hidden>
+  <div class="drop-card">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 17v3h16v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <b>Drop a song to open it</b>
+    <span>Or drop a full set of stems, including the vocals, to import them</span>
+  </div>
+</div>
 
 <div class="toast" id="toast" hidden></div>
 <audio id="player" preload="auto"></audio>

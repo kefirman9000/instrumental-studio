@@ -44,7 +44,15 @@ def nvidia_cuda():
 
 
 def plan():
-    """What will be installed, in words, plus the torch index to use (None = default PyPI)."""
+    """What will be installed, in words, how big it is, and the torch index (None = default PyPI)."""
+    p = _plan()
+    big = bool(p["index"] and "cu1" in p["index"]) or (sys.platform.startswith("linux") and not p["index"])
+    p["size"] = "about 3 GB" if big else "about 600 MB"
+    p["runs_on"] = p["gpu"] or "your computer's processor (CPU)"
+    return p
+
+
+def _plan():
     if sys.platform == "darwin":
         return {"gpu": "Apple GPU" if _apple_silicon() else None, "index": None}
     cuda = nvidia_cuda()

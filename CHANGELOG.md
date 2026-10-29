@@ -1,5 +1,10 @@
 # What's new
 
+## 1.2.0
+
+- The separation model is no longer downloaded without asking. The first time you open a song, the app tells you how big the download is and what it will run on, and waits for your OK. You can also start it from the start screen or Settings.
+- Drag a song into the window to open it. Drag in a full set of stems (including the vocals) to import them.
+
 ## 1.1.0
 
 - The separation model now installs itself. The first time you start the app it downloads and sets it up in the background, choosing the right version for your graphics card (NVIDIA or Apple silicon) automatically. No more terminal commands.

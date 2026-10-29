@@ -204,8 +204,16 @@ label.check input { margin-top: 3px; }
 
 /* ---------- welcome: model status + updates */
 .model-strip { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--bg2); }
-.model-strip span { flex: none; max-width: 60%; }
+.model-strip span { flex: 1; line-height: 1.45; }
+.model-strip .small-bar { flex: 0 0 35%; }
 .model-strip.err { border-color: var(--damage); }
 .model-strip.err span { color: var(--damage); max-width: none; flex: 1; }
 .small-bar { flex: 1; margin: 0; height: 4px; }
 .welcome-foot { display: flex; align-items: center; gap: 10px; margin-top: 30px; flex-wrap: wrap; }
+
+/* ---------- drag and drop */
+.drop-zone { position: fixed; inset: 0; z-index: 50; background: #0d1016d9; display: grid; place-items: center; pointer-events: none; }
+.drop-card { width: min(560px, 86vw); padding: 44px 30px; border: 2px dashed var(--repair); border-radius: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; background: #1b2029cc; }
+.drop-card svg { width: 40px; height: 40px; color: var(--repair); margin-bottom: 6px; }
+.drop-card b { font-size: 20px; }
+.drop-card span { color: var(--muted); }
