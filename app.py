@@ -71,6 +71,13 @@ def main():
     ap.add_argument("--after-update", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
+    # Started without a console (pythonw / the .pyw launcher): send messages to a log file instead
+    if sys.stdout is None or sys.stderr is None:
+        os.makedirs(HOME, exist_ok=True)
+        logf = open(os.path.join(HOME, "app.log"), "a", buffering=1, encoding="utf-8")
+        sys.stdout = sys.stdout or logf
+        sys.stderr = sys.stderr or logf
+
     from studio.updater import RESTART
     httpd, url = serve(args.port, just_updated=args.after_update)
     print(f"{TITLE} running at {url}  (projects in {HOME})")

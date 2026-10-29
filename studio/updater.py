@@ -11,6 +11,8 @@ import re
 import shutil
 import ssl
 import subprocess
+
+from . import proc  # noqa: E402  (hidden windows on Windows)
 import sys
 import tempfile
 import threading
@@ -103,7 +105,7 @@ def install(info, progress=lambda f, m: None):
     old_req = _read(os.path.join(APP_DIR, "requirements.txt"))
     if _is_git():
         progress(0.2, "Pulling the new version")
-        r = subprocess.run(["git", "-C", APP_DIR, "pull", "--ff-only"], capture_output=True, text=True)
+        r = proc.run(["git", "-C", APP_DIR, "pull", "--ff-only"], capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError("git pull failed: " + (r.stderr or r.stdout)[-300:])
     else:
@@ -143,7 +145,7 @@ def install(info, progress=lambda f, m: None):
     new_req = _read(os.path.join(APP_DIR, "requirements.txt"))
     if new_req and new_req != old_req:
         progress(0.85, "Installing new requirements")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-r", os.path.join(APP_DIR, "requirements.txt")],
+        proc.run([sys.executable, "-m", "pip", "install", "-r", os.path.join(APP_DIR, "requirements.txt")],
                        capture_output=True)
     progress(1.0, "Update installed")
     return info["latest"]
@@ -195,7 +197,7 @@ RESTART = threading.Event()
 
 def relaunch():
     """Start a fresh copy of the app, then let this one exit."""
-    args = [sys.executable, os.path.join(APP_DIR, "app.py")] + [a for a in sys.argv[1:] if a != "--after-update"]
+    args = [proc.gui_python(), os.path.join(APP_DIR, "app.py")] + [a for a in sys.argv[1:] if a != "--after-update"]
     args.append("--after-update")
     kw = {}
     if sys.platform.startswith("win"):

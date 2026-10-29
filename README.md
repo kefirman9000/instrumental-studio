@@ -44,8 +44,8 @@ You do this once. It takes about 10 minutes, most of it waiting for downloads.
    ```
 
 5. **Start it.**
-   - Windows: double-click **Start Instrumental Studio (Windows).bat**
-   - Mac: double-click **Start Instrumental Studio (Mac).command**. The first time, macOS may block it: right-click it, choose **Open**, then **Open** again.
+   - Windows: double-click **Instrumental Studio.pyw** (no console window). **Start Instrumental Studio (Windows).bat** works too.
+   - Mac: double-click **Start Instrumental Studio (Mac).command**. A Terminal window flashes up and closes; the app keeps running. The first time, macOS may block it: right-click it, choose **Open**, then **Open** again.
    - Linux: run `./start.sh` in the terminal
 
 The app opens in its own window.
@@ -177,6 +177,8 @@ Updates never touch your songs, projects or exports. The previous version is kep
 **Splitting is very slow.** Without a graphics card the app starts you on **Fast** separation, which takes a few minutes per song. **Best quality** runs four models in a row and can take 5–15 minutes on a CPU; change it in Settings → *Separation for new songs*. Re-opening a song you've split before is instant: the app reuses the earlier split.
 
 **"Can't verify GitHub's certificate" when checking for updates (Mac).** Open Applications → Python and double-click **Install Certificates.command**.
+
+**Something went wrong and there's no console to read.** The app writes its messages to *app.log* in the InstrumentalStudio folder in your home folder.
 
 **The app opens in my web browser instead of its own window.** Run `pip install pywebview`, then start the app again.
 

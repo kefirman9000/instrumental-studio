@@ -14,6 +14,8 @@ import os
 import re
 import shutil
 import subprocess
+
+from . import proc  # noqa: E402  (hidden windows on Windows)
 import sys
 
 TORCH_INDEX = "https://download.pytorch.org/whl/"
@@ -36,7 +38,7 @@ def nvidia_cuda():
     if not exe:
         return None
     try:
-        out = subprocess.run([exe], capture_output=True, text=True, timeout=15).stdout
+        out = proc.run([exe], capture_output=True, text=True, timeout=15).stdout
     except Exception:
         return None
     m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", out)
@@ -75,9 +77,9 @@ def _apple_silicon():
 def _pip(args, progress, lo, hi, label):
     base = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--progress-bar", "raw"]
     cmd = base + args
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    child = proc.popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail, cur = [], label
-    for line in proc.stdout:
+    for line in child.stdout:
         tail = (tail + [line])[-30:]
         m = re.match(r"\s*Progress (\d+) of (\d+)", line)
         if m and int(m.group(2)) > 0:
@@ -89,15 +91,15 @@ def _pip(args, progress, lo, hi, label):
             name = (m.group(2) or "").split("/")[-1].split("-")[0]
             cur = f"{label}: {m.group(1).lower()} {name}".strip()
             progress(None, cur)
-    proc.wait()
+    child.wait()
     text = "".join(tail)
-    if proc.returncode == 0:
+    if child.returncode == 0:
         progress(hi, label)
         return
     low = text.lower()
     if "--progress-bar" in low or ("invalid choice" in low and "raw" in low):
         # older pip without raw progress output: run again without it
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check"] + args,
+        r = proc.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check"] + args,
                            capture_output=True, text=True)
         if r.returncode == 0:
             progress(hi, label)
@@ -128,7 +130,7 @@ def install(progress=lambda f, m: None):
     _pip(DEMUCS_DEPS, progress, 0.80, 0.92, "Installing helpers")
     _pip(["--no-deps", "demucs"], progress, 0.92, 0.97, "Installing Demucs")
     progress(0.98, "Checking the installation")
-    r = subprocess.run([sys.executable, "-c",
+    r = proc.run([sys.executable, "-c",
                         "import torch, demucs.pretrained, demucs.apply;"
                         "print('cuda' if torch.cuda.is_available() else 'mps' if getattr(torch.backends,'mps',None) "
                         "and torch.backends.mps.is_available() else 'cpu')"],

@@ -1,5 +1,12 @@
 # What's new
 
+## 1.7.1
+
+- No more black command windows popping up on Windows while the app splits songs, installs the model, reads MP3s or checks for updates.
+- Start the app on Windows by double-clicking **Instrumental Studio.pyw**: no console window at all. The .bat file now starts it the same way.
+- On a Mac, the Terminal window from the start file closes by itself.
+- Messages that used to go to the console are saved in *app.log* in the InstrumentalStudio folder.
+
 ## 1.7.0
 
 - **Keep parts as they are.** Drag across the Sections bar to select part of the song, then use the original recording there, or keep the split with no repairs. Kept parts are hatched on the timeline and listed in the Levels tab.
