@@ -51,6 +51,35 @@ class Project:
         names = [k for k in self.stems if k != "vocals"]
         return sorted(names, key=lambda k: (STEM_ORDER.index(k) if k in STEM_ORDER else 99, k))
 
+    @property
+    def stage(self):
+        return self.meta.get("stage", "detected" if self.meta.get("analyzed") else "split" if self.stems else "imported")
+
+    def _display_spec(self, x):
+        cols = (x.shape[-1] // HOP + 1) // DS
+        S = np.abs(stft(x.mean(0) if x.ndim == 2 else x)) ** 2
+        spec = 10 * np.log10(self.Bd @ S + 1e-12)
+        return spec[:, :cols * DS].reshape(DISPLAY_BANDS, cols, DS).mean(2).astype(np.float32)
+
+    def set_original(self, original, sr, source=None, progress=lambda f, m: None):
+        """Step 1: bring a song in. Nothing is split or analysed yet; it can be played straight away."""
+        self.sr = sr
+        self.original = np.ascontiguousarray(original, np.float32)
+        n = self.original.shape[1]
+        self.meta.update(duration=n / sr, sr=sr, source=source, stage="imported", stems=[])
+        os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
+        np.save(os.path.join(self.root, "stems", "_original.npy"), self.original)
+        self.B, self.centers = A.band_matrix(sr, 40)
+        self.Bd, _ = A.band_matrix(sr, DISPLAY_BANDS, 30, 16000)
+        progress(0.5, "Drawing the song")
+        spec = self._display_spec(self.original)
+        self.n_frames = n // HOP + 1
+        self.display = {"cols": spec.shape[1], "fps": sr / HOP / DS, "raw": {"original": spec}, "after": {},
+                        "damage": {}, "ref_db": float(spec.max())}
+        self.beats, self.beat_times, self.VA, self.windows, self.sections = np.zeros(0, np.int64), [], np.zeros(0), [], []
+        self.suggestions, self.patches, self.grid, self.stem_summary = {}, {}, {}, {}
+        self.save()
+
     def set_stems(self, stems, sr, original=None, source=None):
         self.stems, self.sr = stems, sr
         n = min(a.shape[1] for a in stems.values())
@@ -64,6 +93,8 @@ class Project:
         self.meta["sr"] = sr
         self.meta["source"] = source
         self.meta["stems"] = self.instruments + ["vocals"]
+        self.meta["stage"] = "split"
+        self._render_cache = {}
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
             np.save(os.path.join(self.root, "stems", k + ".npy"), v)
@@ -71,16 +102,28 @@ class Project:
 
     # ------------------------------------------------------------------ analysis
     def analyze(self, progress=lambda f, m: None):
+        """Prepare and detect in one go (used by tests)."""
         with self.lock:
-            self._analyze(progress)
+            self._prepare(lambda f, m: progress(f * 0.3, m))
+            self._detect(lambda f, m: progress(0.3 + 0.7 * f, m))
 
-    def _analyze(self, progress):
+    def prepare(self, progress=lambda f, m: None):
+        """Step 2b: after splitting, find beats, sections and per-instrument fingerprints. No repairs yet."""
+        with self.lock:
+            self._prepare(progress)
+
+    def detect(self, progress=lambda f, m: None):
+        """Step 3: find the damage and propose repairs. Replaces any earlier detection."""
+        with self.lock:
+            self._detect(progress)
+
+    def _prepare(self, progress):
         sr, st = self.sr, self.meta["settings"]
         inst_names = self.instruments
         voc = self.stems["vocals"]
         inst_sum = sum(self.stems[k] for k in inst_names)
         self.inst_sum = inst_sum
-        progress(0.02, "Measuring where the vocals were")
+        progress(0.05, "Measuring where the vocals were")
         Ic = stft(inst_sum.mean(0))
         Vc = stft(voc.mean(0))
         B, centers = A.band_matrix(sr, 40)
@@ -101,7 +144,7 @@ class Project:
         self.n_frames = n_frames
         fps = sr / HOP
 
-        progress(0.08, "Finding the beat")
+        progress(0.25, "Finding the beat")
         env = A.onset_envelope(Mb)
         period = A.estimate_period(env, fps, self.meta.get("bpm_override"))
         beats = A.track_beats(env, period)
@@ -125,7 +168,7 @@ class Project:
             s += bpb
         self.windows = windows
 
-        progress(0.14, "Detecting song sections")
+        progress(0.4, "Detecting song sections")
         bar_feats, bar_voc, bar_en = [], [], []
         Ilog = np.log(Ib + floor / 40)
         for s, L in windows:
@@ -150,7 +193,7 @@ class Project:
         self.display = {"cols": int(disp_cols), "fps": fps / DS, "raw": {}, "after": {}, "damage": {}}
         vband_presence = r_band
         for i, k in enumerate(inst_names + ["vocals"]):
-            progress(0.16 + 0.12 * i / (len(inst_names) + 1), f"Analysing {k}")
+            progress(0.5 + 0.45 * i / (len(inst_names) + 1), f"Analysing {k}")
             Sc = stft(self.stems[k].mean(0))
             S = np.abs(Sc)
             del Sc
@@ -165,12 +208,28 @@ class Project:
             self.stem_feats[k] = (F, C, R)
             self.stem_env[k] = A.onset_envelope(Sb)
             self.display["damage"][k] = np.zeros((DISPLAY_BANDS, disp_cols), np.float32)
+        self.display["raw"]["original"] = self._display_spec(self.original)
         ref = max(float(v.max()) for v in self.display["raw"].values())
         self.display["ref_db"] = ref
         del r_bins
+        self.suggestions, self.patches, self.history = {}, {}, []
+        self.display["after"] = {k: self.display["raw"][k].copy() for k in inst_names}
+        self.meta["stage"] = "split"
+        self.meta["analyzed"] = False
+        self._compute_grid()
+        self.save()
+        progress(1.0, "Done")
 
-        # suggestions
-        self.suggestions, self.patches = {}, {}
+    def _detect(self, progress):
+        inst_names = self.instruments
+        windows = self.windows
+        disp_cols = self.display["cols"]
+        progress(0.01, "Getting ready")
+        self.inst_sum = sum(self.stems[k] for k in inst_names)
+        for k in inst_names:
+            self.display["damage"][k] = np.zeros((DISPLAY_BANDS, disp_cols), np.float32)
+            self._render_cache.pop(("stem", k), None)
+        self.suggestions, self.patches, self.history = {}, {}, []
         self.level_floor = {}
         jobs = [(k, w) for k in inst_names for w in range(len(windows))]
         total = max(len(jobs), 1)
@@ -182,13 +241,14 @@ class Project:
         with ThreadPoolExecutor(workers) as pool:
             for n_done, _ in enumerate(pool.map(lambda kw: self._make_window_suggestions(*kw), jobs)):
                 if n_done % 8 == 0:
-                    progress(0.3 + 0.62 * n_done / total, f"Checking {jobs[n_done][0]} for damage")
+                    progress(0.02 + 0.9 * n_done / total, f"Checking {jobs[n_done][0]} for damage")
         progress(0.93, "Scoring sections")
         for k in inst_names:
-            self._render_cache.pop(k, None)
+            self._render_cache.pop(("stem", k), None)
             self._refresh_after(k, 0, self.stems[k].shape[1])
         self._compute_grid()
         self.meta["analyzed"] = True
+        self.meta["stage"] = "detected"
         self.save()
         progress(1.0, "Done")
 
@@ -328,7 +388,7 @@ class Project:
 
     def mix(self, version="repaired", region=None, solo_stem=None, use_mixer=True):
         """version: repaired | raw | original | vocals | patch."""
-        if version == "original":
+        if version == "original" or not self.instruments:
             out = self.original
         elif version == "vocals":
             out = self.stems["vocals"]
@@ -637,7 +697,7 @@ class Project:
             if f.endswith(".npy") and not f.startswith("_"):
                 p.stems[f[:-4]] = np.load(os.path.join(sd, f))
         p.original = np.load(os.path.join(sd, "_original.npy"))
-        p.inst_sum = sum(p.stems[k] for k in p.instruments)
+        p.inst_sum = sum(p.stems[k] for k in p.instruments) if p.instruments else None
         p.B, p.centers = A.band_matrix(p.sr, 40)
         p.Bd, _ = A.band_matrix(p.sr, DISPLAY_BANDS, 30, 16000)
         z = np.load(os.path.join(root, "patches.npz"))
@@ -647,7 +707,7 @@ class Project:
                 p.patches[sid] = (int(z[sid + "__lo"][0]), z[key])
         if os.path.exists(os.path.join(root, "display.npz")):
             z = np.load(os.path.join(root, "display.npz"))
-            n = p.stems["vocals"].shape[1] // HOP + 1
+            n = p.original.shape[1] // HOP + 1
             p.n_frames = n
             p.display = {"cols": n // DS, "fps": p.sr / HOP / DS, "raw": {}, "after": {}, "damage": {}}
             for key in z.files:
@@ -705,4 +765,6 @@ class Project:
             "levels": self.section_levels(), "can_undo": bool(self.history),
             "undo_label": self.history[-1]["label"] if self.history else None,
             "display": {"cols": self.display["cols"], "rows": DISPLAY_BANDS, "fps": self.display["fps"]},
+            "stage": self.stage, "has_original_display": "original" in self.display.get("raw", {}),
+            "user_decisions": sum(1 for x in self.suggestions.values() if x["status"] in ("accepted", "rejected")),
         }

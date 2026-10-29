@@ -1,5 +1,13 @@
 # What's new
 
+## 1.5.0
+
+- Opening a song now just brings it into the editor, where you can play it right away. You decide when to split it and when to look for damage.
+- New step bar across the top of the editor: **Import**, **Split into instruments**, **Find damage**, **Review and export**. Each step shows what it does and whether it's ready.
+- Choose how to split (best quality, fast, guitar and piano, or both models) right in the Split step. **Split again** and **Find again** let you redo a step.
+- Opening songs no longer needs the separation model at all; only the Split step does, and it offers the download if it's missing.
+- The demo song walks through every step too.
+
 ## 1.4.0
 
 Faster everywhere:

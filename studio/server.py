@@ -138,29 +138,49 @@ def _start_job(fn, *args):
     threading.Thread(target=run, daemon=True).start()
 
 
-def _job_song(path, mode):
+def _job_song(path, mode=None):
+    """Step 1 only: bring the song into a project so it can be played. Splitting comes later."""
     root = _slug(path)
     p = Project(root)
     p.meta["name"] = os.path.splitext(os.path.basename(path))[0]
-    _progress(0.01, "Loading song")
+    _progress(0.05, "Loading song")
     original, sr = load_audio(path)
-    digest = _file_hash(path)
-    p.meta.update(source_hash=digest, sep_mode=mode)
-    stems = _reuse_stems(digest, mode)
-    if stems:   # this exact file was split the same way before: skip the slow part
-        _progress(0.5, "Reusing the split from your earlier project of this song")
-    else:
-        _wait_for_model()
-        base = 0.02
-        work = os.path.join(root, "work")
-        os.makedirs(work, exist_ok=True)
-        stems, sr = SEP.separate(path, work, mode,
-                                 lambda f, m: _progress(None if f is None else base + (0.52 - base) * f, m))
-        shutil.rmtree(work, ignore_errors=True)
-    p.meta["separation"] = SEP.MODELS[mode][0]
-    p.set_stems(stems, sr, original, source=path)
-    p.analyze(lambda f, m: _progress(0.53 + 0.47 * f, m))
+    os.makedirs(root, exist_ok=True)
+    keep = os.path.join(root, "source" + os.path.splitext(path)[1].lower())
+    shutil.copyfile(path, keep)
+    p.meta["source_hash"] = _file_hash(keep)
+    p.set_original(original, sr, source=keep, progress=lambda f, m: _progress(0.2 + 0.8 * f, m))
     S.project = p
+
+
+def _job_split(mode):
+    """Step 2: split into instruments (or reuse an earlier split of the same file), then map the song."""
+    p = S.project
+    src = p.meta.get("source")
+    if src == "demo":
+        import numpy as np
+        _progress(0.1, "Splitting the demo song")
+        z = np.load(os.path.join(p.root, "demo_stems.npz"))
+        stems, sr = {k: z[k] for k in z.files}, p.sr
+        p.meta["separation"] = "Simulated separator (demo)"
+    else:
+        stems = _reuse_stems(p.meta.get("source_hash"), mode, exclude=p.root)
+        sr = p.sr
+        if stems:
+            _progress(0.5, "Reusing the split from your earlier project of this song")
+        else:
+            work = os.path.join(p.root, "work")
+            os.makedirs(work, exist_ok=True)
+            stems, sr = SEP.separate(src, work, mode, lambda f, m: _progress(None if f is None else 0.02 + 0.8 * f, m))
+            shutil.rmtree(work, ignore_errors=True)
+        p.meta["separation"] = SEP.MODELS[mode][0]
+    p.meta["sep_mode"] = mode
+    p.set_stems(stems, sr, p.original, source=src)
+    p.prepare(lambda f, m: _progress(None if f is None else 0.85 + 0.15 * f, m))
+
+
+def _job_detect():
+    S.project.detect(lambda f, m: _progress(None if f is None else f, m))
 
 
 def _file_hash(path):
@@ -172,10 +192,14 @@ def _file_hash(path):
     return h.hexdigest()
 
 
-def _reuse_stems(digest, mode):
+def _reuse_stems(digest, mode, exclude=None):
     """Stems from an earlier project of the same file split with the same model, or None."""
     import numpy as np
+    if not digest:
+        return None
     for d in os.listdir(PROJECTS) if os.path.isdir(PROJECTS) else []:
+        if exclude and os.path.abspath(os.path.join(PROJECTS, d)) == os.path.abspath(exclude):
+            continue
         pj = os.path.join(PROJECTS, d, "project.json")
         try:
             with open(pj) as f:
@@ -200,7 +224,7 @@ def _job_stems(folder, name):
     stems, sr = SEP.load_stem_folder(folder)
     p.meta["separation"] = "Imported stems"
     p.set_stems(stems, sr, None, source=folder)
-    p.analyze(lambda f, m: _progress(0.05 + 0.95 * f, m))
+    p.prepare(lambda f, m: _progress(None if f is None else 0.05 + 0.95 * f, m))
     S.project = p
 
 
@@ -208,11 +232,12 @@ def _job_demo():
     from .demo import make_demo
     _progress(0.02, "Composing the demo song")
     damaged, original, _ = make_demo()
+    import numpy as np
     p = Project(_slug("Demo song"))
     p.meta["name"] = "Demo song"
-    p.meta["separation"] = "Simulated separator (demo)"
-    p.set_stems(damaged, 44100, original, source="demo")
-    p.analyze(lambda f, m: _progress(0.1 + 0.9 * f, m))
+    os.makedirs(p.root, exist_ok=True)
+    np.savez(os.path.join(p.root, "demo_stems.npz"), **damaged)   # what "Split" will use for the demo
+    p.set_original(original, 44100, source="demo", progress=lambda f, m: _progress(0.5 + 0.5 * f, m))
     S.project = p
 
 
@@ -394,9 +419,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "path": dest, "folder": folder})
             d = self._json()
             if path == "/api/open_song":
-                if not SEP.demucs_available() and not _reuse_stems(_file_hash(d["path"]), d.get("mode", "4stem")):
+                _start_job(_job_song, d["path"])
+                return self._send(200, {"ok": True})
+            if path == "/api/split":
+                p = self._proj()
+                mode = d.get("mode", "4stem")
+                if (p.meta.get("source") != "demo" and not SEP.demucs_available()
+                        and not _reuse_stems(p.meta.get("source_hash"), mode, exclude=p.root)):
                     return self._send(409, {"error": "need_model", "plan": _model_plan()})
-                _start_job(_job_song, d["path"], d.get("mode", "4stem"))
+                _start_job(_job_split, mode)
+                return self._send(200, {"ok": True})
+            if path == "/api/detect":
+                if not self._proj().instruments:
+                    return self._send(400, {"error": "Split the song into instruments first."})
+                _start_job(_job_detect)
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
                 folder = d["folder"]

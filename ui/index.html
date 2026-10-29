@@ -29,6 +29,21 @@
 
 <main class="workspace" id="workspace" hidden>
   <section class="timeline" id="timeline">
+    <ol class="steps" id="steps" aria-label="Steps">
+      <li class="step" data-step="import"><span class="num">1</span><div class="step-text"><b>Import</b><span>Song loaded, ready to play</span></div></li>
+      <li class="step" data-step="split"><span class="num">2</span>
+        <div class="step-text"><b>Split into instruments</b><span id="splitSub"></span></div>
+        <div class="step-actions">
+          <select id="sepMode" aria-label="How to split"></select>
+          <button id="btnSplit">Split</button>
+        </div>
+      </li>
+      <li class="step" data-step="detect"><span class="num">3</span>
+        <div class="step-text"><b>Find damage</b><span id="detectSub"></span></div>
+        <div class="step-actions"><button id="btnDetect">Find damage</button></div>
+      </li>
+      <li class="step" data-step="review"><span class="num">4</span><div class="step-text"><b>Review and export</b><span id="reviewSub"></span></div></li>
+    </ol>
     <div class="tl-toolbar">
       <div class="seg small" id="viewSeg" role="radiogroup" aria-label="Lane view">
         <button data-m="damage" class="on" title="Spectrogram with detected damage in red">Damage</button>
@@ -89,11 +104,6 @@
       <button class="ghost" id="btnApplySettings">Re-sort suggestions</button>
       <p class="help">Your own accept and reject decisions are kept when suggestions are re-sorted.</p>
       <hr>
-      <div class="setting">
-        <label for="sepMode">Separation for new songs</label>
-        <select id="sepMode"></select>
-        <span class="help" id="speedTip"></span>
-      </div>
       <p class="help" id="engineInfo"></p>
       <button class="ghost" id="btnModelReinstall">Reinstall separation model</button>
       <button class="ghost" id="btnReveal">Show projects folder</button>
@@ -134,15 +144,15 @@
     <h2 class="start-h">Start a project</h2>
     <div class="actions">
       <button class="big" id="btnOpenSong">
-        <b>Split a song</b><span>Separates the vocals from the instruments, then finds the damage</span>
-        <em class="needs" id="needsModel"><i class="light small off"></i><span>Needs the separation model</span></em>
+        <b>Open a song</b><span>Bring it into the editor. You choose when to split it and when to look for damage.</span>
+        <em class="needs" id="needsModel"><i class="light small ok"></i><span>Opens without the model</span></em>
       </button>
       <button class="big" id="btnOpenStems">
         <b>Import stems</b><span>Already split with UVR, Spleeter or another tool. Select all the files, including the vocals.</span>
         <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
       </button>
       <button class="big" id="btnDemo">
-        <b>Try the demo song</b><span>A short song with known damage, to explore the app</span>
+        <b>Try the demo song</b><span>A short song to walk through every step, including splitting</span>
         <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
       </button>
     </div>
