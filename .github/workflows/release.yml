@@ -1,0 +1,63 @@
+# Publishes a GitHub release with a ready-to-download zip whenever the version in
+# studio/__init__.py changes on main (or when run by hand from the Actions tab).
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "studio/__init__.py"
+      - "CHANGELOG.md"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: v
+        run: |
+          V=$(python3 -c "import re;print(re.search(r'__version__\s*=\s*[\"\x27]([^\"\x27]+)', open('studio/__init__.py').read()).group(1))")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Stop if this version is already released
+        id: chk
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.v.outputs.version }}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the download
+        if: steps.chk.outputs.exists == 'false'
+        run: git archive --format=zip --prefix=InstrumentalStudio/ -o "InstrumentalStudio-${{ steps.v.outputs.version }}.zip" HEAD
+
+      - name: Release notes from CHANGELOG.md
+        if: steps.chk.outputs.exists == 'false'
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          awk -v v="$V" '$0 ~ "^## "v"( |$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then git log -1 --pretty=%B | grep -v -E '^(Co-Authored-By|Claude-Session):' > notes.md; fi
+          cat >> notes.md <<'EOF'
+
+          ---
+          **New here?** Download **InstrumentalStudio-${{ steps.v.outputs.version }}.zip** below, unzip it, and follow the steps in the [README](https://github.com/${{ github.repository }}#install).
+          **Already installed?** Open the app and go to Settings → Check for updates.
+          EOF
+
+      - name: Publish
+        if: steps.chk.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          gh release create "v$V" "InstrumentalStudio-$V.zip" --title "Instrumental Studio $V" --notes-file notes.md --target "$GITHUB_SHA"

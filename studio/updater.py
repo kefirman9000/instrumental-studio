@@ -60,7 +60,10 @@ def check():
     return {
         "current": __version__, "latest": latest, "available": _ver(latest) > _ver(__version__),
         "name": rel.get("name") or f"Version {latest}", "notes": (rel.get("body") or "").strip(),
-        "published": rel.get("published_at"), "url": rel.get("html_url"), "zip": rel.get("zipball_url"),
+        "published": rel.get("published_at"), "url": rel.get("html_url"),
+        # the ready-made download attached to the release, else GitHub's source zip
+        "zip": next((a["browser_download_url"] for a in rel.get("assets", []) if a.get("name", "").endswith(".zip")),
+                    rel.get("zipball_url")),
         "checked": time.time(),
     }
 
