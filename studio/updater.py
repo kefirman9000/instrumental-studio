@@ -118,6 +118,10 @@ def install(info, progress=lambda f, m: None):
                     if m.startswith("/") or ".." in m.split("/"):
                         raise RuntimeError("The update archive looks malformed; nothing was changed.")
                 z.extractall(os.path.join(td, "x"))
+                for zi in z.infolist():   # zipfile drops permissions; keep launchers executable
+                    mode = (zi.external_attr >> 16) & 0o777
+                    if mode and not zi.is_dir():
+                        os.chmod(os.path.join(td, "x", zi.filename), mode)
             tops = os.listdir(os.path.join(td, "x"))
             src = os.path.join(td, "x", tops[0]) if len(tops) == 1 else os.path.join(td, "x")
             if not os.path.exists(os.path.join(src, "app.py")):
