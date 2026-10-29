@@ -1,0 +1,4 @@
+numpy>=1.24
+scipy>=1.10
+pywebview>=4.0      # gives the app its own window (optional: falls back to a Chrome/Edge app window)
+demucs>=4.0         # splits songs into instruments (optional if you import your own stems)

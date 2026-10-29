@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instrumental Studio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h3l2-6 3 12 3-9 2 5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Instrumental Studio</span></div>
+  <button class="ghost" id="btnSongs" title="Open, import or switch songs">Songs</button>
+  <div class="songname" id="songName"></div>
+  <div class="transport" id="transport" hidden>
+    <button class="play" id="btnPlay" title="Play / pause (Space)"><svg viewBox="0 0 24 24"><path id="playIcon" d="M7 5v14l12-7z"/></svg></button>
+    <span class="time" id="timeNow">0:00</span><span class="time dim" id="timeTotal">/ 0:00</span>
+    <div class="seg" id="versionSeg" role="radiogroup" aria-label="What you hear">
+      <button data-v="original" title="The original song with vocals">Original</button>
+      <button data-v="raw" title="Instrumental straight out of separation">Raw instrumental</button>
+      <button data-v="repaired" class="on" title="Instrumental with repairs and your levels">Repaired</button>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <button class="update-pill" id="updPill" hidden></button>
+  <button class="ghost" id="btnUndo" disabled title="Undo (Ctrl+Z)">Undo</button>
+  <button class="primary" id="btnExport" disabled>Export</button>
+</header>
+
+<main class="workspace" id="workspace" hidden>
+  <section class="timeline" id="timeline">
+    <div class="tl-toolbar">
+      <div class="seg small" id="viewSeg" role="radiogroup" aria-label="Lane view">
+        <button data-m="damage" class="on" title="Spectrogram with detected damage in red">Damage</button>
+        <button data-m="after" title="Spectrogram after repairs; filled-in sound shown in amber">Repaired</button>
+        <button data-m="raw" title="Plain spectrogram of the raw stem">Raw</button>
+      </div>
+      <div class="legend"><i class="lg dmg"></i>Damage <i class="lg fill"></i>Filled in <i class="lg donor"></i>Borrowed from</div>
+      <div class="spacer"></div>
+      <label class="zoom">Zoom <input type="range" id="zoom" min="0" max="100" value="0"></label>
+      <button class="ghost small" id="btnFit">Fit song</button>
+    </div>
+    <div class="lanes" id="lanes">
+      <div class="lane ruler-lane"><div class="lane-head"><span class="dim">Sections</span></div><canvas id="ruler"></canvas></div>
+      <div class="lane vox-lane"><div class="lane-head"><span class="dot" style="background:var(--vocal)"></span><span>Vocals</span><span class="dim small">presence</span></div><canvas id="voxCanvas"></canvas></div>
+      <div id="stemLanes"></div>
+      <div class="playhead" id="playhead"></div>
+    </div>
+    <div class="hint" id="pickHint" hidden>Click a spot in the <b id="pickStem"></b> lane to borrow from there. <button class="ghost small" id="pickCancel">Cancel</button></div>
+  </section>
+
+  <aside class="panel">
+    <nav class="tabs" role="tablist">
+      <button class="on" data-tab="review" role="tab">Review</button>
+      <button data-tab="grid" role="tab">Repairability</button>
+      <button data-tab="levels" role="tab">Levels</button>
+      <button data-tab="settings" role="tab">Settings</button>
+    </nav>
+    <div class="tab" id="tab-review">
+      <div class="summary" id="reviewSummary"></div>
+      <div class="filters" id="filters">
+        <button data-f="review" class="on">Needs review</button>
+        <button data-f="applied">Applied</button>
+        <button data-f="bleed">Vocal leftovers</button>
+        <button data-f="hard">No good match</button>
+        <button data-f="all">All</button>
+      </div>
+      <div class="scope" id="scope" hidden></div>
+      <div class="bulk" id="bulkBar"></div>
+      <div class="list" id="sugList"></div>
+    </div>
+    <div class="tab" id="tab-grid" hidden>
+      <p class="help">How badly each instrument was damaged in each section, and how well it can be rebuilt from the same instrument elsewhere in the song. Click a cell to review it.</p>
+      <div id="gridWrap"></div>
+    </div>
+    <div class="tab" id="tab-levels" hidden>
+      <p class="help">Loudness of every instrument per section after repairs. Type a boost or cut in dB to change one instrument in one section; it applies to playback and export.</p>
+      <div id="levelsWrap"></div>
+    </div>
+    <div class="tab" id="tab-settings" hidden>
+      <div class="setting">
+        <label for="autoConf">Apply repairs automatically at or above <b id="autoConfVal"></b> confidence</label>
+        <input type="range" id="autoConf" min="0.3" max="1" step="0.05">
+      </div>
+      <div class="setting">
+        <label for="reviewConf">Below <b id="reviewConfVal"></b> confidence, mark as "no good match"</label>
+        <input type="range" id="reviewConf" min="0" max="0.6" step="0.05">
+      </div>
+      <button class="ghost" id="btnApplySettings">Re-sort suggestions</button>
+      <p class="help">Your own accept and reject decisions are kept when suggestions are re-sorted.</p>
+      <hr>
+      <div class="setting">
+        <label for="sepMode">Separation for new songs</label>
+        <select id="sepMode"></select>
+      </div>
+      <p class="help" id="engineInfo"></p>
+      <button class="ghost" id="btnReveal">Show projects folder</button>
+      <hr>
+      <div class="updates" id="updates">
+        <div class="row"><b>Updates</b><span class="dim" id="verNow"></span></div>
+        <div class="row"><button id="btnCheckUpdate">Check for updates</button><span class="dim small" id="updStatus"></span></div>
+        <div id="updBox" hidden>
+          <div class="upd-title" id="updTitle"></div>
+          <pre class="upd-notes" id="updNotes"></pre>
+          <div class="row"><button class="primary" id="btnInstallUpdate">Install update</button><a id="updLink" class="dim small" target="_blank" rel="noopener">See it on GitHub</a></div>
+        </div>
+        <div class="bar" id="updBarWrap" hidden><i id="updBar"></i></div>
+        <div class="row" id="updRestartRow" hidden><button class="primary" id="btnRestart">Restart to finish updating</button></div>
+        <label class="check"><input type="checkbox" id="updOnStart"> Check for updates when the app starts</label>
+        <label class="check"><input type="checkbox" id="updAuto"> Install updates automatically. I agree that new versions are downloaded from <span id="updRepo"></span> and installed without asking each time.</label>
+        <p class="help">Your projects and exports are never touched by an update, and the previous version is kept as a backup in the app folder.</p>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<div class="welcome" id="welcome">
+  <div class="welcome-inner">
+    <h1>Make an instrumental, then fix what the vocals took with them.</h1>
+    <p class="lede">The song is split into drums, bass and the other instruments. Wherever the singing covered an instrument, the app finds the same instrument playing the same part elsewhere in the song and uses it to rebuild what was lost.</p>
+    <div class="actions">
+      <button class="big primary" id="btnOpenSong"><b>Open a song</b><span>MP3, WAV, FLAC, M4A</span></button>
+      <button class="big" id="btnOpenStems"><b>Use stems you already have</b><span>From UVR, Spleeter or another separator</span></button>
+      <button class="big" id="btnDemo"><b>Try the demo song</b><span>No separation model needed</span></button>
+    </div>
+    <div class="recent" id="recent"></div>
+    <p class="dim small welcome-ver" id="welcomeVer"></p>
+    <input type="file" id="fileSong" accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.aiff,.aif,.opus" hidden>
+    <input type="file" id="fileStems" accept="audio/*" multiple hidden>
+  </div>
+</div>
+
+<div class="busy" id="busy" hidden>
+  <div class="busy-card">
+    <div class="busy-msg" id="busyMsg">Working</div>
+    <div class="bar"><i id="busyBar"></i></div>
+    <div class="dim small" id="busyPct"></div>
+  </div>
+</div>
+
+<dialog id="dlgExport">
+  <form method="dialog">
+    <h2>Export</h2>
+    <fieldset><legend>Files</legend>
+      <label><input type="checkbox" name="mix" checked> Repaired instrumental (with your levels)</label>
+      <label><input type="checkbox" name="stems" checked> Each instrument on its own</label>
+      <label><input type="checkbox" name="raw"> Raw instrumental, for comparison</label>
+      <label><input type="checkbox" name="vocals"> Vocals</label>
+      <label><input type="checkbox" name="report" checked> Repair report</label>
+    </fieldset>
+    <fieldset><legend>Format</legend>
+      <label><input type="radio" name="fmt" value="wav" checked> WAV</label>
+      <label><input type="radio" name="fmt" value="flac"> FLAC</label>
+      <label><input type="radio" name="fmt" value="mp3"> MP3 320k</label>
+    </fieldset>
+    <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button value="ok" class="primary" id="doExport">Export files</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgDemucs">
+  <form method="dialog">
+    <h2>One more step to split songs</h2>
+    <p>Splitting a song into instruments uses Demucs, a free model that runs on your computer. Install it once from a terminal:</p>
+    <pre>pip install demucs</pre>
+    <p>Then close and reopen Instrumental Studio. A computer with an NVIDIA GPU or Apple silicon splits a song in under a minute; on a regular CPU expect several minutes.</p>
+    <p>You can still use stems you already have, or try the demo song.</p>
+    <div class="dlg-actions"><button value="ok" class="primary">Got it</button></div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+<audio id="player" preload="auto"></audio>
+<script src="app.js"></script>
+</body>
+</html>
