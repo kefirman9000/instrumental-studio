@@ -1,0 +1,50 @@
+"""Headless check of the app: start server, build the demo, drive the UI, take screenshots."""
+import os, sys, time, json, urllib.request
+OUT = sys.argv[1] if len(sys.argv) > 1 else "shots"
+os.environ.setdefault("INSTRUMENTAL_STUDIO_HOME", os.path.join(OUT, "home"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from studio.server import serve
+from playwright.sync_api import sync_playwright
+
+httpd, url = serve(0)
+def post(p, d=None):
+    r = urllib.request.Request(url + p.lstrip("/"), data=json.dumps(d or {}).encode(), headers={"Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(r))
+errors = []
+with sync_playwright() as p:
+    b = p.chromium.launch()
+    pg = b.new_page(viewport={"width": 1480, "height": 920})
+    pg.on("console", lambda m: m.type in ("error", "warning") and errors.append(m.text))
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.goto(url); pg.wait_for_timeout(800)
+    pg.screenshot(path=f"{OUT}/1_welcome.png")
+    pg.click("#btnDemo")
+    pg.wait_for_timeout(1500); pg.screenshot(path=f"{OUT}/2_busy.png")
+    pg.wait_for_selector("#workspace:not([hidden])", timeout=300000)
+    pg.wait_for_timeout(1500)
+    pg.screenshot(path=f"{OUT}/3_workspace.png")
+    pg.click("#filters button[data-f=all]"); pg.wait_for_timeout(300)
+    pg.locator("#sugList .sug").nth(3).click(); pg.wait_for_timeout(800)
+    pg.screenshot(path=f"{OUT}/4_selected.png")
+    pg.click(".sug.sel .preview button >> nth=0"); pg.wait_for_timeout(600)
+    pg.click(".sug.sel .abplay"); pg.wait_for_timeout(600)
+    pg.click(".sug.sel .decide button >> nth=-1"); pg.wait_for_timeout(800)
+    pg.click("#viewSeg button[data-m=after]"); pg.wait_for_timeout(500)
+    pg.screenshot(path=f"{OUT}/5_zoom_after.png")
+    pg.click(".tabs button[data-tab=grid]"); pg.wait_for_timeout(300)
+    pg.screenshot(path=f"{OUT}/6_grid.png")
+    pg.click(".tabs button[data-tab=levels]"); pg.wait_for_timeout(300)
+    pg.fill("#levelsWrap input >> nth=1", "3"); pg.press("#levelsWrap input >> nth=1", "Tab"); pg.wait_for_timeout(1500)
+    pg.screenshot(path=f"{OUT}/7_levels.png")
+    pg.click(".tabs button[data-tab=review]"); pg.click("#filters button[data-f=bleed]"); pg.wait_for_timeout(300)
+    pg.locator("#sugList .sug").first.click(); pg.wait_for_timeout(500)
+    pg.click(".sug.sel .decide button >> nth=0"); pg.wait_for_timeout(1500)
+    pg.screenshot(path=f"{OUT}/8_bleed.png")
+    pg.click("#btnPlay"); pg.wait_for_timeout(1200)
+    t = pg.evaluate("document.querySelector('#player').currentTime")
+    pg.click("#btnUndo"); pg.wait_for_timeout(1200)
+    print("player time after play:", t)
+    r = post("/api/export", {"what": ["mix", "report"], "format": "mp3", "reveal": False})
+    print("export:", r["files"])
+    b.close()
+print("console errors:", errors)
