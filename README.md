@@ -18,6 +18,8 @@ When you remove the vocals from a song, the instruments playing underneath the s
 - **See what's fixable** in every section, for every instrument, at a glance.
 - **Balance the mix**: change the volume of any instrument, for the whole song or just one section.
 - **Clean up leftover singing** that leaked into the instruments.
+- **Keep any part as it is**, either the original recording or the split with no repairs.
+- **Get tips** for making the fixed parts sound like the rest of the song.
 - **Export** the finished instrumental and each instrument separately as WAV, FLAC or MP3.
 
 ## Install
@@ -100,6 +102,28 @@ Then listen with **Before**, **After**, **Only what's added**, **Source** or **O
 If a fix doesn't sound right, turn down its **Strength**, choose another place to borrow from under **Source**, or click **Pick on timeline** and click anywhere in that instrument's lane. Or simply **Reject** it.
 
 Switch the timeline to **Repaired** view to see the sound that was filled back in, shown in amber.
+
+### Keep parts as they are
+
+![Parts of the song marked to keep: the intro and outro use the original recording, and one part is left without repairs](docs/screenshots/kept-parts.png)
+
+Drag across the **Sections** bar above the timeline to select a part of the song, then choose:
+
+- **Use the original song here**: that part plays exactly as the original recording. Ideal for intros, outros and breaks with no singing, where the original already is a perfect instrumental. If there's singing in the part you selected, the app warns you that the vocals would stay.
+- **Keep the split, no repairs**: that part stays as the separated instrumental, with no repairs and no level changes.
+
+Kept parts are hatched on the timeline and listed in the **Levels** tab, where you can switch their kind or remove them. Undo works too.
+
+### Make the fixed parts match the rest
+
+The top of the **Review** tab lists suggestions for keeping the repaired parts high quality and consistent with the rest of the song, each with a one-click button you can undo:
+
+- **Use the original recording in the parts without singing**: the cleanest possible sound where there are no vocals.
+- **Apply the recommended repairs**: the ones with a close match elsewhere in the song.
+- **Fill in an instrument under the vocals**: once repairs are in, the app compares each instrument under the singing with the same part where nobody sings. If it's still thinner in the vocal range, it suggests lifting just that range, just under the vocals, by the measured amount.
+- **Remove leftover singing** that stayed in an instrument.
+- **Spots with no close match**: pick a source by hand or leave them alone.
+- **Split again with Best quality** when fast separation left a lot to repair.
 
 ### See what's fixable
 

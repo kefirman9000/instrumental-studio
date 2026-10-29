@@ -41,7 +41,7 @@ class Project:
         self.suggestions = {}
         self.patches = {}          # id -> (lo, float16 patch[2, n])
         self.history = []
-        self.mixer = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}}
+        self.mixer = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}, "keep": [], "vocal_lift": {}}
         self._render_cache = {}
         self.display = {}
 
@@ -352,15 +352,45 @@ class Project:
             return self._render_cache[key]
         out = self.stems[k].copy()
         n = out.shape[1]
+        delta = np.zeros_like(out)
         for sid, sug in self.suggestions.items():
             if sug["stem"] != k or not self._applied(sug) or sid not in self.patches:
                 continue
             lo, p = self.patches[sid]
             a, b = max(lo, 0), min(lo + p.shape[1], n)
             if b > a:
-                out[:, a:b] += p[:, a - lo:b - lo].astype(np.float32)
+                delta[:, a:b] += p[:, a - lo:b - lo].astype(np.float32)
+        kept = self.keep_mask(0, n)
+        if kept is not None:          # kept parts are never repaired
+            delta *= (1 - kept)[None, :]
+        out += delta
         self._render_cache[key] = out
         return out
+
+    # ------------------------------------------------------------------ kept parts
+    def keep_ranges(self, mode=None):
+        return [r for r in self.mixer.get("keep", []) if mode is None or r.get("mode") == mode]
+
+    def keep_mask(self, a, b, mode=None, ramp=0.03):
+        """0..1 per sample for [a, b): 1 inside kept parts, with short raised-cosine edges."""
+        ranges = self.keep_ranges(mode)
+        if not ranges:
+            return None
+        t = np.arange(a, b, dtype=np.float64) / self.sr
+        m = np.zeros(b - a, np.float32)
+        for r in ranges:
+            up = np.clip((t - r["start"] + ramp / 2) / ramp, 0, 1)
+            dn = np.clip((r["end"] + ramp / 2 - t) / ramp, 0, 1)
+            m = np.maximum(m, (np.sin(0.5 * np.pi * np.minimum(up, dn)) ** 2).astype(np.float32))
+        return m
+
+    def _vocal_curve(self, a, b):
+        """How much singing there is at each sample, 0..1, from the per-beat vocal measure."""
+        if not len(self.VA):
+            return np.zeros(b - a, np.float32)
+        mids = np.array([(self.beat_times[j] + self.beat_times[j + 1]) / 2 for j in range(len(self.VA))])
+        v = np.clip(np.asarray(self.VA) / 0.25, 0, 1)
+        return np.interp(np.arange(a, b) / self.sr, mids, v).astype(np.float32)
 
     def _refresh_after(self, k, a, b):
         if not self.display:
@@ -406,13 +436,62 @@ class Project:
                     if m["mute"].get(k) or (any_solo and not m["solo"].get(k)):
                         continue
                 if version == "patch":
-                    y = self.render_stem(k)[:, a:b] - self.stems[k][:, a:b]
+                    y = self.shaped_stem(k, a, b) - self.stems[k][:, a:b]
                 else:
-                    y = self.render_stem(k, version)[:, a:b]
+                    y = self.shaped_stem(k, a, b, version)
                 g = self._gain_curve(k, a, b) if use_mixer else 1.0
                 out += y * g
+            if version == "repaired" and use_mixer and not solo_stem and not any_solo \
+                    and not any(m["mute"].get(k) for k in stems):
+                mo = self.keep_mask(a, b, "original")
+                if mo is not None:
+                    out = out * (1 - mo)[None, :] + self.original[:, a:b] * mo[None, :]
             return out
         return out[:, region[0]:region[1]] if region else out
+
+    LIFT_BAND = (250.0, 5000.0)   # where vocals cover instruments, so where separation thins them
+
+    def shaped_stem(self, k, a=0, b=None, version="repaired"):
+        """Rendered stem for [a, b) including the 'fill under the vocals' tone lift, if one is set."""
+        y = self.render_stem(k, version)
+        b = y.shape[1] if b is None else b
+        seg = y[:, a:b]
+        lift = float(self.mixer.get("vocal_lift", {}).get(k, 0.0)) if version == "repaired" else 0.0
+        if not lift:
+            return seg
+        from scipy import signal as sig
+        pad = int(0.2 * self.sr)
+        lo, hi = max(0, a - pad), min(y.shape[1], b + pad)
+        sos = sig.butter(2, self.LIFT_BAND, "bandpass", fs=self.sr, output="sos")
+        band = sig.sosfiltfilt(sos, y[:, lo:hi], axis=1)[:, a - lo:a - lo + (b - a)].astype(np.float32)
+        amount = (10 ** (lift / 20) - 1) * self._vocal_curve(a, b)
+        kept = self.keep_mask(a, b)
+        if kept is not None:
+            amount *= (1 - kept)
+        return seg + band * amount[None, :]
+
+    def remaining_loss(self, k):
+        """Estimated dB the instrument is still missing under the vocals, measured against its matched
+        sources (same part, vocal-free) so arrangement changes cancel out."""
+        if self.stage != "detected" or k not in self.stem_feats:
+            return 0.0
+        y = self.shaped_stem(k)
+        E = self.B @ (np.abs(stft(y.mean(0))) ** 2)
+        F, _, _ = A.beat_features(E, np.zeros((12, E.shape[1]), np.float32), np.zeros_like(E), self.beats)
+        _, _, R = self.stem_feats[k]
+        vals, wts = [], []
+        for x in self.suggestions.values():
+            if x["stem"] != k or x["type"] != "repair" or not x.get("donors"):
+                continue
+            a, L, dn = x["beat"], x["beats"], x["donors"][0]["beat"]
+            Rt, Rd, Ft, Fd = R[a:a + L], R[dn:dn + L], F[a:a + L], F[dn:dn + L]
+            rel, cov = (1 - Rt) * (1 - Rd), Rt * (1 - Rd)
+            if cov.sum() < 0.5 or rel.sum() < 0.5:
+                continue
+            off = ((Fd - Ft) * rel).sum() / rel.sum()
+            vals.append((((Fd - Ft) * cov).sum() / cov.sum() - off) * 10 / np.log(10))
+            wts.append(cov.sum())
+        return float(np.average(vals, weights=wts)) if vals else 0.0
 
     def _gain_curve(self, k, a, b):
         m = self.mixer
@@ -431,6 +510,9 @@ class Project:
             up = np.clip((t - sec["start"] + ramp / 2) / ramp, 0, 1)
             dn = np.clip((sec["end"] + ramp / 2 - t) / ramp, 0, 1)
             curve += gi * np.minimum(up, dn)
+        kept = self.keep_mask(a, b)
+        if kept is not None:          # kept parts keep their original level
+            curve = kept + (1 - kept) * curve
         return (g0 * curve)[None, :]
 
     def preview(self, sid, mode="after", context=1.5, solo=True):
@@ -474,10 +556,17 @@ class Project:
             self._push(label or f"{status} {len(ids)} edit(s)", ids)
             for i in ids:
                 self.suggestions[i]["status"] = status
-            for k in {self.suggestions[i]["stem"] for i in ids}:
+            spans = {}
+            for i in ids:          # one display refresh per instrument, not one per repair
+                k = self.suggestions[i]["stem"]
                 self._render_cache.pop(("stem", k), None)
-            for i in ids:
-                self._invalidate(self.suggestions[i]["stem"], i)
+                if i in self.patches:
+                    lo, p = self.patches[i]
+                    a, b = spans.get(k, (lo, lo + p.shape[1]))
+                    spans[k] = (min(a, lo), max(b, lo + p.shape[1]))
+            self._render_cache.pop("mix", None)
+            for k, (a, b) in spans.items():
+                self._refresh_after(k, a, b)
             self._compute_grid()
 
     def set_strength(self, sid, strength):
@@ -531,17 +620,45 @@ class Project:
     def set_mixer(self, mixer):
         with self.lock:
             self._push("Levels", [])
-            for key in ("stem_gain", "mute", "solo", "section_gain"):
+            keep_changed = "keep" in mixer and mixer["keep"] != self.mixer.get("keep")
+            for key in ("stem_gain", "mute", "solo", "section_gain", "keep", "vocal_lift"):
                 if key in mixer:
                     self.mixer[key] = mixer[key]
+            if "keep" in mixer:
+                self.mixer["keep"] = self._clean_keep(self.mixer["keep"])
             self._render_cache.pop("mix", None)
+            if keep_changed:
+                for k in self.instruments:
+                    self._render_cache.pop(("stem", k), None)
+                    self._refresh_after(k, 0, self.stems[k].shape[1])
+                self._compute_grid()
+
+    def _clean_keep(self, ranges):
+        """Sort, clamp and merge overlapping kept parts of the same kind."""
+        dur = self.meta.get("duration", 0)
+        out = []
+        for r in sorted(ranges, key=lambda r: float(r["start"])):
+            a, b = max(0.0, float(r["start"])), min(dur, float(r["end"]))
+            mode = "original" if r.get("mode") == "original" else "no_edits"
+            if b - a < 0.05:
+                continue
+            if out and out[-1]["mode"] == mode and a <= out[-1]["end"] + 0.01:
+                out[-1]["end"] = max(out[-1]["end"], b)
+            else:
+                out.append({"start": a, "end": b, "mode": mode})
+        return out
 
     def undo(self):
         with self.lock:
             if not self.history:
                 return None
             h = self.history.pop()
+            keep_changed = h["mixer"].get("keep") != self.mixer.get("keep")
             self.mixer = h["mixer"]
+            if keep_changed:
+                for k in self.instruments:
+                    self._render_cache.pop(("stem", k), None)
+                    self._refresh_after(k, 0, self.stems[k].shape[1])
             for it in h["items"]:
                 self.suggestions[it["id"]] = it["sug"]
                 if it["patch"] is not None:
@@ -589,7 +706,7 @@ class Project:
         for si, sec in enumerate(self.sections):
             a, b = int(sec["start"] * self.sr), int(sec["end"] * self.sr)
             for k in self.instruments + ["vocals"]:
-                y = self.render_stem(k)[:, a:b]
+                y = self.shaped_stem(k, a, b) if k != "vocals" else self.stems[k][:, a:b]
                 if k != "vocals" and y.size:
                     y = y * self._gain_curve(k, a, b)
                 out[f"{si}:{k}"] = float(20 * np.log10(np.sqrt(np.mean(y ** 2)) + 1e-9)) if y.size else -120.0
@@ -639,7 +756,7 @@ class Project:
             put(f"{name} - instrumental (raw)", self.mix("raw", use_mixer=False))
         if "stems" in what:
             for k in self.instruments:
-                put(f"{name} - {k} (repaired)", self.render_stem(k) * self._gain_curve(k, 0, self.stems[k].shape[1]))
+                put(f"{name} - {k} (repaired)", self.shaped_stem(k) * self._gain_curve(k, 0, self.stems[k].shape[1]))
         if "vocals" in what:
             put(f"{name} - vocals", self.stems["vocals"])
         if "report" in what:
@@ -691,6 +808,8 @@ class Project:
         with open(os.path.join(root, "project.json")) as f:
             state = json.load(f)
         p.meta, p.sections, p.suggestions, p.mixer = state["meta"], state["sections"], state["suggestions"], state["mixer"]
+        p.mixer.setdefault("keep", [])
+        p.mixer.setdefault("vocal_lift", {})
         for x in p.suggestions.values():
             if x.get("status") == "auto":     # made by an older version without asking: ask now
                 x["status"] = "pending"
@@ -766,6 +885,93 @@ class Project:
         with self.lock:
             self.sections[int(i)]["name"] = str(name)[:40]
 
+    # ------------------------------------------------------------------ quality tips
+    def _beat_levels(self, y):
+        """RMS level in dB of each beat of a (2, n) signal."""
+        x = y.mean(0).astype(np.float64) ** 2
+        idx = np.clip((np.asarray(self.beats) * HOP).astype(np.int64), 0, len(x) - 1)
+        sums = np.add.reduceat(x, idx)[:-1]
+        lens = np.maximum(np.diff(idx), 1)
+        return 10 * np.log10(sums / lens + 1e-12)
+
+    def tips(self):
+        """Suggestions for keeping the fixed parts high quality and consistent with the rest of the song.
+        Each tip carries an action the app can perform in one click (and undo)."""
+        out = []
+        if self.stage == "imported" or not len(self.VA):
+            return out
+        imported_stems = self.meta.get("separation") == "Imported stems"
+        kept = self.keep_ranges()
+
+        def covered(a, b):
+            return any(r["start"] <= a + 0.05 and r["end"] >= b - 0.05 for r in kept)
+
+        # 1. vocal-free parts: the original recording already is a perfect instrumental there
+        if not imported_stems:
+            free = []
+            for sec in self.sections:
+                a = int(np.searchsorted(self.beat_times, sec["start"]))
+                b = int(np.searchsorted(self.beat_times, sec["end"]))
+                va = np.asarray(self.VA[a:max(b, a + 1)])
+                if len(va) and float(va.max()) < 0.04 and not covered(sec["start"], sec["end"]):
+                    free.append(sec)
+            if free:
+                names = ", ".join(s["name"] for s in free)
+                out.append({
+                    "id": "keep_free", "title": f"Use the original recording in the parts without singing",
+                    "detail": f"{names} {'has' if len(free) == 1 else 'have'} no singing, so the original recording already is "
+                              f"a clean instrumental there, with no separation artifacts.",
+                    "button": "Keep original there",
+                    "action": {"kind": "keep", "ranges": [{"start": s["start"], "end": s["end"], "mode": "original"} for s in free]}})
+        if self.stage != "detected":
+            out.append({"id": "detect", "title": "Find the damage", "detail": "Step 3 finds the spots the vocals damaged and suggests repairs taken from the same instrument elsewhere in the song.",
+                        "button": "Find damage", "action": {"kind": "detect"}})
+            return out
+
+        sugs = list(self.suggestions.values())
+        rec = [x for x in sugs if x["type"] == "repair" and x["status"] == "pending" and x.get("recommended")]
+        if rec:
+            out.append({"id": "apply_rec", "title": f"Apply the {len(rec)} recommended repair{'s' if len(rec) != 1 else ''}",
+                        "detail": "Each has a close match elsewhere in the song. Afterwards, look here again for anything that still sounds thinner.",
+                        "button": "Apply recommended", "action": {"kind": "bulk", "action": "accept_recommended"}})
+
+        # 2. tone match: what's still missing under the vocals, judged against the same part elsewhere
+        lift_now = self.mixer.get("vocal_lift", {})
+        for k in ([] if rec else self.instruments):     # judge what's left only once the repairs are in
+            loss = self.remaining_loss(k)
+            want = float(np.clip(round((loss + float(lift_now.get(k, 0))) * 2) / 2, 0, 6))
+            threshold = 1.5 if lift_now.get(k) else 1.0
+            if loss >= threshold and want - float(lift_now.get(k, 0)) >= 0.5:
+                out.append({"id": f"lift_{k}", "title": f"Fill in the {k} under the vocals (+{want:.1f} dB)",
+                            "detail": f"Next to the same part where nobody sings, the {k} is still about {loss:.1f} dB thinner in the "
+                                      f"vocal range (250 Hz to 5 kHz) under the singing. This lifts only that range, only there.",
+                            "button": f"Fill in +{want:.1f} dB", "action": {"kind": "lift", "stem": k, "db": want}})
+
+        bleed = [x for x in sugs if x["type"] == "bleed" and x["status"] == "pending"]
+        if bleed:
+            stems_b = sorted({x["stem"] for x in bleed})
+            out.append({"id": "bleed", "title": f"Remove leftover singing from the {', '.join(stems_b)}",
+                        "detail": f"{len(bleed)} spot{'s' if len(bleed) != 1 else ''} still {'have' if len(bleed) != 1 else 'has'} a faint copy of the vocal.",
+                        "button": "Review leftovers", "action": {"kind": "filter", "filter": "bleed"}})
+
+        hard = [x for x in sugs if x["type"] == "repair" and x["status"] in ("low", "nodonor")]
+        if hard:
+            out.append({"id": "hard", "title": f"{len(hard)} spot{'s have' if len(hard) != 1 else ' has'} no close match",
+                        "detail": "Pick a source by hand, or leave them. A weak match can add notes that weren't there.",
+                        "button": "Show them", "action": {"kind": "filter", "filter": "hard"}})
+
+        mode = self.meta.get("sep_mode")
+        dmg = np.mean([v["damage"] for v in self.stem_summary.values()]) if self.stem_summary else 0
+        if mode in ("4stem_fast", "6stem") and dmg > 0.04 and not imported_stems:
+            out.append({"id": "resplit", "title": "Split again with Best quality",
+                        "detail": "Best quality takes less of the instruments with the vocals, so fewer repairs are needed.",
+                        "button": "Split with Best quality", "action": {"kind": "resplit", "mode": "4stem"}})
+        if not out:
+            out.append({"id": "good", "title": "Nothing else to suggest",
+                        "detail": "Compare Raw instrumental and Repaired at the top to hear the difference, then export.",
+                        "button": None, "action": None})
+        return out
+
     def overview(self):
         return {
             "meta": self.meta, "sections": self.sections, "beats": self.beat_times,
@@ -776,5 +982,6 @@ class Project:
             "undo_label": self.history[-1]["label"] if self.history else None,
             "display": {"cols": self.display["cols"], "rows": DISPLAY_BANDS, "fps": self.display["fps"]},
             "stage": self.stage, "has_original_display": "original" in self.display.get("raw", {}),
+            "tips": self.tips(),
             "user_decisions": sum(1 for x in self.suggestions.values() if x["status"] in ("accepted", "rejected")),
         }

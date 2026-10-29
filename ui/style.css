@@ -251,3 +251,24 @@ label.check input { margin-top: 3px; }
 .empty-lane-note { position: absolute; left: 180px; bottom: 10px; color: var(--muted); font-size: 12px; pointer-events: none; }
 @media (max-width: 1300px) { .steps { grid-template-columns: 1fr 1fr; } }
 .stem-lane.full-lane { height: 240px; }
+
+/* ---------- kept parts + tips */
+.keep-pop { position: absolute; z-index: 8; width: 270px; background: var(--bg3); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 12px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 8px 30px #0008; }
+.keep-pop b { font-size: 13px; margin-bottom: 2px; }
+.keep-pop .warn { margin: 0 0 4px; color: var(--repair); font-size: 12px; line-height: 1.4; }
+.keep-pop button { text-align: left; }
+.panel-h { font-size: 13px; margin: 0 0 6px; }
+.keep-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-s); margin-bottom: 6px; }
+.keep-item .sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.keep-item .sw.original { background: repeating-linear-gradient(45deg, #9fc4ff 0 2px, transparent 2px 5px); border: 1px solid #9fc4ff; }
+.keep-item .sw.no_edits { background: repeating-linear-gradient(45deg, #8b94a5 0 2px, transparent 2px 5px); border: 1px solid #8b94a5; }
+.keep-item span { flex: 1; }
+.keep-item select { font-size: 12px; }
+.tips { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 8px 10px; margin-bottom: 12px; background: var(--bg); }
+.tips summary { cursor: pointer; font-weight: 650; }
+.tip-count { color: var(--repair); font-weight: 600; margin-left: 4px; }
+.tip { padding: 9px 0; border-top: 1px solid var(--line); }
+.tip:first-child { border-top: none; margin-top: 4px; }
+.tip b { display: block; margin-bottom: 3px; }
+.tip p { margin: 0 0 7px; color: var(--muted); line-height: 1.45; font-size: 12px; }
+.pill.kept { color: #9fc4ff; border-color: #9fc4ff66; }

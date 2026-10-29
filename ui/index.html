@@ -61,6 +61,13 @@
       <div id="stemLanes"></div>
       <div class="playhead" id="playhead"></div>
     </div>
+    <div class="keep-pop" id="keepPop" hidden>
+      <b id="keepPopTitle"></b>
+      <p id="keepPopWarn" class="warn" hidden></p>
+      <button class="primary small" data-mode="original">Use the original song here</button>
+      <button class="small" data-mode="no_edits">Keep the split, no repairs</button>
+      <button class="ghost small" data-mode="">Cancel</button>
+    </div>
     <div class="hint" id="pickHint" hidden>Click a spot in the <b id="pickStem"></b> lane to borrow from there. <button class="ghost small" id="pickCancel">Cancel</button></div>
   </section>
 
@@ -72,6 +79,10 @@
       <button data-tab="settings" role="tab">Settings</button>
     </nav>
     <div class="tab" id="tab-review">
+      <details class="tips" id="tipsBox" open>
+        <summary>Make the fixed parts match the rest <span class="tip-count" id="tipCount"></span></summary>
+        <div id="tipsList"></div>
+      </details>
       <div class="summary" id="reviewSummary"></div>
       <div class="filters" id="filters">
         <button data-f="review" class="on">Needs review</button>
@@ -89,6 +100,11 @@
       <div id="gridWrap"></div>
     </div>
     <div class="tab" id="tab-levels" hidden>
+      <h3 class="panel-h">Kept parts</h3>
+      <p class="help">Parts you keep are never repaired or re-levelled. Drag across the Sections bar above the timeline to keep a part.</p>
+      <div id="keepList"></div>
+      <hr>
+      <h3 class="panel-h">Levels</h3>
       <p class="help">Loudness of every instrument per section after repairs. Type a boost or cut in dB to change one instrument in one section; it applies to playback and export.</p>
       <div id="levelsWrap"></div>
     </div>
