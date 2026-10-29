@@ -6,7 +6,9 @@ const api = {
   async get(path) { const r = await fetch(path); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; },
   async post(path, body) {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
-    const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+    const j = await r.json();
+    if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; throw e; }
+    return j;
   },
 };
 const fmt = t => { t = Math.max(0, t || 0); const m = Math.floor(t / 60), s = Math.floor(t % 60); return `${m}:${String(s).padStart(2, "0")}`; };
@@ -70,11 +72,28 @@ function showWelcome(on) {
   if (on) refreshState();
 }
 
-async function startSong(path) {
+async function startSong(path, confirmed = false) {
   try {
-    await api.post("/api/open_song", { path, mode: $("#sepMode").value || "4stem" });
+    await api.post("/api/open_song", { path, mode: $("#sepMode").value || "4stem", confirm_model: confirmed });
     watchJob();
-  } catch (e) { fail(e); }
+  } catch (e) {
+    hideBusy();
+    if (e.message === "need_model") {
+      if (await askModel(e.data.plan, "Download and split")) startSong(path, true);
+    } else fail(e);
+  }
+}
+
+// Asks before the one-time separation model download. Resolves true if the person agrees.
+function askModel(plan, okLabel = "Download") {
+  plan = plan || st.state?.model?.plan || {};
+  const dlg = $("#dlgModel");
+  $("#mdlSize").textContent = plan.size || "about 1-3 GB";
+  $("#mdlRunsOn").textContent = plan.runs_on || "your computer";
+  $("#mdlNote").textContent = plan.note || ""; $("#mdlNote").hidden = !plan.note;
+  $("#mdlOk").textContent = okLabel;
+  dlg.returnValue = ""; dlg.showModal();
+  return new Promise(res => dlg.addEventListener("close", () => res(dlg.returnValue === "ok"), { once: true }));
 }
 
 async function upload(file, batch) {
@@ -86,10 +105,13 @@ $("#btnOpenSong").onclick = async () => {
   if (native()) { const p = await native().choose_song(); if (p) startSong(p); return; }
   $("#fileSong").click();
 };
-$("#fileSong").onchange = async e => {
-  const f = e.target.files[0]; if (!f) return;
+async function openSongFile(f) {
   showBusy(0.01, "Copying the song into the app");
   try { const j = await upload(f, "song" + Date.now()); startSong(j.path); } catch (err) { hideBusy(); fail(err); }
+}
+$("#fileSong").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  await openSongFile(f);
   e.target.value = "";
 };
 $("#btnOpenStems").onclick = async () => {
@@ -98,6 +120,10 @@ $("#btnOpenStems").onclick = async () => {
 };
 $("#fileStems").onchange = async e => {
   const files = [...e.target.files]; if (!files.length) return;
+  await openStemFiles(files);
+  e.target.value = "";
+};
+async function openStemFiles(files) {
   const batch = "stems" + Date.now();
   try {
     let folder;
@@ -105,8 +131,33 @@ $("#fileStems").onchange = async e => {
     const name = files[0].name.replace(/\.[^.]+$/, "").replace(/[ _-]*(vocals?|drums|bass|other|instrumental|no_vocals)$/i, "") || "Imported stems";
     startStems(folder, name);
   } catch (err) { hideBusy(); fail(err); }
-  e.target.value = "";
-};
+}
+
+/* ---------- drag and drop: a song opens it; a set of stems (one named "vocals") imports them */
+const AUDIO_RE = /\.(wav|mp3|flac|m4a|aac|ogg|oga|opus|aiff?|wma|mp4)$/i;
+let dragDepth = 0;
+const dragHasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+window.addEventListener("dragenter", e => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault(); dragDepth++;
+  if (S_busy()) return;
+  $("#dropZone").hidden = false;
+});
+window.addEventListener("dragover", e => { if (dragHasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = S_busy() ? "none" : "copy"; } });
+window.addEventListener("dragleave", e => { if (!dragHasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $("#dropZone").hidden = true; } });
+window.addEventListener("drop", async e => {
+  if (!dragHasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $("#dropZone").hidden = true;
+  if (S_busy()) { toast("Wait for the current song to finish processing, then drop the next one."); return; }
+  const all = [...e.dataTransfer.files];
+  const files = all.filter(f => AUDIO_RE.test(f.name) || (f.type || "").startsWith("audio/"));
+  if (!files.length) { toast(all.length ? "That doesn't look like an audio file. Drop an MP3, WAV, FLAC, M4A or OGG." : "Drop audio files, not folders."); return; }
+  stopPreview(); player.pause();
+  if (files.length > 1 && files.some(f => /vocal|vox/i.test(f.name))) return openStemFiles(files);
+  if (files.length > 1) toast(`Opening ${files[0].name}. Drop one song at a time, or a full set of stems including the vocals.`, { ms: 6000 });
+  openSongFile(files[0]);
+});
+function S_busy() { return !$("#busy").hidden || !!st.state?.job?.running; }
 async function startStems(folder, name) {
   try { await api.post("/api/open_stems", { folder, name }); watchJob(); } catch (e) { hideBusy(); fail(e); }
 }
@@ -846,15 +897,19 @@ let modelTimer = null;
 function renderModel(s) {
   const m = s.model || {}, strip = $("#modelStrip");
   let info;
-  if (m.installing) info = `Getting the separation model ready (one time, about 2-3 GB). ${m.message || ""}`;
+  const plan = m.plan || {};
+  const offer = `Splitting songs needs the separation model: a one-time download of ${plan.size || "about 1-3 GB"}${plan.runs_on ? ", set up to run on " + plan.runs_on : ""}.`;
+  if (m.installing) info = `Downloading the separation model. ${m.message || ""}`;
   else if (m.error) info = `The separation model couldn't be installed. ${m.error}`;
   else if (m.installed) info = `Separation model ready${m.device ? ", running on " + m.device : ""}.${m.note ? " " + m.note : ""}`;
-  else info = "The separation model installs automatically the first time you open a song.";
+  else info = offer + " Nothing is downloaded until you choose to.";
   $("#engineInfo").textContent = info;
   $("#btnModelReinstall").disabled = !!m.installing;
-  strip.hidden = !(m.installing || m.error);
+  $("#btnModelReinstall").textContent = m.installed ? "Reinstall separation model" : "Download separation model";
+  strip.hidden = !!m.installed && !m.error && !m.installing;
   strip.classList.toggle("err", !!m.error && !m.installing);
-  $("#modelMsg").textContent = m.installing ? `Getting the separation model ready: ${pct(m.progress || 0)}` : (m.error || "");
+  $("#modelMsg").textContent = m.installing ? `Downloading the separation model: ${pct(m.progress || 0)}` : (m.error || offer);
+  $("#btnModelGet").hidden = !!(m.installing || m.error || m.installed);
   $("#modelMsg").title = m.message || "";
   $("#modelBarWrap").hidden = !m.installing; $("#modelBar").style.width = pct(m.progress || 0);
   $("#btnModelRetry").hidden = !(m.error && !m.installing);
@@ -868,7 +923,11 @@ async function installModel(force) {
   try { await api.post("/api/model/install", { force }); renderModel(await api.get("/api/state")); } catch (e) { fail(e); }
 }
 $("#btnModelRetry").onclick = () => installModel(false);
-$("#btnModelReinstall").onclick = () => { if (confirm("Download and reinstall the separation model? This takes a few minutes.")) installModel(true); };
+$("#btnModelReinstall").onclick = async () => {
+  const inst = st.state?.model?.installed;
+  if (await askModel(null, inst ? "Reinstall" : "Download")) installModel(!!inst);
+};
+$("#btnModelGet").onclick = async () => { if (await askModel(null, "Download")) installModel(false); };
 
 /* ------------------------------------------------------------------ boot */
 (async function boot() {

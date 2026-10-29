@@ -38,7 +38,7 @@ class State:
               "message": "", "installed": None, "auto": False}
     just_updated = False
     model = {"installed": False, "installing": False, "progress": 0.0, "message": "", "error": None,
-             "device": "", "note": None}
+             "device": "", "note": None, "plan": None}
 
 
 S = State()
@@ -92,6 +92,16 @@ def start_model_install(force=False):
             S.model["installing"] = False
 
     threading.Thread(target=run, daemon=True).start()
+
+
+def _model_plan():
+    if S.model["plan"] is None:
+        try:
+            p = INST.plan()
+            S.model["plan"] = {"size": p["size"], "runs_on": p["runs_on"], "note": p.get("note")}
+        except Exception:
+            S.model["plan"] = {"size": "about 1-3 GB", "runs_on": "your computer", "note": None}
+    return S.model["plan"]
 
 
 def _wait_for_model():
@@ -350,6 +360,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "path": dest, "folder": folder})
             d = self._json()
             if path == "/api/open_song":
+                if not SEP.demucs_available() and not S.model["installing"] and not d.get("confirm_model"):
+                    return self._send(409, {"error": "need_model", "plan": _model_plan()})
                 _start_job(_job_song, d["path"], d.get("mode", "4stem"))
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
@@ -474,12 +486,12 @@ def serve(port=0, just_updated=False):
         os.makedirs(d, exist_ok=True)
     S.just_updated = just_updated
     threading.Thread(target=_startup_update, daemon=True).start()
-    # get the separation model ready in the background so the first song doesn't wait for it
+    # nothing is downloaded without asking: just find out what the download would be
     if SEP.demucs_available():
         S.model["installed"] = True
         threading.Thread(target=_probe_device, daemon=True).start()
-    elif UP.load_prefs(HOME).get("auto_install_model", True):
-        start_model_install()
+    else:
+        threading.Thread(target=_model_plan, daemon=True).start()
     for attempt in range(40):   # after an update restart the old copy may still hold the port briefly
         try:
             httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
