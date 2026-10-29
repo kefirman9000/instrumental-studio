@@ -72,28 +72,26 @@ function showWelcome(on) {
   if (on) refreshState();
 }
 
-async function startSong(path, confirmed = false) {
+async function startSong(path) {
   try {
-    await api.post("/api/open_song", { path, mode: $("#sepMode").value || "4stem", confirm_model: confirmed });
+    await api.post("/api/open_song", { path, mode: $("#sepMode").value || "4stem" });
     watchJob();
   } catch (e) {
     hideBusy();
-    if (e.message === "need_model") {
-      if (await askModel(e.data.plan, "Download and split")) startSong(path, true);
-    } else fail(e);
+    if (e.message === "need_model") needModel(); else fail(e);
   }
 }
 
-// Asks before the one-time separation model download. Resolves true if the person agrees.
-function askModel(plan, okLabel = "Download") {
-  plan = plan || st.state?.model?.plan || {};
-  const dlg = $("#dlgModel");
-  $("#mdlSize").textContent = plan.size || "about 1-3 GB";
-  $("#mdlRunsOn").textContent = plan.runs_on || "your computer";
-  $("#mdlNote").textContent = plan.note || ""; $("#mdlNote").hidden = !plan.note;
-  $("#mdlOk").textContent = okLabel;
-  dlg.returnValue = ""; dlg.showModal();
-  return new Promise(res => dlg.addEventListener("close", () => res(dlg.returnValue === "ok"), { once: true }));
+const modelReady = () => !!st.state?.model?.installed;
+function needModel() {
+  showWelcome(true);
+  const card = $("#modelCard");
+  card.classList.remove("attention"); void card.offsetWidth; card.classList.add("attention");
+  card.scrollIntoView({ block: "center", behavior: "smooth" });
+  setTimeout(() => card.classList.remove("attention"), 2500);
+  toast(st.state?.model?.installing
+    ? "The separation model is still downloading. Split the song once the light turns green."
+    : "Splitting songs needs the separation model. Download it first; the light turns green when it's ready.", { ms: 6000 });
 }
 
 async function upload(file, batch) {
@@ -102,10 +100,12 @@ async function upload(file, batch) {
 }
 
 $("#btnOpenSong").onclick = async () => {
+  if (!modelReady()) return needModel();
   if (native()) { const p = await native().choose_song(); if (p) startSong(p); return; }
   $("#fileSong").click();
 };
 async function openSongFile(f) {
+  if (!modelReady()) return needModel();
   showBusy(0.01, "Copying the song into the app");
   try { const j = await upload(f, "song" + Date.now()); startSong(j.path); } catch (err) { hideBusy(); fail(err); }
 }
@@ -895,27 +895,40 @@ $("#updAuto").onchange = async () => {
 /* ------------------------------------------------------------------ separation model status */
 let modelTimer = null;
 function renderModel(s) {
-  const m = s.model || {}, strip = $("#modelStrip");
-  let info;
-  const plan = m.plan || {};
-  const offer = `Splitting songs needs the separation model: a one-time download of ${plan.size || "about 1-3 GB"}${plan.runs_on ? ", set up to run on " + plan.runs_on : ""}.`;
-  if (m.installing) info = `Downloading the separation model. ${m.message || ""}`;
-  else if (m.error) info = `The separation model couldn't be installed. ${m.error}`;
-  else if (m.installed) info = `Separation model ready${m.device ? ", running on " + m.device : ""}.${m.note ? " " + m.note : ""}`;
-  else info = offer + " Nothing is downloaded until you choose to.";
-  $("#engineInfo").textContent = info;
-  $("#btnModelReinstall").disabled = !!m.installing;
-  $("#btnModelReinstall").textContent = m.installed ? "Reinstall separation model" : "Download separation model";
-  strip.hidden = !!m.installed && !m.error && !m.installing;
-  strip.classList.toggle("err", !!m.error && !m.installing);
-  $("#modelMsg").textContent = m.installing ? `Downloading the separation model: ${pct(m.progress || 0)}` : (m.error || offer);
-  $("#btnModelGet").hidden = !!(m.installing || m.error || m.installed);
-  $("#modelMsg").title = m.message || "";
-  $("#modelBarWrap").hidden = !m.installing; $("#modelBar").style.width = pct(m.progress || 0);
-  $("#btnModelRetry").hidden = !(m.error && !m.installing);
-  if (m.installing && !modelTimer) {
+  const m = s.model || {}, plan = m.plan || {};
+  const state = m.installing ? "busy" : m.error ? "err" : m.installed ? "ok" : "off";
+  const size = plan.size || "about 1-3 GB", runsOn = plan.runs_on || "your computer";
+  const text = {
+    ok: ["Separation model ready", `Songs are split on ${m.device || runsOn}.${m.note ? " " + m.note : ""}`],
+    busy: [`Downloading the separation model: ${pct(m.progress || 0)}`, `${m.message || "Starting"}. You can import stems or try the demo meanwhile.`],
+    err: ["Separation model not installed", m.error || "Something went wrong."],
+    off: ["Separation model not installed", `Needed only for splitting songs. One-time download of ${size}, set up to run on ${runsOn}. Nothing downloads until you click the button.`],
+  }[state];
+  $("#modelLight").className = "light " + state;
+  $("#modelTitle").textContent = text[0];
+  $("#modelDetail").textContent = text[1];
+  $("#modelBarWrap").hidden = state !== "busy"; $("#modelBar").style.width = pct(m.progress || 0);
+  const get = $("#btnModelGet");
+  get.hidden = state !== "off"; get.textContent = `Download (${size.replace(/^about /, "")})`;
+  $("#btnModelRetry").hidden = state !== "err";
+  $("#btnOpenSong").classList.toggle("primary", state === "ok");
+  const nm = $("#needsModel");
+  nm.querySelector("i").className = "light small " + (state === "ok" ? "ok" : state === "busy" ? "busy" : "off");
+  nm.querySelector("span").textContent = state === "ok" ? "Separation model ready" : state === "busy" ? "Waiting for the model download" : "Needs the separation model";
+  $("#modelPillLight").className = "light small " + state;
+  $("#modelPillText").textContent = { ok: "Model ready", busy: `Model ${pct(m.progress || 0)}`, err: "Model not installed", off: "Model not installed" }[state];
+  $("#engineInfo").textContent = text[0] + ". " + text[1];
+  $("#btnModelReinstall").disabled = state === "busy";
+  $("#btnModelReinstall").textContent = state === "ok" ? "Reinstall separation model" : `Download separation model (${size.replace(/^about /, "")})`;
+  if (state === "busy" && !modelTimer) {
     modelTimer = setInterval(async () => {
-      try { const s2 = await api.get("/api/state"); st.state = s2; renderModel(s2); if (!s2.model.installing) { clearInterval(modelTimer); modelTimer = null; } } catch {}
+      try {
+        const s2 = await api.get("/api/state"); st.state = s2; renderModel(s2);
+        if (!s2.model.installing) {
+          clearInterval(modelTimer); modelTimer = null;
+          if (s2.model.installed) toast("The separation model is ready. You can split songs now.");
+        }
+      } catch {}
     }, 1000);
   }
 }
@@ -923,11 +936,13 @@ async function installModel(force) {
   try { await api.post("/api/model/install", { force }); renderModel(await api.get("/api/state")); } catch (e) { fail(e); }
 }
 $("#btnModelRetry").onclick = () => installModel(false);
-$("#btnModelReinstall").onclick = async () => {
-  const inst = st.state?.model?.installed;
-  if (await askModel(null, inst ? "Reinstall" : "Download")) installModel(!!inst);
+$("#btnModelGet").onclick = () => installModel(false);
+$("#btnModelReinstall").onclick = () => {
+  const inst = modelReady();
+  if (!inst || confirm("Download the separation model again? Use this if splitting stopped working.")) installModel(inst);
 };
-$("#btnModelGet").onclick = async () => { if (await askModel(null, "Download")) installModel(false); };
+$("#modelPill").onclick = () => { if (!$("#welcome").hidden) { const c = $("#modelCard"); c.classList.add("attention"); setTimeout(() => c.classList.remove("attention"), 1500); return; }
+  stopPreview(); player.pause(); showWelcome(true); };
 
 /* ------------------------------------------------------------------ boot */
 (async function boot() {

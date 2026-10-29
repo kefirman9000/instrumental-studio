@@ -48,20 +48,31 @@ You do this once. It takes about 10 minutes, most of it waiting for downloads.
 
 The app opens in its own window.
 
-The first time you open a song, the app asks before downloading the separation model, and tells you how big the download is (about 3 GB with an NVIDIA graphics card, less without). It picks the right version for your computer by itself: NVIDIA graphics cards and Apple silicon Macs are used automatically for much faster splitting. You can also start the download from the start screen ahead of time, and try the demo song while it finishes.
+### The separation model
+
+Splitting songs uses Demucs, a free model that runs on your own computer. It isn't included in the download, and the app never downloads it without asking.
+
+The start screen has a **Separation model** panel with a status light:
+
+- 🔴 **Not installed**: click **Download** to get it. The button shows how big it is (about 3 GB with an NVIDIA graphics card, less without). The app picks the right version for your computer: NVIDIA graphics cards and Apple silicon Macs are used automatically for much faster splitting.
+- 🟡 **Downloading**: shows progress. You can import stems or try the demo meanwhile.
+- 🟢 **Ready**: you can split songs.
+
+The same light is always in the top-right corner of the window. You only need the model for **Split a song**; **Import stems** and the demo work without it.
 
 ## Your first song
 
 ![The start screen, with buttons to open a song, use existing stems, or try the demo](docs/screenshots/welcome.png)
 
-1. Click **Open a song** and choose a file, or just drag the song into the window. Splitting takes under a minute with a graphics card, or a few minutes without one. The very first time, the app asks to download the separation model and then carries on.
-   - Already have stems from another tool? Drag them all in at once (one of them must have *vocals* in its name), or click **Use stems you already have**.
-2. When it's done, every instrument appears on the timeline. **Red** marks show where the vocals damaged that instrument.
-3. Press **Space** to play. Switch between **Original**, **Raw instrumental** and **Repaired** at the top to compare.
-4. Fixes the app is confident about are already applied. Open the **Review** tab to check the ones waiting for you.
-5. Click **Export** when you're happy.
+1. Make sure the separation model light is green (see above).
+2. Click **Split a song** and choose a file, or just drag the song into the window. Splitting takes under a minute with a graphics card, or a few minutes without one.
+   - Already have stems from another tool? Click **Import stems** and select all of them, or drag them all in at once. One of them must have *vocals* in its name.
+3. When it's done, every instrument appears on the timeline. **Red** marks show where the vocals damaged that instrument.
+4. Press **Space** to play. Switch between **Original**, **Raw instrumental** and **Repaired** at the top to compare.
+5. Fixes the app is confident about are already applied. Open the **Review** tab to check the ones waiting for you.
+6. Click **Export** when you're happy.
 
-Not ready to open your own song? Click **Try the demo song** to explore everything first. It works right away, even while the separation model is still installing.
+Not ready to open your own song? Click **Try the demo song** to explore everything first. It works without the separation model.
 
 ## A quick tour
 
@@ -126,7 +137,7 @@ Updates never touch your songs, projects or exports. The previous version is kep
 
 ## Troubleshooting
 
-**"The separation model couldn't be installed."** Click **Try again** on the start screen, or Settings → **Reinstall separation model**. The message says what went wrong; most often it's the internet connection or not enough disk space (it needs about 3 GB). If it says your Python isn't supported, install Python 3.12 or 3.13 from python.org.
+**The model light is red after a download.** The panel says what went wrong. Click **Try again**, or Settings → **Reinstall separation model**. The message says what went wrong; most often it's the internet connection or not enough disk space (it needs about 3 GB). If it says your Python isn't supported, install Python 3.12 or 3.13 from python.org.
 
 **MP3 files won't open.** ffmpeg is missing. Install it (step 3 above) and restart the app, or convert the song to WAV.
 

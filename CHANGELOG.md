@@ -1,5 +1,11 @@
 # What's new
 
+## 1.3.0
+
+- New **Separation model** panel on the start screen with a status light: red when it isn't installed, amber while downloading, green when ready. It shows the download size and a **Download** button. The same light sits in the top-right corner of the window.
+- Starting a project is clearer: **Split a song**, **Import stems** and **Try the demo song**, each marked with whether it needs the model.
+- Opening a song no longer starts a download by itself. If the model isn't ready, the app points you to the panel instead.
+
 ## 1.2.0
 
 - The separation model is no longer downloaded without asking. The first time you open a song, the app tells you how big the download is and what it will run on, and waits for your OK. You can also start it from the start screen or Settings.
