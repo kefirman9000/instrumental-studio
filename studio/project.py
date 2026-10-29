@@ -9,14 +9,18 @@ import numpy as np
 
 from . import analysis as A
 from .audio import EPS, HOP, N_FFT, load_audio, save_audio, stft, log
-from .repair import match_window, refine_lag, repair_window, bleed_window, smooth_window, MARGIN, XFADE
+from .repair import match_window, refine_lag, repair_window, bleed_window, smooth_window, MARGIN, XFADE, _window_weight
+from .audio import segment
 from . import glitch as GL
 
 DISPLAY_BANDS = 96
 DS = 4                      # display columns = analysis frames / DS  (~21.5 columns per second)
-STEM_ORDER = ["drums", "bass", "guitar", "piano", "other", "instrumental"]
+STEM_ORDER = ["drums", "kick", "snare", "toms", "cymbals", "bass", "guitar", "piano", "other", "instrumental",
+              "backing_vocals"]
+NOT_REPAIRED = {"backing_vocals"}      # tracks that are kept or muted, never rebuilt from elsewhere
 STEM_COLORS = {"drums": "#E8875B", "bass": "#5B8DEF", "guitar": "#4FB286", "piano": "#C46BD6",
-               "other": "#D9B44A", "instrumental": "#5BC0D9", "vocals": "#E05C7A"}
+               "other": "#D9B44A", "instrumental": "#5BC0D9", "vocals": "#E05C7A",
+               "kick": "#F0A06E", "snare": "#E37B55", "toms": "#CC9A6A", "cymbals": "#F2C38A", "backing_vocals": "#B98ACF"}
 
 DEFAULTS = {
     "auto_conf": 0.6,          # repairs at/above this match are marked "recommended" (never applied without asking)
@@ -41,6 +45,7 @@ class Project:
         self.original = None
         self.suggestions = {}
         self.patches = {}          # id -> (lo, float16 patch[2, n])
+        self.take_w = {}           # best-version edits: id -> (lo, float16 weight[n]) of what they replace
         self.history = []
         self.mixer = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}, "keep": [], "vocal_lift": {}, "mute_ranges": []}
         self._render_cache = {}
@@ -232,7 +237,7 @@ class Project:
             self._render_cache.pop(("stem", k), None)
         self.suggestions, self.patches, self.history = {}, {}, []
         self.level_floor = {}
-        jobs = [(k, w) for k in inst_names for w in range(len(windows))]
+        jobs = [(k, w) for k in inst_names if k not in NOT_REPAIRED for w in range(len(windows))]
         total = max(len(jobs), 1)
         # windows are independent; NumPy/SciPy release the GIL in the heavy parts, so threads scale
         from concurrent.futures import ThreadPoolExecutor
@@ -356,13 +361,24 @@ class Project:
         out = self.stems[k].copy()
         n = out.shape[1]
         delta = np.zeros_like(out)
+        takes = []
         for sid, sug in self.suggestions.items():
             if sug["stem"] != k or not self._applied(sug) or sid not in self.patches:
+                continue
+            if sug["type"] in ("take", "alt"):
+                takes.append(sid)
                 continue
             lo, p = self.patches[sid]
             a, b = max(lo, 0), min(lo + p.shape[1], n)
             if b > a:
                 delta[:, a:b] += p[:, a - lo:b - lo].astype(np.float32)
+        for sid in takes:      # a best-version edit replaces the part outright, other edits included
+            lo, p = self.patches[sid]
+            _, w = self.take_w[sid]
+            a, b = max(lo, 0), min(lo + p.shape[1], n)
+            if b > a:
+                ww = w[a - lo:b - lo].astype(np.float32)[None, :]
+                delta[:, a:b] = delta[:, a:b] * (1 - ww) + p[:, a - lo:b - lo].astype(np.float32)
         kept = self.keep_mask(0, n)
         if kept is not None:          # kept parts are never repaired
             delta *= (1 - kept)[None, :]
@@ -563,6 +579,22 @@ class Project:
             y = self.mix("repaired", region=(da, db))
             return y + self.stems["vocals"][:, da:db] if hear == "song" else y
 
+        if sug["type"] in ("take", "alt") and mode in ("before", "after", "patch"):
+            def render(status):
+                old = sug["status"]
+                sug["status"] = status
+                self._render_cache.pop(("stem", k), None)
+                try:
+                    if hear == "solo":
+                        return self.shaped_stem(k, a, b).copy()
+                    y = self.mix("repaired", region=(a, b))
+                    return y + self.stems["vocals"][:, a:b] if hear == "song" else y
+                finally:
+                    sug["status"] = old
+                    self._render_cache.pop(("stem", k), None)
+            before, after = render("rejected"), render("accepted")
+            return {"before": before, "after": after, "patch": after - before}[mode]
+
         # this edit alone, as it would sound in the output (kept parts block it, levels apply to it)
         lo, p = self.patches.get(sid, (a, np.zeros((2, 0), np.float16)))
         delta = np.zeros((2, b - a), np.float32)
@@ -703,6 +735,221 @@ class Project:
                     self.patches[sid] = (res["lo"], res["patch"].astype(np.float16))
                     ids.append(sid)
             return ids
+
+    # ------------------------------------------------------------------ best versions of repeating parts
+    def _bars_in(self, sec):
+        return [i for i, (s0, L) in enumerate(self.windows)
+                if sec["start"] - 1e-3 <= self.beat_times[s0] < sec["end"] - 1e-3]
+
+    def _instance(self, k, si):
+        """How clean one section's take of one instrument is: the share of its sound the vocals covered."""
+        F, C, R = self.stem_feats[k]
+        beats = [b for i in self._bars_in(self.sections[si])
+                 for b in range(self.windows[i][0], self.windows[i][0] + self.windows[i][1])]
+        if not beats:
+            return None
+        E = np.exp(F[beats])
+        level = float(10 * np.log10(E.sum(1).mean() + EPS))
+        # how much of it the vocals took: the detected loss here, or the share the vocals covered
+        lost = self.grid.get(f"{si}:{k}", {}).get("damage", 0.0) if hasattr(self, "grid") else 0.0
+        cover = float(max(3 * lost, (E * R[beats]).sum() / (E.sum() + EPS)))
+        glitches = sum(1 for x in self.suggestions.values() if x["type"] == "glitch" and x["stem"] == k
+                       and x["section"] == si and x["status"] == "pending")
+        return {"cover": cover, "quality": float(np.clip(1 - cover - 0.05 * glitches, 0, 1)), "level": level}
+
+    def _bar_dist(self, k, w1, w2):
+        """Same yardstick as repair matching: timbre and harmony where neither bar had vocals."""
+        F, C, R = self.stem_feats[k]
+        (s1, L1), (s2, L2) = self.windows[w1], self.windows[w2]
+        if L1 != L2:
+            return None
+        F1, F2, R1, R2 = F[s1:s1 + L1], F[s2:s2 + L2], R[s1:s1 + L1], R[s2:s2 + L2]
+        w = (1 - R1) * (1 - R2)
+        bd = float((w * ((F1 - F1.mean()) - (F2 - F2.mean())) ** 2).sum() / (w.sum() + EPS))
+        cd = float(1 - (C[s1:s1 + L1] * C[s2:s2 + L2]).sum(1).mean())
+        return bd, cd
+
+    def _dist_scale(self, k):
+        cache = self.__dict__.setdefault("_dscale", {})
+        if k not in cache:
+            rng = np.random.default_rng(0)
+            n = len(self.windows)
+            bds, cds = [], []
+            for _ in range(200):
+                d = self._bar_dist(k, int(rng.integers(n)), int(rng.integers(n)))
+                if d:
+                    bds.append(d[0]); cds.append(d[1])
+            cache[k] = (float(np.median(bds) or 1) + EPS, float(np.median(cds) or 1) + EPS)
+        return cache[k]
+
+    def section_alignment(self, k, si, sj):
+        """(similarity 0..1, bar offset): how alike the instrument's part is in two sections, bar by bar,
+        trying each bar offset so a section boundary found a bar early or late doesn't matter."""
+        bi, bj = self._bars_in(self.sections[si]), self._bars_in(self.sections[sj])
+        if not bi or not bj:
+            return 0.0, 0
+        mb, mc = self._dist_scale(k)
+        best = (0.0, 0)
+        for off in range(min(len(bj), 8)):
+            ds = []
+            for n_, w1 in enumerate(bi):
+                d = self._bar_dist(k, w1, bj[(n_ + off) % len(bj)])
+                if d:
+                    ds.append(0.5 * d[0] / mb + 0.5 * d[1] / mc)
+            if ds:
+                sim = float(np.clip(1.3 * (1 - np.mean(ds)), 0, 1))
+                if sim > best[0]:
+                    best = (sim, off)
+        return best
+
+    def section_similarity(self, k, si, sj):
+        return self.section_alignment(k, si, sj)[0]
+
+    def best_versions(self):
+        """For each instrument in each sung section: a cleaner section where it plays the same part."""
+        if self.stage != "detected" or not self.sections:
+            return []
+        out = []
+        for k in [x for x in self.instruments if x not in NOT_REPAIRED]:
+            info = {si: self._instance(k, si) for si in range(len(self.sections))}
+            for ti, sec in enumerate(self.sections):
+                it = info[ti]
+                if not it or not sec.get("vocal") or it["cover"] < 0.03:
+                    continue
+                cands = []
+                for si in range(len(self.sections)):
+                    i_s = info[si]
+                    if si == ti or not i_s or i_s["quality"] < it["quality"] + 0.03 or i_s["level"] < it["level"] - 15:
+                        continue
+                    sim = self.section_similarity(k, ti, si)
+                    if sim >= 0.7:
+                        cands.append({"section": si, "name": self.sections[si]["name"], "similarity": sim,
+                                      "cover": i_s["cover"], "quality": i_s["quality"]})
+                if not cands:
+                    continue
+                cands.sort(key=lambda c: (round(c["quality"], 2), c["similarity"]), reverse=True)
+                existing = self.suggestions.get(f"t_{k}_{ti}")
+                out.append({"stem": k, "section": ti, "name": sec["name"], "cover": it["cover"], "quality": it["quality"],
+                            "best": cands[0], "candidates": cands[:5],
+                            "status": existing["status"] if existing else None,
+                            "source": existing.get("source_section") if existing else None})
+        return out
+
+    def make_take(self, k, ti, si):
+        """Offer to replace instrument k in section ti with its take from section si (bar by bar,
+        beat-aligned, level-matched, cross-faded). Added for review; nothing is applied."""
+        with self.lock:
+            T, S = self.sections[ti], self.sections[si]
+            bt, bs = self._bars_in(T), self._bars_in(S)
+            if not bt or not bs:
+                raise RuntimeError("Those sections have no complete bars to copy.")
+            F, C, R = self.stem_feats[k]
+            beats_t = [b for i in bt for b in range(self.windows[i][0], self.windows[i][0] + self.windows[i][1])]
+            beats_s = [b for i in bs for b in range(self.windows[i][0], self.windows[i][0] + self.windows[i][1])]
+            # level match on the frequency bands the vocals left alone in both
+            rel_t, rel_s = (1 - R[beats_t]).mean(0), (1 - R[beats_s]).mean(0)
+            wgt = rel_t * rel_s
+            dlog = float((wgt * (F[beats_t].mean(0) - F[beats_s].mean(0))).sum() / (wgt.sum() + EPS))
+            g = float(np.clip(np.exp(dlog / 2), 0.5, 2.0))
+            src_audio = self.render_stem(k)
+            raw = self.stems[k]
+            n = raw.shape[1]
+            a = max(0, int(T["start"] * self.sr) - XFADE)
+            b = min(n, int(T["end"] * self.sr) + XFADE)
+            acc = np.zeros((2, b - a), np.float32)
+            W = np.zeros(b - a, np.float32)
+            off = self.section_alignment(k, ti, si)[1]
+            for j, wi in enumerate(bt):
+                wj = bs[(j + off) % len(bs)]
+                (st, Lt), (ss, Ls) = self.windows[wi], self.windows[wj]
+                if Lt != Ls:
+                    continue
+                t0, t1 = self._window_samples(st, Lt)
+                lag = refine_lag(self.stem_env[k], self.beats[st], self.beats[st + Lt], self.beats[ss])
+                lo, hi = max(a, t0 - XFADE // 2), min(b, t1 + XFADE // 2)
+                w = _window_weight(hi - lo, t0 - lo, t1 - lo)
+                seg = segment(src_audio, lo + lag, hi + lag) * g
+                acc[:, lo - a:hi - a] += seg * w[None, :]
+                W[lo - a:hi - a] += w
+            W = np.clip(W, 0, 1)
+            patch = acc - raw[:, a:b] * W[None, :]
+            sid = f"t_{k}_{ti}"
+            self.suggestions[sid] = {
+                "id": sid, "type": "take", "stem": k, "status": "pending", "start": T["start"], "end": T["end"],
+                "section": ti, "source_section": si, "conf": self.section_similarity(k, ti, si), "severity": 0.0,
+                "strength": 1.0, "gain_db": float(20 * np.log10(g)),
+                "donors": [{"beat": self.windows[bs[0]][0], "start": S["start"], "end": S["end"], "section": si,
+                            "match": self.section_similarity(k, ti, si), "vocal_overlap": 0.0}],
+                "note": f"Plays the {k} from {S['name']} here instead, matched to the beat and level"}
+            self.patches[sid] = (a, patch.astype(np.float16))
+            self.take_w[sid] = (a, W.astype(np.float16))
+            return sid
+
+    # ------------------------------------------------------------------ other models for one part
+    def alt_modes(self):
+        d = os.path.join(self.root, "alt")
+        return sorted(m for m in os.listdir(d) if os.path.isdir(os.path.join(d, m))) if os.path.isdir(d) else []
+
+    def set_alt(self, mode, stems):
+        d = os.path.join(self.root, "alt", mode)
+        os.makedirs(d, exist_ok=True)
+        for k, v in stems.items():
+            np.save(os.path.join(d, k + ".npy"), v.astype(np.float32))
+        self.__dict__.setdefault("_alt_cache", {})[mode] = stems
+
+    def load_alt(self, mode):
+        cache = self.__dict__.setdefault("_alt_cache", {})
+        if mode not in cache:
+            d = os.path.join(self.root, "alt", mode)
+            cache[mode] = {f[:-4]: np.load(os.path.join(d, f), mmap_mode="r") for f in os.listdir(d) if f.endswith(".npy")}
+        return cache[mode]
+
+    def make_alt(self, mode, start, end, stem=None, label=None):
+        """Offer to use another model's split for [start, end): one instrument, or all of them (stem None).
+        Added for review; nothing is applied."""
+        with self.lock:
+            alt = self.load_alt(mode)
+            n = self.original.shape[1]
+            a, b = max(0, int(start * self.sr)), min(n, int(end * self.sr))
+            lo, hi = max(0, a - XFADE), min(n, b + XFADE)
+            t = np.arange(lo, hi) / self.sr
+            ramp = 0.02
+            W = np.minimum(np.clip((t - start + ramp / 2) / ramp, 0, 1), np.clip((end + ramp / 2 - t) / ramp, 0, 1)).astype(np.float32)
+            cur = [k for k in self.instruments if k not in NOT_REPAIRED]
+
+            def alt_for(k):
+                def take(name):
+                    x = np.asarray(alt[name][:, lo:hi], np.float32)
+                    return np.pad(x, ((0, 0), (0, (hi - lo) - x.shape[1])))
+                if k in alt:
+                    return take(k)
+                if k == "other" and "other" in alt:   # the other model's guitar/piano belong in "other" here
+                    return take("other") + sum((take(x) for x in ("guitar", "piano") if x in alt and x not in cur),
+                                               np.zeros((2, hi - lo), np.float32))
+                if stem is None and k in ("guitar", "piano") and "other" in alt:
+                    return np.zeros((2, hi - lo), np.float32)   # the other model has them inside "other"
+                return None
+
+            targets = [stem] if stem else cur
+            ids, skipped = [], []
+            name = label or mode
+            for k in targets:
+                y = alt_for(k)
+                if y is None:
+                    skipped.append(k)
+                    continue
+                raw = self.stems[k][:, lo:hi]
+                sid = f"a_{mode}_{k}_{int(start * 100)}"
+                self.suggestions[sid] = {
+                    "id": sid, "type": "alt", "stem": k, "status": "pending", "start": float(start), "end": float(end),
+                    "section": self._section_of(start), "conf": 1.0, "severity": 0.0, "strength": 1.0, "donors": [],
+                    "alt_mode": mode, "note": f"Uses the {k} from the \"{name}\" split here instead"}
+                self.patches[sid] = (lo, (W[None, :] * (y - raw)).astype(np.float16))
+                self.take_w[sid] = (lo, W.astype(np.float16))
+                ids.append(sid)
+            if not ids:
+                raise RuntimeError("That split doesn't have a matching track for " + ", ".join(skipped) + ".")
+            return ids, skipped
 
     def donor_candidates(self, sid, n=8):
         sug = self.suggestions[sid]
@@ -909,7 +1156,9 @@ class Project:
             os.replace(tmp, os.path.join(self.root, "project.json"))
             np.savez(os.path.join(self.root, "patches.npz"),
                      **{f"{k}__lo": np.array([v[0]]) for k, v in self.patches.items()},
-                     **{f"{k}__p": v[1] for k, v in self.patches.items()})
+                     **{f"{k}__p": v[1] for k, v in self.patches.items()},
+                     **{f"{k}__w": v[1] for k, v in self.take_w.items()},
+                     **{f"{k}__wlo": np.array([v[0]]) for k, v in self.take_w.items()})
             if self.display:
                 d = {f"{kind}__{k}": v.astype(np.float16) for kind in ("raw", "after", "damage")
                      for k, v in self.display.get(kind, {}).items()}
@@ -950,6 +1199,9 @@ class Project:
             if key.endswith("__p"):
                 sid = key[:-3]
                 p.patches[sid] = (int(z[sid + "__lo"][0]), z[key])
+            elif key.endswith("__w"):
+                sid = key[:-3]
+                p.take_w[sid] = (int(z[sid + "__wlo"][0]), z[key])
         if os.path.exists(os.path.join(root, "display.npz")):
             z = np.load(os.path.join(root, "display.npz"))
             n = p.original.shape[1] // HOP + 1
@@ -1055,7 +1307,7 @@ class Project:
 
         # 2. tone match: what's still missing under the vocals, judged against the same part elsewhere
         lift_now = self.mixer.get("vocal_lift", {})
-        for k in ([] if rec else self.instruments):     # judge what's left only once the repairs are in
+        for k in ([] if rec else [x for x in self.instruments if x not in NOT_REPAIRED]):     # judge what's left only once the repairs are in
             loss = self.remaining_loss(k)
             want = float(np.clip(round((loss + float(lift_now.get(k, 0))) * 2) / 2, 0, 6))
             threshold = 1.5 if lift_now.get(k) else 1.0
@@ -1094,6 +1346,13 @@ class Project:
                                 "detail": f"There the {k} is quiet and mostly leftover singing, so muting it removes the ghost vocal without losing much.",
                                 "button": "Mute it there", "action": {"kind": "mute", "start": sec["start"], "end": sec["end"], "stem": k}})
 
+        bv = [x for x in self.best_versions() if not x["status"]]
+        if bv:
+            out.append({"id": "best_versions", "title": f"Use cleaner takes of repeating parts ({len(bv)})",
+                        "detail": "Some instruments play the same part elsewhere with less of it lost under the vocals. "
+                                  "Using that take keeps the part consistent every time it comes round.",
+                        "button": "Show them", "action": {"kind": "tab", "tab": "grid"}})
+
         if self._applied_count() != self.meta.get("glitch_scan_applied", 0):
             out.append({"id": "rescan", "title": "Listen for clicks and dropouts again",
                         "detail": "You've changed repairs since the last check. A quick scan catches any new click or gap.",
@@ -1110,7 +1369,31 @@ class Project:
                         "detail": "Pick a source by hand, or leave them. A weak match can add notes that weren't there.",
                         "button": "Show them", "action": {"kind": "filter", "filter": "hard"}})
 
-        mode = self.meta.get("sep_mode")
+        # the worst-hit part may come out better with a different model
+        if self.meta.get("source") not in ("demo",) and not imported_stems and self.sections:
+            worst = None
+            for si, sec in enumerate(self.sections):
+                cells = [self.grid.get(f"{si}:{k}", {}) for k in self.instruments]
+                dmg = max((c.get("damage", 0) for c in cells), default=0)
+                rep = min((c.get("repairability", 1) for c in cells if c.get("count")), default=1)
+                score = dmg * (1.5 - rep)
+                if sec.get("vocal") and dmg > 0.05 and (worst is None or score > worst[0]):
+                    worst = (score, si, dmg)
+            if worst:
+                from .installer import extra_installed
+                base = (self.meta.get("sep_mode") or "4stem").split("+")[0]
+                rof = extra_installed("roformer")
+                alt = {"4stem_fast": "4stem", "4stem": "hybrid" if rof else "ensemble", "ensemble": "hybrid" if rof else None,
+                       "6stem": "hybrid6" if rof else "6stem_best", "6stem_best": "hybrid6" if rof else None,
+                       "hybrid": "ensemble", "hybrid6": "6stem_best"}.get(base)
+                if alt and alt not in self.alt_modes():
+                    sec = self.sections[worst[1]]
+                    out.append({"id": "try_alt", "title": f"Try a different model on {sec['name']}",
+                                "detail": f"It lost the most under the vocals ({worst[2]:.0%}). Another model splits the song "
+                                          f"once more and you compare its version of this part, track by track, before choosing.",
+                                "button": "Try it", "action": {"kind": "alt", "mode": alt, "start": sec["start"], "end": sec["end"]}})
+
+        mode = (self.meta.get("sep_mode") or "").split("+")[0]
         dmg = np.mean([v["damage"] for v in self.stem_summary.values()]) if self.stem_summary else 0
         if mode in ("4stem_fast", "6stem") and dmg > 0.04 and not imported_stems:
             out.append({"id": "resplit", "title": "Split again with Best quality",
@@ -1133,5 +1416,6 @@ class Project:
             "display": {"cols": self.display["cols"], "rows": DISPLAY_BANDS, "fps": self.display["fps"]},
             "stage": self.stage, "has_original_display": "original" in self.display.get("raw", {}),
             "tips": self.tips(),
+            "best_versions": self.best_versions(),
             "user_decisions": sum(1 for x in self.suggestions.values() if x["status"] in ("accepted", "rejected")),
         }

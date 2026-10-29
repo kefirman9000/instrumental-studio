@@ -1,5 +1,11 @@
 # What's new
 
+## 1.9.0
+
+- **Try another model on one part.** Drag across a part, choose **Try another model here**, and pick a model and a track (or all tracks). That model's version of the part goes to Review under **Other takes** to compare before applying. The split is kept with the project, so trying it elsewhere is instant. Suggestions offer this for the part that lost the most.
+- **Best versions of repeating parts.** When an instrument plays the same part more than once, use its cleanest take every time, matched to the beat and level (Repairability tab).
+- **Extra models** (optional downloads on the start screen): cleanest vocal removal with Roformer before Demucs splits the instruments, backing vocals on their own track, and drums split into kick, snare, toms and cymbals.
+
 ## 1.8.0
 
 - **Clicks and gaps**: Find damage now also listens for short clicks, pops and dropouts in every instrument, ignoring drum hits, note starts and natural rests. Fixes are listed under **Clicks and smoothing** for you to review.

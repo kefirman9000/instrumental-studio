@@ -141,3 +141,39 @@ def install(progress=lambda f, m: None):
     dev = r.stdout.strip()
     progress(1.0, "Separation model installed")
     return {"device": dev, "note": p.get("note")}
+
+
+# ----------------------------------------------------------------------------- optional extra models
+EXTRAS = {
+    "roformer": {
+        "label": "Roformer vocal models",
+        "what": "Cleaner vocal removal (BS-Roformer), and separating backing vocals from the lead (karaoke model).",
+        "pip": ["audio-separator"], "module": "audio_separator",
+        "size": "about 200 MB now, plus each model (a few hundred MB) the first time it's used",
+    },
+    "drumsep": {
+        "label": "DrumSep",
+        "what": "Splits the drums into kick, snare, toms and cymbals.",
+        "pip": ["mdxnet-infer"], "module": "mdxnet_infer",
+        "size": "a small package now, plus the DrumSep model the first time it's used",
+    },
+}
+
+
+def extra_installed(key):
+    importlib.invalidate_caches()
+    return importlib.util.find_spec(EXTRAS[key]["module"]) is not None
+
+
+def install_extra(key, progress=lambda f, m: None):
+    if not installed():
+        raise RuntimeError("Install the separation model first; the extras build on it.")
+    e = EXTRAS[key]
+    progress(0.02, f"Installing {e['label']}")
+    # never let an extra swap out the PyTorch build that matches the graphics card
+    _pip(e["pip"] + ["--upgrade-strategy", "only-if-needed"], progress, 0.05, 0.95, f"Installing {e['label']}")
+    r = proc.run([sys.executable, "-c", f"import {e['module']}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"{e['label']} installed but doesn't load:\n" + r.stderr[-500:])
+    importlib.invalidate_caches()
+    progress(1.0, f"{e['label']} installed")

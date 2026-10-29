@@ -285,3 +285,19 @@ label.check input { margin-top: 3px; }
 .lvl-row { display: flex; gap: 4px; align-items: center; }
 #levelsWrap { overflow-x: auto; }
 .lvl input { width: 42px; }
+
+.best-item { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 8px; margin-bottom: 8px; }
+.best-item .bi-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.best-item .bi-top b { flex: 1; }
+.best-item p { margin: 0 0 6px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.best-item .row { margin: 0; }
+
+.split-extra { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 7px 14px; border-bottom: 1px solid var(--line); background: var(--bg2); font-size: 12.5px; }
+.split-extra label { display: flex; align-items: center; gap: 6px; }
+.extras-card { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 12px 16px; margin: -18px 0 30px; background: var(--bg2); }
+.extra-row { display: flex; align-items: center; gap: 12px; padding: 8px 0 0; }
+.extra-row .et { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.extra-row .et span { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+.alt-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.alt-row select { font-size: 12px; max-width: 100%; flex: 1 1 120px; }

@@ -15,6 +15,7 @@ const fmt = t => { t = Math.max(0, t || 0); const m = Math.floor(t / 60), s = Ma
 const fmtP = t => { t = Math.max(0, t || 0); const m = Math.floor(t / 60), s = (t % 60).toFixed(1); return `${m}:${s.padStart(4, "0")}`; };
 const pct = x => (x > 0 && x < 0.005 ? "<1%" : `${Math.round(100 * x)}%`);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const nice = k => (k || "").replace(/_/g, " ");
 const native = () => window.pywebview && window.pywebview.api;
 
 const st = {
@@ -43,7 +44,7 @@ async function refreshState() {
     sel.value = localStorage.getItem("sepMode") || "4stem";
     sel.dataset.auto = localStorage.getItem("sepMode") ? "" : "1";
   }
-  renderModel(s); renderSpeedTip();
+  renderModel(s); renderExtras(s); renderSpeedTip();
   const rec = $("#recent"); rec.innerHTML = "";
   if (s.projects.length) {
     const h = document.createElement("h2"); h.textContent = "Recent songs"; rec.append(h);
@@ -187,7 +188,17 @@ async function watchJob() {
     const j = s.job;
     if (j.error) { hideBusy(); fail(new Error(j.error)); return; }
     showBusy(j.progress, j.message || "Working");
-    if (!j.running && s.has_project) { hideBusy(); await openWorkspace(); return; }
+    if (!j.running && s.has_project) {
+      hideBusy(); await openWorkspace();
+      const res = j.result;
+      if (res && res.new_ids && res.new_ids.length) {      // another model was tried for one part
+        st.filter = "takes"; st.scope = null; select(res.new_ids[0]);
+        toast(`Added to Review: ${res.new_ids.length} track${res.new_ids.length === 1 ? "" : "s"} from the other model.`
+          + (res.skipped?.length ? ` It has no separate ${res.skipped.join(", ")}, so those stay as they are.` : "")
+          + " Listen to before and after with all tracks, then Apply.", { ms: 9000 });
+      }
+      return;
+    }
     if (!j.running && !s.has_project) { hideBusy(); return; }
     await new Promise(r => setTimeout(r, 400));
   }
@@ -279,7 +290,7 @@ function buildLanes() {
         <label class="gain">Level <input type="range" min="-24" max="12" step="0.5" value="0"><output>0 dB</output></label>
         <div class="badges"></div>
       </div><canvas></canvas>`;
-    lane.querySelector(".nm").textContent = k[0].toUpperCase() + k.slice(1);
+    lane.querySelector(".nm").textContent = nice(k[0].toUpperCase() + k.slice(1));
     const m = st.ov.mixer;
     const rng = lane.querySelector("input"), out = lane.querySelector("output");
     rng.value = m.stem_gain[k] || 0; out.textContent = `${(+rng.value).toFixed(1)} dB`;
@@ -423,7 +434,7 @@ function renderLane(k) {
   for (const s of st.ov.suggestions) {
     if (s.stem !== k) continue;
     const x0 = tToX(s.start), x1 = tToX(s.end); if (x1 < 0 || x0 > w) continue;
-    ctx.fillStyle = s.type === "bleed" ? "#d36a9a" : s.type === "glitch" ? "#ff8f5a" : s.type === "smooth" ? "#b9a5ff" : STATUS_COLOR[s.status] || "#888";
+    ctx.fillStyle = s.type === "bleed" ? "#d36a9a" : s.type === "glitch" ? "#ff8f5a" : s.type === "smooth" ? "#b9a5ff" : s.type === "take" || s.type === "alt" ? "#6dbf8c" : STATUS_COLOR[s.status] || "#888";
     ctx.globalAlpha = s.status === "rejected" ? 0.5 : 1;
     const y = s.type === "bleed" ? h - markH : h - markH + 3;
     ctx.fillRect(x0 + 1, y, Math.max(2, x1 - x0 - 2), s.type === "bleed" ? 3 : markH - 3);
@@ -601,6 +612,15 @@ function showKeepPop(a, b, e) {
       toast(`${r.new_ids.length} smoothing fix${r.new_ids.length === 1 ? "" : "es"} ready to review. Listen before and after, then Apply.`, { ms: 7000 });
     } catch (err) { fail(err); }
   };
+  const am = $("#altMode"), as = $("#altStem"), models = st.state?.models || {};
+  am.innerHTML = ""; as.innerHTML = "";
+  const curMode = (st.ov.meta.sep_mode || "").split("+")[0];
+  for (const [k, label] of Object.entries(models)) if (k !== curMode) am.add(new Option(label, k));
+  as.add(new Option("All tracks", ""));
+  for (const k of st.ov.stems) as.add(new Option(nice(k), k));
+  pop.querySelector(".alt-row").hidden = !split || st.ov.meta.source === "demo";
+  pop.querySelector(".alt-row").previousElementSibling.hidden = pop.querySelector(".alt-row").hidden;
+  pop.querySelector('[data-act="alt"]').onclick = () => { hideKeepPop(); tryAlt(am.value, a, b, as.value || null); };
   pop.querySelector('[data-act="scan"]').onclick = async () => {
     hideKeepPop();
     const before = st.ov.suggestions.filter(x => x.type === "glitch").length;
@@ -617,6 +637,19 @@ function showKeepPop(a, b, e) {
     if (btn.dataset.mode) setKeep([...(st.ov.mixer.keep || []), { start: a, end: b, mode: btn.dataset.mode }]);
     else renderLanes();
   });
+}
+async function tryAlt(mode, start, end, stem) {
+  try { await api.post("/api/alt", { mode, start, end, stem }); watchJob(); }
+  catch (e) {
+    if (e.message === "need_model") return installModelFromStep();
+    if (e.message === "need_extra") {
+      const ex = st.state?.extras || {};
+      const names = e.data.extras.map(k => `${ex[k]?.label || k} (${ex[k]?.size || "a download"})`).join(" and ");
+      if (confirm(`That model needs ${names}. Download now? Then try again once its light turns green.`)) for (const k of e.data.extras) await installExtra(k);
+      return;
+    }
+    fail(e);
+  }
 }
 function hideKeepPop() { $("#keepPop").hidden = true; }
 async function setKeep(list) {
@@ -688,6 +721,8 @@ async function runTip(a) {
   if (a.kind === "lift") return edit("/api/mixer", { vocal_lift: { ...(st.ov.mixer.vocal_lift || {}), [a.stem]: a.db } });
   if (a.kind === "filter") { st.filter = a.filter; st.scope = null; activateTab("review"); return renderReview(); }
   if (a.kind === "detect") return $("#btnDetect").onclick();
+  if (a.kind === "tab") return activateTab(a.tab);
+  if (a.kind === "alt") return tryAlt(a.mode, a.start, a.end, null);
   if (a.kind === "mute") return setMutes([...(st.ov.mixer.mute_ranges || []), { start: a.start, end: a.end, stem: a.stem }]);
   if (a.kind === "scan") {
     await edit("/api/glitch_scan", {});
@@ -742,6 +777,7 @@ function renderSteps() {
   const waiting = ov.suggestions.filter(x => x.status === "pending").length;
   $("#reviewSub").textContent = at < 2 ? "After finding damage." : waiting ? `${waiting} waiting for you in the Review tab.` : "Everything is decided. Export when ready.";
   $("#btnExport").disabled = at < 1;
+  $("#splitExtra").hidden = demo;
   $("#viewSeg").hidden = at < 1; $(".legend").hidden = at < 2;
   // what you can listen to
   $$("#versionSeg button").forEach(b => { b.disabled = b.dataset.v !== "original" && at < 1; });
@@ -766,8 +802,19 @@ $("#btnSplit").onclick = async () => {
     if (m.installing) return;
     return installModelFromStep();
   }
-  try { await api.post("/api/split", { mode: $("#sepMode").value || "4stem" }); watchJob(); }
-  catch (e) { if (e.message === "need_model") installModelFromStep(); else fail(e); }
+  try {
+    await api.post("/api/split", { mode: $("#sepMode").value || "4stem", backing: $("#optBacking").checked, drums: $("#optDrums").checked });
+    watchJob();
+  } catch (e) {
+    if (e.message === "need_model") installModelFromStep();
+    else if (e.message === "need_extra") {
+      const ex = st.state?.extras || {};
+      const names = e.data.extras.map(k => `${ex[k]?.label || k} (${ex[k]?.size || "a download"})`).join(" and ");
+      if (confirm(`That needs ${names}. Download now? Click Split again once the light turns green.`)) {
+        for (const k of e.data.extras) await installExtra(k);
+      }
+    } else fail(e);
+  }
 };
 async function installModelFromStep() {
   const m = st.state?.model || {};
@@ -813,6 +860,7 @@ const FILTERS = {
   applied: s => ok(s),
   bleed: s => s.type === "bleed",
   cleanup: s => s.type === "glitch" || s.type === "smooth",
+  takes: s => s.type === "take" || s.type === "alt",
   hard: s => s.status === "low" || s.status === "nodonor",
   all: () => true,
 };
@@ -823,6 +871,7 @@ function setScope(scope) { st.scope = scope; activateTab("review"); renderReview
 function statusText(s) {
   if (s.type === "bleed") return { pending: "Suggested", accepted: "Cleaned", rejected: "Kept as is" }[s.status] || s.status;
   if (s.type === "glitch" || s.type === "smooth") return { pending: "Suggested", accepted: "Fixed", rejected: "Kept as is" }[s.status] || s.status;
+  if (s.type === "take" || s.type === "alt") return { pending: "Suggested", accepted: "Using it", rejected: "Kept as is" }[s.status] || s.status;
   if (s.status === "pending" && s.recommended) return "Recommended";
   return { auto: "Applied", accepted: "Applied", pending: "Needs review", low: "Weak match", nodonor: "No source", rejected: "Rejected" }[s.status] || s.status;
 }
@@ -850,11 +899,11 @@ function renderReview() {
   const bulk = $("#bulkBar"); bulk.innerHTML = "";
   if (list.some(s => s.status !== "nodonor")) {
     const scopeArgs = { stem: st.scope?.stem ?? null, section: st.scope?.section ?? null };
-    const types = st.filter === "bleed" ? ["bleed"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "review" ? ["repair", "bleed", "glitch", "smooth"] : ["repair"];
+    const types = st.filter === "bleed" ? ["bleed"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "takes" ? ["take", "alt"] : st.filter === "review" ? ["repair", "bleed", "glitch", "smooth", "take", "alt"] : ["repair"];
     const mk = (label, action, cls) => { const b = document.createElement("button"); b.className = "small " + (cls || "ghost"); b.textContent = label; b.onclick = () => edit("/api/bulk", { action, ...scopeArgs, types }); bulk.append(b); };
-    const what = st.filter === "bleed" || st.filter === "cleanup" ? "fixes" : "repairs";
+    const what = st.filter === "bleed" || st.filter === "cleanup" || st.filter === "takes" ? "fixes" : "repairs";
     const rec = list.filter(x => x.recommended && x.status === "pending").length;
-    if (rec && st.filter !== "bleed" && st.filter !== "cleanup") mk(`Apply ${rec} recommended`, "accept_recommended", "primary");
+    if (rec && !["bleed", "cleanup", "takes"].includes(st.filter)) mk(`Apply ${rec} recommended`, "accept_recommended", "primary");
     mk(`Apply all${st.scope ? " here" : ""}`, "accept", "");
     mk(`Reject all${st.scope ? " here" : ""}`, "reject");
     mk("Clear decisions", "reset");
@@ -887,6 +936,8 @@ function sugItem(s) {
     bleed: `Remove vocal leftover from ${s.stem}`,
     glitch: s.kind === "click" ? `Fix a click in the ${s.stem}` : `Fill a gap in the ${s.stem}`,
     smooth: `Smooth watery ${s.stem}`,
+    take: `Use the ${s.stem} from ${st.ov.sections[s.source_section]?.name || "another section"}`,
+    alt: `Use the other model's ${nice(s.stem)}`,
   }[s.type] || `Rebuild ${s.stem}`;
   d.innerHTML = `<div class="sug-row"><span class="dot" style="background:${color}"></span><span class="what"></span><span class="when">${fmtP(s.start)}</span><span class="pill ${inKept(s) ? "kept" : s.status}${!inKept(s) && s.status === "pending" && s.recommended ? " recommended" : ""}">${inKept(s) ? "In a kept part" : statusText(s)}</span></div>`;
   d.querySelector(".what").textContent = label;
@@ -904,7 +955,8 @@ function sugItem(s) {
     facts.push(["Leftover vocal", `${pct(s.conf)} certain; the part removed sits ${Math.abs(s.removed_db ?? 0).toFixed(0)} dB below the ${s.stem}`]);
   }
   if (s.note && !s.manual_donor && s.type === "repair") facts.push(["Note", esc(s.note)]);
-  if (s.type === "glitch" || s.type === "smooth") facts.push(["What", esc(s.note || "")]);
+  if (["glitch", "smooth", "take", "alt"].includes(s.type)) facts.push(["What", esc(s.note || "")]);
+  if (s.type === "take") facts.push(["How alike", `${pct(s.conf)}, level matched by ${(s.gain_db || 0) >= 0 ? "+" : ""}${(s.gain_db || 0).toFixed(1)} dB`]);
   body.innerHTML = `<div class="facts">${facts.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join("")}</div>`;
 
   if (s.status !== "nodonor") {
@@ -933,7 +985,7 @@ function sugItem(s) {
     body.append(ab);
     body.insertBefore(ab.querySelector(".hear"), pvRow);   // choose what you hear first, then play
 
-    const strength = document.createElement("div"); strength.className = "row"; strength.hidden = s.type === "glitch";
+    const strength = document.createElement("div"); strength.className = "row"; strength.hidden = ["glitch", "take", "alt"].includes(s.type);
     strength.innerHTML = `<label>Strength</label><input type="range" min="0.2" max="1.5" step="0.05" value="${s.strength}"><output>${pct(s.strength)}</output>`;
     const sr = strength.querySelector("input"), so = strength.querySelector("output");
     sr.oninput = () => (so.textContent = pct(+sr.value));
@@ -1003,7 +1055,33 @@ function endPick() { st.picking = null; st.hoverT = null; $("#pickHint").hidden 
 $("#pickCancel").onclick = endPick;
 
 /* ---------- repairability grid */
+function renderBest() {
+  const w = $("#bestList"), list = st.ov.best_versions || [];
+  if (st.ov.stage !== "detected") { w.innerHTML = `<p class="help">Available after Find damage.</p>`; return; }
+  w.innerHTML = list.length ? "" : `<p class="help">No instrument has a cleaner take of the same part elsewhere in this song.</p>`;
+  for (const x of list) {
+    const d = document.createElement("div"); d.className = "best-item";
+    d.innerHTML = `<div class="bi-top"><span class="dot" style="background:${st.ov.colors[x.stem] || "#888"}"></span><b></b><span class="pill"></span></div>
+      <p></p><div class="row"><label>Use take from</label><select></select><button class="small">Add to review</button></div>`;
+    d.querySelector("b").textContent = `${x.stem} in ${x.name}`;
+    const pill = d.querySelector(".pill");
+    pill.textContent = x.status ? statusText({ type: "take", status: x.status }) : `${pct(x.cover)} lost here`;
+    d.querySelector("p").textContent = `Cleanest same part: ${x.best.name} (${pct(x.best.cover)} lost, ${pct(x.best.similarity)} alike).`;
+    const sel = d.querySelector("select");
+    for (const c of x.candidates) sel.add(new Option(`${c.name}: ${pct(c.similarity)} alike, ${pct(c.cover)} lost`, c.section));
+    if (x.source != null) sel.value = x.source;
+    d.querySelector("button").onclick = async () => {
+      try {
+        const r = await api.post("/api/take", { stem: x.stem, section: x.section, source: +sel.value });
+        await applyEdit(r); st.filter = "takes"; st.scope = null; select(r.new_ids[0]);
+        toast("Added to Review. Listen to before and after with all tracks, then Apply.");
+      } catch (e) { fail(e); }
+    };
+    w.append(d);
+  }
+}
 function renderGrid() {
+  renderBest();
   const ov = st.ov, w = $("#gridWrap");
   if (ov.stage !== "detected") { w.innerHTML = `<p class="help">This fills in after step 3, Find damage.</p>`; return; }
   const STATE = { clean: "No vocals", undamaged: "Undamaged", repaired: "Repaired", repairable: "Repairable", partial: "Partly", hard: "Hard to fix" };
@@ -1248,6 +1326,42 @@ function renderModel(s) {
     }, 1000);
   }
 }
+function renderExtras(s) {
+  const ex = s.extras || {}, wrap = $("#extrasList"); wrap.innerHTML = "";
+  $("#extrasCard").hidden = !s.model?.installed;
+  for (const [key, e] of Object.entries(ex)) {
+    const state = e.installing ? "busy" : e.error ? "err" : e.installed ? "ok" : "off";
+    const row = document.createElement("div"); row.className = "extra-row";
+    row.innerHTML = `<i class="light ${state}"></i><div class="et"><b></b><span></span></div>`;
+    row.querySelector("b").textContent = e.label + (e.installing ? `: ${pct(e.progress || 0)}` : e.installed ? ": ready" : "");
+    row.querySelector("span").textContent = e.error ? e.error : `${e.what} ${e.installed ? "" : "Download: " + e.size + "."}`;
+    if (!e.installed && !e.installing) {
+      const b = document.createElement("button"); b.className = "small"; b.textContent = e.error ? "Try again" : "Download";
+      b.onclick = () => installExtra(key); row.append(b);
+    }
+    wrap.append(row);
+  }
+  const lr = $("#lightRoformer"), ld = $("#lightDrumsep");
+  if (lr && ex.roformer) lr.className = "light small " + (ex.roformer.installed ? "ok" : ex.roformer.installing ? "busy" : "off");
+  if (ld && ex.drumsep) ld.className = "light small " + (ex.drumsep.installed ? "ok" : ex.drumsep.installing ? "busy" : "off");
+  const sel = $("#sepMode");
+  for (const o of sel.options) {
+    if (o.value.startsWith("hybrid")) {
+      o.textContent = (s.models[o.value] || o.textContent).replace(/ \(extra download\)$/, "") + (ex.roformer?.installed ? "" : " (extra download)");
+    }
+  }
+  const busy = Object.values(ex).some(e => e.installing);
+  if (busy && !extrasTimer) extrasTimer = setInterval(async () => {
+    try { const s2 = await api.get("/api/state"); st.state = s2; renderExtras(s2); if (st.ov) renderSteps();
+      if (!Object.values(s2.extras).some(e => e.installing)) { clearInterval(extrasTimer); extrasTimer = null; } } catch {}
+  }, 1000);
+}
+let extrasTimer = null;
+async function installExtra(key) {
+  try { await api.post("/api/extra/install", { key }); const s = await api.get("/api/state"); st.state = s; renderExtras(s); }
+  catch (e) { fail(e); }
+}
+
 async function installModel(force) {
   try { await api.post("/api/model/install", { force }); renderModel(await api.get("/api/state")); } catch (e) { fail(e); }
 }

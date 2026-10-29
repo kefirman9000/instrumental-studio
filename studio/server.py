@@ -11,7 +11,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import numpy as np
+import numpy as np  # noqa: F401
 
 from . import separate as SEP
 from . import updater as UP
@@ -37,6 +37,7 @@ class State:
     update = {"info": None, "error": None, "checking": False, "installing": False, "progress": 0.0,
               "message": "", "installed": None, "auto": False}
     just_updated = False
+    extras = {}
     model = {"installed": False, "installing": False, "progress": 0.0, "message": "", "error": None,
              "device": "", "note": None, "plan": None}
 
@@ -104,6 +105,39 @@ def _model_plan():
     return S.model["plan"]
 
 
+def extras_state():
+    for key, e in INST.EXTRAS.items():
+        st = S.extras.setdefault(key, {"installing": False, "progress": 0.0, "message": "", "error": None})
+        st.update(label=e["label"], what=e["what"], size=e["size"])
+        if not st["installing"]:
+            st["installed"] = INST.extra_installed(key)
+    return S.extras
+
+
+def start_extra_install(key):
+    st = extras_state()[key]
+    if st["installing"] or st.get("installed"):
+        return
+    st.update(installing=True, error=None, progress=0.0, message="Starting")
+
+    def prog(f, m):
+        if f is not None:
+            st["progress"] = float(f)
+        st["message"] = m
+
+    def run():
+        try:
+            INST.install_extra(key, prog)
+            st["installed"] = True
+        except Exception as e:
+            traceback.print_exc()
+            st["error"] = str(e)
+        finally:
+            st["installing"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _wait_for_model():
     """Used by a song job: install the model if needed and wait, mirroring its progress."""
     if SEP.demucs_available():
@@ -121,7 +155,7 @@ def _wait_for_model():
 def _start_job(fn, *args):
     if S.job["running"]:
         raise RuntimeError("Already working on a song — wait for it to finish.")
-    S.job.update(running=True, progress=0.0, message="Starting", error=None)
+    S.job.update(running=True, progress=0.0, message="Starting", error=None, result=None)
 
     def run():
         try:
@@ -153,7 +187,7 @@ def _job_song(path, mode=None):
     S.project = p
 
 
-def _job_split(mode):
+def _job_split(mode, opts=None):
     """Step 2: split into instruments (or reuse an earlier split of the same file), then map the song."""
     p = S.project
     src = p.meta.get("source")
@@ -164,19 +198,44 @@ def _job_split(mode):
         stems, sr = {k: z[k] for k in z.files}, p.sr
         p.meta["separation"] = "Simulated separator (demo)"
     else:
-        stems = _reuse_stems(p.meta.get("source_hash"), mode, exclude=p.root)
+        key = mode + ("+backing" if (opts or {}).get("backing") else "") + ("+drums" if (opts or {}).get("drums") else "")
+        stems = _reuse_stems(p.meta.get("source_hash"), key, exclude=p.root)
         sr = p.sr
         if stems:
             _progress(0.5, "Reusing the split from your earlier project of this song")
         else:
             work = os.path.join(p.root, "work")
             os.makedirs(work, exist_ok=True)
-            stems, sr = SEP.separate(src, work, mode, lambda f, m: _progress(None if f is None else 0.02 + 0.8 * f, m))
+            stems, sr = SEP.separate(src, work, mode, lambda f, m: _progress(None if f is None else 0.02 + 0.8 * f, m), opts)
             shutil.rmtree(work, ignore_errors=True)
-        p.meta["separation"] = SEP.MODELS[mode][0]
-    p.meta["sep_mode"] = mode
+        extra = [w for w, on in (("backing vocals on their own track", (opts or {}).get("backing")),
+                                 ("drums split into kick, snare, toms and cymbals", (opts or {}).get("drums"))) if on]
+        p.meta["separation"] = SEP.MODELS[mode][0] + (", " + ", ".join(extra) if extra else "")
+    p.meta["sep_mode"] = mode if src == "demo" else key
     p.set_stems(stems, sr, p.original, source=src)
     p.prepare(lambda f, m: _progress(None if f is None else 0.85 + 0.15 * f, m))
+
+
+def _job_alt(mode, start, end, stem):
+    """Split the song with another model (once; kept with the project), then offer it for one part."""
+    p = S.project
+    if mode not in p.alt_modes():
+        stems = _reuse_stems(p.meta.get("source_hash"), mode, exclude=p.root)
+        if stems:
+            _progress(0.5, "Reusing an earlier split with that model")
+        else:
+            work = os.path.join(p.root, "work_alt")
+            os.makedirs(work, exist_ok=True)
+            stems, _ = SEP.separate(p.meta["source"], work, mode,
+                                    lambda f, m: _progress(None if f is None else 0.02 + 0.9 * f, m))
+            shutil.rmtree(work, ignore_errors=True)
+        n = p.original.shape[1]
+        p.set_alt(mode, {k: (v[:, :n] if v.shape[1] >= n else np.pad(v, ((0, 0), (0, n - v.shape[1]))))
+                         for k, v in stems.items()})
+    _progress(0.95, "Preparing the comparison")
+    ids, skipped = p.make_alt(mode, start, end, stem, SEP.MODELS[mode][0])
+    S.job["result"] = {"new_ids": ids, "skipped": skipped}
+    p.save()
 
 
 def _job_detect():
@@ -363,7 +422,7 @@ class Handler(BaseHTTPRequestHandler):
                     "project": S.project.meta.get("name") if S.project else None,
                     "demucs": SEP.demucs_available(), "device": devname,
                     "models": {k: v[0] for k, v in SEP.MODELS.items()}, "home": HOME,
-                    "projects": list_projects(), "model": S.model, "version": __version__, "repo": UP.REPO,
+                    "projects": list_projects(), "model": S.model, "extras": extras_state(), "version": __version__, "repo": UP.REPO,
                     "update": S.update, "update_prefs": UP.load_prefs(HOME), "just_updated": S.just_updated})
             if path == "/api/overview":
                 return self._send(200, {"rev": S.rev, "overview": self._proj().overview()})
@@ -428,7 +487,28 @@ class Handler(BaseHTTPRequestHandler):
                 if (p.meta.get("source") != "demo" and not SEP.demucs_available()
                         and not _reuse_stems(p.meta.get("source_hash"), mode, exclude=p.root)):
                     return self._send(409, {"error": "need_model", "plan": _model_plan()})
-                _start_job(_job_split, mode)
+                opts = {"backing": bool(d.get("backing")), "drums": bool(d.get("drums"))}
+                if p.meta.get("source") != "demo":
+                    need = {SEP.NEEDS_EXTRA.get(mode)} | ({"roformer"} if opts["backing"] else set()) \
+                        | ({"drumsep"} if opts["drums"] else set())
+                    missing = [k for k in need - {None} if not INST.extra_installed(k)]
+                    if missing:
+                        return self._send(409, {"error": "need_extra", "extras": missing})
+                _start_job(_job_split, mode, opts)
+                return self._send(200, {"ok": True})
+            if path == "/api/alt":
+                p = self._proj()
+                mode = d["mode"]
+                if p.meta.get("source") == "demo":
+                    return self._send(400, {"error": "The demo song comes pre-split, so it can't be split with other models. Try this on one of your own songs."})
+                if mode not in p.alt_modes():
+                    if not SEP.demucs_available():
+                        return self._send(409, {"error": "need_model", "plan": _model_plan()})
+                    need = SEP.NEEDS_EXTRA.get(mode)
+                    if need and not INST.extra_installed(need):
+                        return self._send(409, {"error": "need_extra", "extras": [need]})
+                S.job["result"] = None
+                _start_job(_job_alt, mode, float(d["start"]), float(d["end"]), d.get("stem"))
                 return self._send(200, {"ok": True})
             if path == "/api/detect":
                 if not self._proj().instruments:
@@ -449,6 +529,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if path == "/api/delete_project":
                 shutil.rmtree(os.path.join(PROJECTS, os.path.basename(d["id"])), ignore_errors=True)
+                return self._send(200, {"ok": True})
+            if path == "/api/extra/install":
+                start_extra_install(d["key"])
                 return self._send(200, {"ok": True})
             if path == "/api/model/install":
                 start_model_install(force=bool(d.get("force")))
@@ -488,6 +571,11 @@ class Handler(BaseHTTPRequestHandler):
                 p.update_settings(d)
             elif path == "/api/glitch_scan":
                 p.scan_glitches(d.get("start"), d.get("end"))
+            elif path == "/api/take":
+                sid = p.make_take(d["stem"], int(d["section"]), int(d["source"]))
+                res = self._edited()
+                res["new_ids"] = [sid]
+                return self._send(200, res)
             elif path == "/api/smooth":
                 ids = p.smooth_range(float(d["start"]), float(d["end"]), d.get("stems"))
                 res = self._edited()
