@@ -100,7 +100,7 @@ def _window_weight(n, core_lo, core_hi):
 
 # ----------------------------------------------------------------------------- repair
 def repair_window(stem, vocals, inst_sum, s0, s1, lags, conf, strength, bands, band_centers, sr,
-                  level_floor):
+                  level_floor, mode="fill"):
     """Repair one window [s0, s1) samples of one stem from donor windows offset by `lags` samples.
 
     Returns dict(lo, patch[2, n], damage_map[bins? no: frames x bins mono], severity, ...).
@@ -150,7 +150,10 @@ def repair_window(stem, vocals, inst_sum, s0, s1, lags, conf, strength, bands, b
         Is = gaussian_filter(It, (1, 1))
         Es = gaussian_filter(E, (1, 1))
         deficit = np.clip((Es - Is) / (Es + EPS), 0, 1)
-        D = strength * conf * np.sqrt(np.clip((r_s - 0.03) / 0.97, 0, 1)) * deficit
+        if mode == "replace":   # the person pointed at this part: rebuild it from its matches, vocals or not
+            D = np.full_like(deficit, strength * conf)
+        else:
+            D = strength * conf * np.sqrt(np.clip((r_s - 0.03) / 0.97, 0, 1)) * deficit
         D *= (Es > level_floor)
         D = np.clip(gaussian_filter(D, (1, 1)), 0, 1).astype(np.float32)
         T = (1 - D) * It + D * E
@@ -258,3 +261,53 @@ def smooth_window(stem, vocals, inst_sum, s0, s1, strength=1.0):
     orig = segment(stem, lo, hi)
     w = _window_weight(n, s0 - lo, s1 - lo)
     return {"lo": lo, "patch": ((out - orig) * w[None, :]).astype(np.float32)}
+
+
+# ----------------------------------------------------------------------------- leftover "s" and "t" sounds
+def ess_window(stem, vocals, s0, s1, sr, strength=1.0):
+    """Separation often leaves a singer's "s", "sh" and "t" in the instrument tracks: short bursts of high
+    frequencies that line up with the vocal's own. Turn the instrument down in that range, only during
+    those bursts, by about how much of it moves with the vocal. Returns None if there's nothing to do."""
+    lo, hi = s0 - XFADE // 2 - MARGIN, s1 + XFADE // 2 + MARGIN
+    n = hi - lo
+    f = np.fft.rfftfreq(N_FFT, 1.0 / sr)
+    band = (f >= 4500) & (f <= 12000)
+    V = np.abs(stft(segment(vocals, lo, hi).mean(0)))
+    Xs = [stft(segment(stem[c], lo, hi)) for c in range(stem.shape[0])]
+    S = np.abs(np.mean(Xs, axis=0))
+    ve = (V[band] ** 2).sum(0)
+    if ve.max() <= EPS:
+        return None
+    vb = 10 * np.log10(ve + EPS)
+    floor = np.percentile(vb, 50)
+    burst = vb > max(floor + 12, vb.max() - 30)            # the vocal's sibilant moments
+    # bursts are short; long stretches of high-frequency vocal are breathy singing, leave those alone
+    from scipy.ndimage import label as _label
+    lab, nlab = _label(burst)
+    for i in range(1, nlab + 1):
+        if (lab == i).sum() * HOP / sr > 0.25:
+            burst[lab == i] = False
+    if burst.sum() < 2:
+        return None
+    sb, vbnd = S[band][:, burst], V[band][:, burst]
+    ls, lv = np.log(sb + EPS).ravel(), np.log(vbnd + EPS).ravel()
+    if len(ls) < 20 or not (np.corrcoef(ls, lv)[0, 1] >= 0.35):
+        return None                                       # the instrument's highs don't follow the vocal's
+    alpha = float(min(np.median(sb / (vbnd + EPS)), 1.0))
+    G = np.ones_like(S)
+    est = alpha * V
+    gb = np.clip(1 - strength * (est / (S + EPS)) ** 2, 0.15, 1.0)
+    mask = np.zeros_like(S, dtype=bool)
+    mask[np.ix_(band, burst)] = True
+    G[mask] = gb[mask]
+    G = gaussian_filter(G, (1, 1))
+    out = np.zeros((stem.shape[0], n), np.float32)
+    for c in range(stem.shape[0]):
+        out[c] = istft(Xs[c] * G, n)
+    orig = segment(stem, lo, hi)
+    w = _window_weight(n, s0 - lo, s1 - lo)
+    patch = ((out - orig) * w[None, :]).astype(np.float32)
+    removed = float(10 * np.log10((patch ** 2).sum() / ((orig ** 2).sum() + EPS) + 1e-12))
+    if removed < -45:
+        return None
+    return {"lo": lo, "patch": patch, "bursts": int(nlab), "removed_db": removed}

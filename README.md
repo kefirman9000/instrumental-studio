@@ -120,6 +120,18 @@ The start screen's **Extra models** panel offers two optional downloads, each wi
 
 If one part still sounds rough, drag across it on the Sections bar and use **Try another model here**: pick a model and either all tracks or one instrument. The app splits the song with that model once (it's kept with the project, so trying it on other parts is instant), then adds that model's version of the part to Review under **Other takes**. Listen before and after with all tracks, then apply the ones that sound better. The suggestions also offer this for the part that lost the most.
 
+### Rebuild any part, blend models, bring back the width
+
+Drag across any part on the Sections bar for more ways to fix it:
+
+- **Rebuild from the rest of the song**: pick one instrument or all of them, and that part is rebuilt from the bars where the same instrument plays the same thing, even where Find damage didn't flag anything.
+- **Blend half and half with the current split** (under Try another model): each model leaves different artifacts, so mixing two models' takes often hides both.
+- **Use the original's stereo sides here**: lead vocals sit in the middle of a mix, so the left-minus-right part of the original is mostly instruments. Using it brings back width and detail the split lost. These parts are listed in the Levels tab, where you can set them to half or remove them.
+
+Find damage also looks for the singer's leftover **"s" and "t" sounds** in the instruments; they're listed under **Vocal leftovers**.
+
+Everything lands in Review (or, for stereo sides, can be undone) before it changes your song.
+
 ### Rebuild repeated sounds from their cleanest copy
 
 Songs repeat the same sounds over and over, so for nearly every damaged one there's a clean copy somewhere. The Repairability tab lists them:
@@ -143,7 +155,7 @@ When an instrument plays the same part more than once, the **Best versions** lis
 
 Drag across the **Sections** bar above the timeline to select a part of the song, then choose:
 
-- **Use the original song here**: that part plays exactly as the original recording. Ideal for intros, outros and breaks with no singing, where the original already is a perfect instrumental. If there's singing in the part you selected, the app warns you that the vocals would stay.
+- **Use the original song here**: that part plays exactly as the original recording. Ideal for intros, outros and breaks with no singing, where the original already is a perfect instrumental. The original only takes over where nobody sings, with some room around the singing (0.3 s before it starts and 0.8 s after it stops, to cover breaths, pickup notes and reverb tails), so no vocal slips through even if your selection runs into a verse. Change the room in **Settings**.
 - **Keep the split, no repairs**: that part stays as the separated instrumental, with no repairs and no level changes.
 
 Kept parts are hatched on the timeline and listed in the **Levels** tab, where you can switch their kind or remove them. Undo works too.

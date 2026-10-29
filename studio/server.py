@@ -269,7 +269,7 @@ def _job_split(mode, opts=None):
     p.prepare(lambda f, m: _progress(None if f is None else 0.85 + 0.15 * f, m))
 
 
-def _job_alt(mode, start, end, stem):
+def _job_alt(mode, start, end, stem, blend=0.0):
     """Split the song with another model (once; kept with the project), then offer it for one part."""
     p = S.project
     if mode not in p.alt_modes():
@@ -286,7 +286,7 @@ def _job_alt(mode, start, end, stem):
         p.set_alt(mode, {k: (v[:, :n] if v.shape[1] >= n else np.pad(v, ((0, 0), (0, n - v.shape[1]))))
                          for k, v in stems.items()})
     _progress(0.95, "Preparing the comparison")
-    ids, skipped = p.make_alt(mode, start, end, stem, SEP.MODELS[mode][0])
+    ids, skipped = p.make_alt(mode, start, end, stem, SEP.MODELS[mode][0], blend)
     S.job["result"] = {"new_ids": ids, "skipped": skipped}
     p.save()
 
@@ -562,7 +562,8 @@ class Handler(BaseHTTPRequestHandler):
                     if need and not INST.extra_installed(need):
                         return self._send(409, {"error": "need_extra", "extras": [need]})
                 S.job["result"] = None
-                _start_job(_job_alt, mode, float(d["start"]), float(d["end"]), d.get("stem"))
+                _start_job(_job_alt, mode, float(d["start"]), float(d["end"]), d.get("stem"),
+                           min(max(float(d.get("blend") or 0), 0.0), 1.0))
                 return self._send(200, {"ok": True})
             if path == "/api/detect":
                 if not self._proj().instruments:
@@ -671,6 +672,13 @@ class Handler(BaseHTTPRequestHandler):
                 sid = p.make_take(d["stem"], int(d["section"]), int(d["source"]))
                 res = self._edited()
                 res["new_ids"] = [sid]
+                return self._send(200, res)
+            elif path == "/api/rebuild":
+                ids = p.rebuild_range(float(d["start"]), float(d["end"]), d.get("stem") or None)
+                if not ids:
+                    return self._send(400, {"error": "Nothing in that part matches anywhere else in the song closely enough to rebuild from. Try a longer part, or another instrument."})
+                res = self._edited()
+                res["new_ids"] = ids
                 return self._send(200, res)
             elif path == "/api/smooth":
                 ids = p.smooth_range(float(d["start"]), float(d["end"]), d.get("stems"))

@@ -450,7 +450,7 @@ function renderLane(k) {
   for (const s of st.ov.suggestions) {
     if (s.stem !== k) continue;
     const x0 = tToX(s.start), x1 = tToX(s.end); if (x1 < 0 || x0 > w) continue;
-    ctx.fillStyle = s.type === "bleed" ? "#d36a9a" : s.type === "glitch" ? "#ff8f5a" : s.type === "smooth" ? "#b9a5ff" : ["take", "alt", "hits", "bars"].includes(s.type) ? "#6dbf8c" : STATUS_COLOR[s.status] || "#888";
+    ctx.fillStyle = s.type === "bleed" ? "#d36a9a" : s.type === "glitch" ? "#ff8f5a" : s.type === "smooth" ? "#b9a5ff" : s.type === "ess" ? "#e7b0d0" : ["take", "alt", "hits", "bars", "rebuild"].includes(s.type) ? "#6dbf8c" : STATUS_COLOR[s.status] || "#888";
     ctx.globalAlpha = s.status === "rejected" ? 0.5 : 1;
     const y = s.type === "bleed" ? h - markH : h - markH + 3;
     ctx.fillRect(x0 + 1, y, Math.max(2, x1 - x0 - 2), s.type === "bleed" ? 3 : markH - 3);
@@ -606,7 +606,7 @@ function showKeepPop(a, b, e) {
   const sung = st.ov.vocal_activity.length && vocalsIn(a, b) > 0.08;
   const warn = $("#keepPopWarn");
   warn.hidden = !sung;
-  warn.textContent = "There's singing in this part. Using the original song here keeps the vocals too.";
+  warn.textContent = "There's singing in this part. Using the original song here only takes effect where nobody sings (with a little room around the singing), so the rest stays as it is.";
   const split = st.ov.stems.length > 0;
   pop.querySelector('[data-mode="no_edits"]').hidden = !split;
   pop.querySelectorAll("[data-split-only]").forEach(el => (el.hidden = !split));
@@ -636,7 +636,25 @@ function showKeepPop(a, b, e) {
   for (const k of st.ov.stems) as.add(new Option(nice(k), k));
   pop.querySelector(".alt-row").hidden = !split || st.ov.meta.source === "demo";
   pop.querySelector(".alt-row").previousElementSibling.hidden = pop.querySelector(".alt-row").hidden;
-  pop.querySelector('[data-act="alt"]').onclick = () => { hideKeepPop(); tryAlt(am.value, a, b, as.value || null); };
+  pop.querySelector('[data-act="alt"]').onclick = () => { hideKeepPop(); tryAlt(am.value, a, b, as.value || null, $("#altBlend").checked ? 0.5 : 0); };
+  pop.querySelector(".alt-blend").hidden = pop.querySelector(".alt-row").hidden;
+  const rs = $("#rebuildStem"); rs.innerHTML = "";
+  rs.add(new Option("All tracks", ""));
+  for (const k of st.ov.stems) if (k !== "vocals" && k !== "backing_vocals") rs.add(new Option(nice(k), k));
+  pop.querySelectorAll("[data-rebuild]").forEach(el => (el.hidden = !split || !detected));
+  pop.querySelector('[data-act="rebuild"]').onclick = async () => {
+    hideKeepPop(); showBusy(0.5, "Rebuilding from the matching bars");
+    try {
+      const r = await api.post("/api/rebuild", { start: a, end: b, stem: rs.value || null }); hideBusy(); await applyEdit(r);
+      st.filter = "review"; st.scope = null; select(r.new_ids[0]);
+      toast(`${r.new_ids.length} rebuilt bar${r.new_ids.length === 1 ? "" : "s"} ready to review. Listen before and after, then Apply.`, { ms: 7000 });
+    } catch (e) { hideBusy(); fail(e); }
+  };
+  pop.querySelector('[data-act="sides"]').onclick = () => {
+    hideKeepPop();
+    setSides([...(st.ov.mixer.sides || []), { start: a, end: b, amount: 1 }]);
+    toast("Using the original's stereo sides there. Remove it in the Levels tab, or Undo.", { ms: 6000 });
+  };
   pop.querySelector('[data-act="cleanup"]').hidden = !detected;
   pop.querySelector('[data-act="cleanup"]').onclick = async () => {
     hideKeepPop(); showBusy(0.5, "Looking for everything that can be tidied here");
@@ -667,8 +685,8 @@ function showKeepPop(a, b, e) {
     else renderLanes();
   });
 }
-async function tryAlt(mode, start, end, stem) {
-  try { await api.post("/api/alt", { mode, start, end, stem }); watchJob(); }
+async function tryAlt(mode, start, end, stem, blend = 0) {
+  try { await api.post("/api/alt", { mode, start, end, stem, blend }); watchJob(); }
   catch (e) {
     if (e.message === "need_model") return installModelFromStep();
     if (e.message === "need_extra") {
@@ -697,6 +715,26 @@ function renderKeepList() {
     sel.onchange = () => setKeep(list.map((x, j) => (j === i ? { ...x, mode: sel.value } : x)));
     d.querySelector("button").onclick = () => setKeep(list.filter((_, j) => j !== i));
     d.querySelector("span").onclick = () => { seek(r.start); };
+    w.append(d);
+  });
+}
+async function setSides(list) {
+  try { applyEdit(await api.post("/api/mixer", { sides: list })); } catch (e) { fail(e); }
+}
+function renderSidesList() {
+  const w = $("#sidesList"); if (!w) return;
+  const list = st.ov.mixer.sides || [];
+  w.innerHTML = list.length ? "" : `<p class="help">None yet.</p>`;
+  list.forEach((r, i) => {
+    const d = document.createElement("div"); d.className = "keep-item";
+    d.innerHTML = `<i class="sw original"></i><span></span>
+      <select><option value="1">Full</option><option value="0.5">Half</option></select>
+      <button class="ghost small">Remove</button>`;
+    d.querySelector("span").textContent = `${fmtP(r.start)} to ${fmtP(r.end)}`;
+    d.querySelector("span").onclick = () => seek(r.start);
+    const sel = d.querySelector("select"); sel.value = (r.amount ?? 1) >= 0.75 ? "1" : "0.5";
+    sel.onchange = () => setSides(list.map((x, j) => (j === i ? { ...x, amount: +sel.value } : x)));
+    d.querySelector("button").onclick = () => setSides(list.filter((_, j) => j !== i));
     w.append(d);
   });
 }
@@ -868,7 +906,7 @@ $("#btnDetect").onclick = async () => {
 };
 
 function renderAll() {
-  renderSteps(); renderTips(); renderKeepList(); renderMuteList();
+  renderSteps(); renderTips(); renderKeepList(); renderSidesList(); renderMuteList();
   $("#btnUndo").disabled = !st.ov.can_undo;
   $("#btnUndo").title = st.ov.can_undo ? `Undo: ${st.ov.undo_label}` : "Nothing to undo";
   renderBadges(); renderLanes(); renderReview(); renderGrid(); renderLevels(); renderSettings();
@@ -887,9 +925,9 @@ const ok = s => s.status === "auto" || s.status === "accepted";
 const FILTERS = {
   review: s => s.status === "pending" || (s.type === "bleed" && s.status === "pending"),
   applied: s => ok(s),
-  bleed: s => s.type === "bleed",
+  bleed: s => s.type === "bleed" || s.type === "ess",
   cleanup: s => s.type === "glitch" || s.type === "smooth",
-  takes: s => ["take", "alt", "hits", "bars"].includes(s.type),
+  takes: s => ["take", "alt", "hits", "bars", "rebuild"].includes(s.type),
   hard: s => s.status === "low" || s.status === "nodonor",
   all: () => true,
 };
@@ -898,7 +936,8 @@ $$("#filters button").forEach(b => b.onclick = () => { st.filter = b.dataset.f; 
 function setScope(scope) { st.scope = scope; activateTab("review"); renderReview(); renderRuler(); }
 
 function statusText(s) {
-  if (s.type === "bleed") return { pending: "Suggested", accepted: "Cleaned", rejected: "Kept as is" }[s.status] || s.status;
+  if (s.type === "bleed" || s.type === "ess") return { pending: "Suggested", accepted: "Cleaned", rejected: "Kept as is" }[s.status] || s.status;
+  if (s.type === "rebuild") return { pending: "Suggested", accepted: "Rebuilt", rejected: "Kept as is" }[s.status] || s.status;
   if (s.type === "glitch" || s.type === "smooth") return { pending: "Suggested", accepted: "Fixed", rejected: "Kept as is" }[s.status] || s.status;
   if (["take", "alt", "hits", "bars"].includes(s.type)) return { pending: "Suggested", accepted: "Using it", rejected: "Kept as is" }[s.status] || s.status;
   if (s.status === "pending" && s.recommended) return "Recommended";
@@ -928,7 +967,7 @@ function renderReview() {
   const bulk = $("#bulkBar"); bulk.innerHTML = "";
   if (list.some(s => s.status !== "nodonor")) {
     const scopeArgs = { stem: st.scope?.stem ?? null, section: st.scope?.section ?? null };
-    const types = st.filter === "bleed" ? ["bleed"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "takes" ? ["take", "alt", "hits", "bars"] : st.filter === "review" ? ["repair", "bleed", "glitch", "smooth", "take", "alt", "hits", "bars"] : ["repair"];
+    const types = st.filter === "bleed" ? ["bleed", "ess"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "takes" ? ["take", "alt", "hits", "bars", "rebuild"] : st.filter === "review" ? ["repair", "bleed", "ess", "glitch", "smooth", "take", "alt", "hits", "bars", "rebuild"] : ["repair"];
     const mk = (label, action, cls) => { const b = document.createElement("button"); b.className = "small " + (cls || "ghost"); b.textContent = label; b.onclick = () => edit("/api/bulk", { action, ...scopeArgs, types }); bulk.append(b); };
     const what = st.filter === "bleed" || st.filter === "cleanup" || st.filter === "takes" ? "fixes" : "repairs";
     const rec = list.filter(x => x.recommended && x.status === "pending").length;
@@ -969,6 +1008,8 @@ function sugItem(s) {
     alt: `Use the other model's ${nice(s.stem)}`,
     hits: `Rebuild ${nice(s.stem)} hits`,
     bars: `Use the cleanest ${nice(s.stem)} bar`,
+    ess: `Remove leftover "s" sounds from ${s.stem}`,
+    rebuild: `Rebuild ${nice(s.stem)} from matching bars`,
   }[s.type] || `Rebuild ${s.stem}`;
   d.innerHTML = `<div class="sug-row"><span class="dot" style="background:${color}"></span><span class="what"></span><span class="when">${fmtP(s.start)}</span><span class="pill ${inKept(s) ? "kept" : s.status}${!inKept(s) && s.status === "pending" && s.recommended ? " recommended" : ""}">${inKept(s) ? "In a kept part" : statusText(s)}</span></div>`;
   d.querySelector(".what").textContent = label;
@@ -986,14 +1027,15 @@ function sugItem(s) {
     facts.push(["Leftover vocal", `${pct(s.conf)} certain; the part removed sits ${Math.abs(s.removed_db ?? 0).toFixed(0)} dB below the ${s.stem}`]);
   }
   if (s.note && !s.manual_donor && s.type === "repair") facts.push(["Note", esc(s.note)]);
-  if (["glitch", "smooth", "take", "alt", "hits", "bars"].includes(s.type)) facts.push(["What", esc(s.note || "")]);
+  if (["glitch", "smooth", "take", "alt", "hits", "bars", "ess", "rebuild"].includes(s.type)) facts.push(["What", esc(s.note || "")]);
+  if (s.type === "rebuild" && s.donors?.length) facts.push(["Borrowed from", s.donors.map(x => `${esc(sec[x.section].name)} at ${fmtP(x.start)}`).join(", ")]);
   if (s.type === "take") facts.push(["How alike", `${pct(s.conf)}, level matched by ${(s.gain_db || 0) >= 0 ? "+" : ""}${(s.gain_db || 0).toFixed(1)} dB`]);
   body.innerHTML = `<div class="facts">${facts.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join("")}</div>`;
 
   if (s.status !== "nodonor") {
     const pvRow = document.createElement("div"); pvRow.className = "preview";
-    const modes = [["before", "Before"], ["after", "After"], ["patch", s.type === "bleed" ? "Only what's removed" : "Only what's added"]];
-    if (s.type === "repair" && s.donors?.length) modes.push(["donor", "Source"]);
+    const modes = [["before", "Before"], ["after", "After"], ["patch", s.type === "bleed" || s.type === "ess" ? "Only what's removed" : "Only what's added"]];
+    if ((s.type === "repair" || s.type === "rebuild") && s.donors?.length) modes.push(["donor", "Source"]);
     modes.push(["original", "Original song"]);
     for (const [m, label] of modes) {
       const b = document.createElement("button"); b.className = "small"; b.textContent = "▶ " + label;
@@ -1039,7 +1081,7 @@ function sugItem(s) {
   if (s.status !== "nodonor") {
     const applied = ok(s);
     const a = document.createElement("button"); a.className = applied ? "ghost" : "primary";
-    a.textContent = applied ? (s.type === "bleed" ? "Cleaned" : "Applied") : (s.type === "bleed" ? "Clean it" : "Apply");
+    a.textContent = applied ? (s.type === "bleed" || s.type === "ess" ? "Cleaned" : "Applied") : (s.type === "bleed" || s.type === "ess" ? "Clean it" : "Apply");
     a.disabled = applied; a.onclick = () => decide(s.id, "accepted");
     const r = document.createElement("button"); r.className = "ghost"; r.textContent = s.status === "rejected" ? "Rejected" : (s.type === "bleed" ? "Keep as is" : "Reject");
     r.disabled = s.status === "rejected"; r.onclick = () => decide(s.id, "rejected");
@@ -1233,7 +1275,12 @@ function renderSettings() {
   const a = $("#autoConf"), r = $("#reviewConf");
   if (document.activeElement !== a) a.value = s.auto_conf; if (document.activeElement !== r) r.value = s.review_conf;
   $("#autoConfVal").textContent = pct(+a.value); $("#reviewConfVal").textContent = pct(+r.value);
+  for (const [id, key, def] of [["#guardBefore", "guard_before", 0.3], ["#guardAfter", "guard_after", 0.8]]) {
+    const el = $(id); if (el && document.activeElement !== el) el.value = s[key] ?? def;
+  }
 }
+for (const [id, key] of [["#guardBefore", "guard_before"], ["#guardAfter", "guard_after"]])
+  $(id).onchange = e => { const v = Math.max(0, Math.min(5, +e.target.value || 0)); edit("/api/settings", { [key]: v }); };
 $("#autoConf").oninput = e => ($("#autoConfVal").textContent = pct(+e.target.value));
 $("#reviewConf").oninput = e => ($("#reviewConfVal").textContent = pct(+e.target.value));
 $("#btnApplySettings").onclick = () => edit("/api/settings", { auto_conf: +$("#autoConf").value, review_conf: +$("#reviewConf").value });
