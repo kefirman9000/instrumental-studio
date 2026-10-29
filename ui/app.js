@@ -140,6 +140,11 @@ window.addEventListener("dragenter", e => {
   if (!dragHasFiles(e)) return;
   e.preventDefault(); dragDepth++;
   if (S_busy()) return;
+  const inEditor = $("#welcome").hidden && st.ov;
+  $("#dropTitle").textContent = inEditor ? "Drop a song to start a new project" : "Drop a song to open it";
+  $("#dropSub").textContent = inEditor
+    ? `"${st.ov.meta.name}" is saved and stays in Songs. A set of stems (including the vocals) also starts a new project.`
+    : "Or drop a full set of stems, including the vocals, to import them";
   $("#dropZone").hidden = false;
 });
 window.addEventListener("dragover", e => { if (dragHasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = S_busy() ? "none" : "copy"; } });
@@ -565,7 +570,7 @@ function renderSteps() {
   const det = $("#btnDetect");
   det.disabled = at < 1;
   if (at < 1) { $("#detectSub").textContent = "Available after splitting."; det.textContent = "Find damage"; det.className = ""; }
-  else if (at === 1) { $("#detectSub").textContent = "Looks for instrument sound the vocals took, and suggests repairs."; det.textContent = "Find damage"; det.className = "primary"; }
+  else if (at === 1) { $("#detectSub").textContent = "Looks for instrument sound the vocals took and suggests repairs. Nothing changes until you apply them."; det.textContent = "Find damage"; det.className = "primary"; }
   else {
     const n = ov.suggestions.filter(x => x.type === "repair").length;
     $("#detectSub").textContent = `${n} spot${n === 1 ? "" : "s"} found.`; det.textContent = "Find again"; det.className = "ghost small";
@@ -651,14 +656,15 @@ function setScope(scope) { st.scope = scope; activateTab("review"); renderReview
 
 function statusText(s) {
   if (s.type === "bleed") return { pending: "Suggested", accepted: "Cleaned", rejected: "Kept as is" }[s.status] || s.status;
-  return { auto: "Applied", accepted: "Applied by you", pending: "Needs review", low: "Weak match", nodonor: "No source", rejected: "Rejected" }[s.status] || s.status;
+  if (s.status === "pending" && s.recommended) return "Recommended";
+  return { auto: "Applied", accepted: "Applied", pending: "Needs review", low: "Weak match", nodonor: "No source", rejected: "Rejected" }[s.status] || s.status;
 }
 
 function renderReview() {
   const ov = st.ov, all = ov.suggestions;
   const repairs = all.filter(s => s.type === "repair");
   const applied = repairs.filter(ok).length, pending = all.filter(FILTERS.review).length, hard = repairs.filter(FILTERS.hard).length;
-  $("#reviewSummary").innerHTML = `<div><b>${applied}</b><span>repairs applied</span></div><div><b>${pending}</b><span>waiting for you</span></div><div><b>${hard}</b><span>without a good source</span></div>`;
+  $("#reviewSummary").innerHTML = `<div><b>${applied}</b><span>repairs applied by you</span></div><div><b>${pending}</b><span>waiting for you</span></div><div><b>${hard}</b><span>without a good source</span></div>`;
   $$("#filters button").forEach(b => b.classList.toggle("on", b.dataset.f === st.filter));
   const sc = $("#scope");
   if (st.scope) {
@@ -680,9 +686,11 @@ function renderReview() {
     const types = st.filter === "bleed" ? ["bleed"] : ["repair"];
     const mk = (label, action, cls) => { const b = document.createElement("button"); b.className = "small " + (cls || "ghost"); b.textContent = label; b.onclick = () => edit("/api/bulk", { action, ...scopeArgs, types }); bulk.append(b); };
     const what = st.filter === "bleed" ? "cleanups" : "repairs";
-    mk(`Apply all ${what}${st.scope ? " here" : ""}`, "accept", "");
+    const rec = list.filter(x => x.recommended && x.status === "pending").length;
+    if (rec && st.filter !== "bleed") mk(`Apply ${rec} recommended`, "accept_recommended", "primary");
+    mk(`Apply all${st.scope ? " here" : ""}`, "accept", "");
     mk(`Reject all${st.scope ? " here" : ""}`, "reject");
-    mk("Back to suggestions", "reset");
+    mk("Clear decisions", "reset");
   }
 
   const wrap = $("#sugList"); wrap.innerHTML = "";
@@ -709,7 +717,7 @@ function sugItem(s) {
   const d = document.createElement("div"); d.className = "sug" + (st.sel === s.id ? " sel" : ""); d.dataset.id = s.id;
   const color = st.ov.colors[s.stem] || "#888";
   const label = s.type === "bleed" ? `Remove vocal leftover from ${s.stem}` : `Rebuild ${s.stem}`;
-  d.innerHTML = `<div class="sug-row"><span class="dot" style="background:${color}"></span><span class="what"></span><span class="when">${fmtP(s.start)}</span><span class="pill ${s.status}">${statusText(s)}</span></div>`;
+  d.innerHTML = `<div class="sug-row"><span class="dot" style="background:${color}"></span><span class="what"></span><span class="when">${fmtP(s.start)}</span><span class="pill ${s.status}${s.status === "pending" && s.recommended ? " recommended" : ""}">${statusText(s)}</span></div>`;
   d.querySelector(".what").textContent = label;
   if (st.sel !== s.id) { d.onclick = () => select(s.id); return d; }
 
@@ -769,9 +777,9 @@ function sugItem(s) {
     const applied = ok(s);
     const a = document.createElement("button"); a.className = applied ? "ghost" : "primary";
     a.textContent = applied ? (s.type === "bleed" ? "Cleaned" : "Applied") : (s.type === "bleed" ? "Clean it" : "Apply");
-    a.disabled = applied; a.onclick = () => edit("/api/status", { ids: [s.id], status: "accepted" });
+    a.disabled = applied; a.onclick = () => decide(s.id, "accepted");
     const r = document.createElement("button"); r.className = "ghost"; r.textContent = s.status === "rejected" ? "Rejected" : (s.type === "bleed" ? "Keep as is" : "Reject");
-    r.disabled = s.status === "rejected"; r.onclick = () => edit("/api/status", { ids: [s.id], status: "rejected" });
+    r.disabled = s.status === "rejected"; r.onclick = () => decide(s.id, "rejected");
     dec.append(a, r);
   }
   const go = document.createElement("button"); go.className = "ghost"; go.textContent = "Show on timeline"; go.onclick = () => focusOn(s);
@@ -779,6 +787,14 @@ function sugItem(s) {
   body.append(dec);
   d.append(body);
   return d;
+}
+// Apply or reject, then move on to the next item if this one leaves the current list
+async function decide(id, status) {
+  const ids = $$("#sugList .sug").map(x => x.dataset.id), i = ids.indexOf(id);
+  const next = ids[i + 1] || ids[i - 1];
+  await edit("/api/status", { ids: [id], status });
+  const now = st.ov.suggestions.find(x => x.id === id);
+  if (now && !FILTERS[st.filter](now) && next) select(next);
 }
 function esc(t) { const d = document.createElement("div"); d.textContent = t; return d.innerHTML; }
 
@@ -902,8 +918,8 @@ document.addEventListener("keydown", e => {
     const i = items.indexOf(st.sel); const n = e.key === "j" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
     select(items[i < 0 ? 0 : n]);
   } else if (st.sel && (e.key === "a" || e.key === "b")) setAB(e.key === "a" ? "before" : "after");
-  else if (st.sel && e.key === "Enter") edit("/api/status", { ids: [st.sel], status: "accepted" });
-  else if (st.sel && (e.key === "Backspace" || e.key === "Delete")) edit("/api/status", { ids: [st.sel], status: "rejected" });
+  else if (st.sel && e.key === "Enter") decide(st.sel, "accepted");
+  else if (st.sel && (e.key === "Backspace" || e.key === "Delete")) decide(st.sel, "rejected");
 });
 
 

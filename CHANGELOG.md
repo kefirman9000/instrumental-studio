@@ -1,5 +1,13 @@
 # What's new
 
+## 1.6.0
+
+- Repairs are never applied without asking. After **Find damage**, every repair waits for you. Strong matches are marked **Recommended**, and **Apply recommended** applies them all in one click.
+- Changing a repair's strength or source no longer applies it either; only **Apply** does.
+- Projects from earlier versions: repairs that were applied automatically are back to waiting for your decision.
+- After you apply or reject a repair, the next one is selected, so you can work down the list.
+- Drag a song onto the editor to start a new project with it. The project you were working on stays saved in **Songs**.
+
 ## 1.5.0
 
 - Opening a song now just brings it into the editor, where you can play it right away. You decide when to split it and when to look for damage.

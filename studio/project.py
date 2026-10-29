@@ -18,7 +18,7 @@ STEM_COLORS = {"drums": "#E8875B", "bass": "#5B8DEF", "guitar": "#4FB286", "pian
                "other": "#D9B44A", "instrumental": "#5BC0D9", "vocals": "#E05C7A"}
 
 DEFAULTS = {
-    "auto_conf": 0.6,          # confidence at/above which repairs are applied automatically
+    "auto_conf": 0.6,          # repairs at/above this match are marked "recommended" (never applied without asking)
     "review_conf": 0.3,        # below this a repair is marked "no good match"
     "min_severity": 0.02,      # ignore windows with less estimated loss than this
     "vocal_threshold": 0.08,   # beats with less vocal than this are treated as vocal-free
@@ -294,10 +294,12 @@ class Project:
         res = self._run_repair(k, s, L, donors, conf, 1.0)
         if res["severity"] < st["min_severity"] and res["added_db"] < -30:
             return
-        status = "auto" if conf >= st["auto_conf"] else ("pending" if conf >= st["review_conf"] else "low")
+        # nothing is applied until the person says so
+        status = "pending" if conf >= st["review_conf"] else "low"
         self.suggestions[sid] = {**base, "status": status, "conf": conf, "severity": res["severity"],
                                  "added_db": res["added_db"], "damage_area": res["damage_area"],
-                                 "donors": self._donor_info(donors, L), "manual_donor": False}
+                                 "donors": self._donor_info(donors, L), "manual_donor": False,
+                                 "recommended": conf >= st["auto_conf"]}
         self._store_patch(sid, k, res)
         # vocal bleed check in the same window
         b = bleed_window(self.stems[k], self.stems["vocals"], s0, s1)
@@ -493,8 +495,6 @@ class Project:
                 b = bleed_window(self.stems[sug["stem"]], self.stems["vocals"], s0, s1, strength)
                 if b is not None:
                     self.patches[sid] = (b["lo"], b["patch"].astype(np.float16))
-            if sug["status"] in ("pending", "low"):
-                sug["status"] = "accepted"
             self._invalidate(sug["stem"], sid)
             self._compute_grid()
 
@@ -521,7 +521,8 @@ class Project:
             conf = float(max(0.5, np.clip(1.3 * (1 - d["dist"]), 0, 1)))  # user picked it: trust it more
             res = self._run_repair(sug["stem"], sug["beat"], L, [d], conf, sug["strength"])
             sug.update({"donors": self._donor_info([d], L), "conf": conf, "manual_donor": True,
-                        "severity": res["severity"], "added_db": res["added_db"], "status": "accepted",
+                        "severity": res["severity"], "added_db": res["added_db"],
+                        "status": sug["status"] if sug["status"] in ("accepted", "rejected") else "pending",
                         "type": "repair", "note": "Donor chosen by you"})
             self._store_patch(sid, sug["stem"], res)
             self._invalidate(sug["stem"], sid)
@@ -599,6 +600,9 @@ class Project:
         ids = [s["id"] for s in self.suggestions.values()
                if (stem is None or s["stem"] == stem) and (section is None or s["section"] == section)
                and s["type"] in types and s["status"] != "nodonor"]
+        if action == "accept_recommended":
+            ids = [i for i in ids if self.suggestions[i].get("recommended") and self.suggestions[i]["status"] == "pending"]
+            return self.set_status(ids, "accepted", f"Applied {len(ids)} recommended repair(s)")
         status = {"accept": "accepted", "reject": "rejected"}.get(action)
         if action == "reset":
             st = self.meta["settings"]
@@ -607,7 +611,7 @@ class Project:
                 for i in ids:
                     s = self.suggestions[i]
                     s["status"] = "pending" if s["type"] == "bleed" else (
-                        "auto" if s["conf"] >= st["auto_conf"] else "pending" if s["conf"] >= st["review_conf"] else "low")
+                        "pending" if s["conf"] >= st["review_conf"] else "low")
                     self._invalidate(s["stem"], i)
                 self._compute_grid()
             return
@@ -687,6 +691,10 @@ class Project:
         with open(os.path.join(root, "project.json")) as f:
             state = json.load(f)
         p.meta, p.sections, p.suggestions, p.mixer = state["meta"], state["sections"], state["suggestions"], state["mixer"]
+        for x in p.suggestions.values():
+            if x.get("status") == "auto":     # made by an older version without asking: ask now
+                x["status"] = "pending"
+                x["recommended"] = True
         p.beats = np.array(state["beats"], dtype=np.int64)
         p.windows = [tuple(w) for w in state["windows"]]
         p.VA = np.array(state["VA"])
@@ -745,8 +753,10 @@ class Project:
                     st[key] = float(values[key])
             # re-sort untouched suggestions with the new thresholds (your own decisions are kept)
             for s in self.suggestions.values():
-                if s["type"] == "repair" and s["status"] in ("auto", "pending", "low") and not s.get("manual_donor"):
-                    new = "auto" if s["conf"] >= st["auto_conf"] else "pending" if s["conf"] >= st["review_conf"] else "low"
+                if s["type"] == "repair":
+                    s["recommended"] = s["conf"] >= st["auto_conf"]
+                if s["type"] == "repair" and s["status"] in ("pending", "low") and not s.get("manual_donor"):
+                    new = "pending" if s["conf"] >= st["review_conf"] else "low"
                     if new != s["status"]:
                         s["status"] = new
                         self._invalidate(s["stem"], s["id"])
