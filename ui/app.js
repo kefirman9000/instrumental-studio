@@ -434,7 +434,7 @@ function renderLane(k) {
   for (const s of st.ov.suggestions) {
     if (s.stem !== k) continue;
     const x0 = tToX(s.start), x1 = tToX(s.end); if (x1 < 0 || x0 > w) continue;
-    ctx.fillStyle = s.type === "bleed" ? "#d36a9a" : s.type === "glitch" ? "#ff8f5a" : s.type === "smooth" ? "#b9a5ff" : s.type === "take" || s.type === "alt" ? "#6dbf8c" : STATUS_COLOR[s.status] || "#888";
+    ctx.fillStyle = s.type === "bleed" ? "#d36a9a" : s.type === "glitch" ? "#ff8f5a" : s.type === "smooth" ? "#b9a5ff" : ["take", "alt", "hits", "bars"].includes(s.type) ? "#6dbf8c" : STATUS_COLOR[s.status] || "#888";
     ctx.globalAlpha = s.status === "rejected" ? 0.5 : 1;
     const y = s.type === "bleed" ? h - markH : h - markH + 3;
     ctx.fillRect(x0 + 1, y, Math.max(2, x1 - x0 - 2), s.type === "bleed" ? 3 : markH - 3);
@@ -621,6 +621,19 @@ function showKeepPop(a, b, e) {
   pop.querySelector(".alt-row").hidden = !split || st.ov.meta.source === "demo";
   pop.querySelector(".alt-row").previousElementSibling.hidden = pop.querySelector(".alt-row").hidden;
   pop.querySelector('[data-act="alt"]').onclick = () => { hideKeepPop(); tryAlt(am.value, a, b, as.value || null); };
+  pop.querySelector('[data-act="cleanup"]').hidden = !detected;
+  pop.querySelector('[data-act="cleanup"]').onclick = async () => {
+    hideKeepPop(); showBusy(0.5, "Looking for everything that can be tidied here");
+    try {
+      const r = await api.post("/api/cleanup", { start: a, end: b }); hideBusy(); await applyEdit(r);
+      if (!r.new_ids.length) return toast("Nothing to tidy in that part.");
+      st.filter = "review"; st.scope = null; select(r.new_ids[0]);
+      const kinds = {};
+      for (const id of r.new_ids) { const x = st.ov.suggestions.find(y => y.id === id); if (x) kinds[x.type] = (kinds[x.type] || 0) + 1; }
+      const words = { glitch: "click or gap", smooth: "smoothing", hits: "drum-hit rebuild", bars: "repeated-bar fix" };
+      toast("Added to Review: " + Object.entries(kinds).map(([k, n]) => `${n} ${words[k] || k}${n === 1 ? "" : "s"}`).join(", ") + ". Listen, then Apply the ones you like.", { ms: 9000 });
+    } catch (e) { hideBusy(); fail(e); }
+  };
   pop.querySelector('[data-act="scan"]').onclick = async () => {
     hideKeepPop();
     const before = st.ov.suggestions.filter(x => x.type === "glitch").length;
@@ -860,7 +873,7 @@ const FILTERS = {
   applied: s => ok(s),
   bleed: s => s.type === "bleed",
   cleanup: s => s.type === "glitch" || s.type === "smooth",
-  takes: s => s.type === "take" || s.type === "alt",
+  takes: s => ["take", "alt", "hits", "bars"].includes(s.type),
   hard: s => s.status === "low" || s.status === "nodonor",
   all: () => true,
 };
@@ -871,7 +884,7 @@ function setScope(scope) { st.scope = scope; activateTab("review"); renderReview
 function statusText(s) {
   if (s.type === "bleed") return { pending: "Suggested", accepted: "Cleaned", rejected: "Kept as is" }[s.status] || s.status;
   if (s.type === "glitch" || s.type === "smooth") return { pending: "Suggested", accepted: "Fixed", rejected: "Kept as is" }[s.status] || s.status;
-  if (s.type === "take" || s.type === "alt") return { pending: "Suggested", accepted: "Using it", rejected: "Kept as is" }[s.status] || s.status;
+  if (["take", "alt", "hits", "bars"].includes(s.type)) return { pending: "Suggested", accepted: "Using it", rejected: "Kept as is" }[s.status] || s.status;
   if (s.status === "pending" && s.recommended) return "Recommended";
   return { auto: "Applied", accepted: "Applied", pending: "Needs review", low: "Weak match", nodonor: "No source", rejected: "Rejected" }[s.status] || s.status;
 }
@@ -899,7 +912,7 @@ function renderReview() {
   const bulk = $("#bulkBar"); bulk.innerHTML = "";
   if (list.some(s => s.status !== "nodonor")) {
     const scopeArgs = { stem: st.scope?.stem ?? null, section: st.scope?.section ?? null };
-    const types = st.filter === "bleed" ? ["bleed"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "takes" ? ["take", "alt"] : st.filter === "review" ? ["repair", "bleed", "glitch", "smooth", "take", "alt"] : ["repair"];
+    const types = st.filter === "bleed" ? ["bleed"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "takes" ? ["take", "alt", "hits", "bars"] : st.filter === "review" ? ["repair", "bleed", "glitch", "smooth", "take", "alt", "hits", "bars"] : ["repair"];
     const mk = (label, action, cls) => { const b = document.createElement("button"); b.className = "small " + (cls || "ghost"); b.textContent = label; b.onclick = () => edit("/api/bulk", { action, ...scopeArgs, types }); bulk.append(b); };
     const what = st.filter === "bleed" || st.filter === "cleanup" || st.filter === "takes" ? "fixes" : "repairs";
     const rec = list.filter(x => x.recommended && x.status === "pending").length;
@@ -938,6 +951,8 @@ function sugItem(s) {
     smooth: `Smooth watery ${s.stem}`,
     take: `Use the ${s.stem} from ${st.ov.sections[s.source_section]?.name || "another section"}`,
     alt: `Use the other model's ${nice(s.stem)}`,
+    hits: `Rebuild ${nice(s.stem)} hits`,
+    bars: `Use the cleanest ${nice(s.stem)} bar`,
   }[s.type] || `Rebuild ${s.stem}`;
   d.innerHTML = `<div class="sug-row"><span class="dot" style="background:${color}"></span><span class="what"></span><span class="when">${fmtP(s.start)}</span><span class="pill ${inKept(s) ? "kept" : s.status}${!inKept(s) && s.status === "pending" && s.recommended ? " recommended" : ""}">${inKept(s) ? "In a kept part" : statusText(s)}</span></div>`;
   d.querySelector(".what").textContent = label;
@@ -955,7 +970,7 @@ function sugItem(s) {
     facts.push(["Leftover vocal", `${pct(s.conf)} certain; the part removed sits ${Math.abs(s.removed_db ?? 0).toFixed(0)} dB below the ${s.stem}`]);
   }
   if (s.note && !s.manual_donor && s.type === "repair") facts.push(["Note", esc(s.note)]);
-  if (["glitch", "smooth", "take", "alt"].includes(s.type)) facts.push(["What", esc(s.note || "")]);
+  if (["glitch", "smooth", "take", "alt", "hits", "bars"].includes(s.type)) facts.push(["What", esc(s.note || "")]);
   if (s.type === "take") facts.push(["How alike", `${pct(s.conf)}, level matched by ${(s.gain_db || 0) >= 0 ? "+" : ""}${(s.gain_db || 0).toFixed(1)} dB`]);
   body.innerHTML = `<div class="facts">${facts.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join("")}</div>`;
 
@@ -985,7 +1000,7 @@ function sugItem(s) {
     body.append(ab);
     body.insertBefore(ab.querySelector(".hear"), pvRow);   // choose what you hear first, then play
 
-    const strength = document.createElement("div"); strength.className = "row"; strength.hidden = ["glitch", "take", "alt"].includes(s.type);
+    const strength = document.createElement("div"); strength.className = "row"; strength.hidden = ["glitch", "take", "alt", "hits", "bars"].includes(s.type);
     strength.innerHTML = `<label>Strength</label><input type="range" min="0.2" max="1.5" step="0.05" value="${s.strength}"><output>${pct(s.strength)}</output>`;
     const sr = strength.querySelector("input"), so = strength.querySelector("output");
     sr.oninput = () => (so.textContent = pct(+sr.value));
@@ -1080,8 +1095,38 @@ function renderBest() {
     w.append(d);
   }
 }
+function renderHitsBars() {
+  const ov = st.ov, hl = $("#hitList"), bl = $("#barList");
+  if (ov.stage !== "detected") { hl.innerHTML = bl.innerHTML = `<p class="help">Available after Find damage.</p>`; return; }
+  const row = (title, pillText, body, onAdd, color) => {
+    const d = document.createElement("div"); d.className = "best-item";
+    d.innerHTML = `<div class="bi-top"><span class="dot" style="background:${color}"></span><b></b><span class="pill"></span></div><p></p><button class="small">Add to review</button>`;
+    d.querySelector("b").textContent = title; d.querySelector(".pill").textContent = pillText; d.querySelector("p").textContent = body;
+    d.querySelector("button").onclick = onAdd; return d;
+  };
+  const added = async (path, body) => {
+    try {
+      const r = await api.post(path, body); await applyEdit(r);
+      if (!r.new_ids.length) return toast("Nothing there was damaged enough to rebuild.");
+      st.filter = "all"; st.scope = null; select(r.new_ids[0]);
+      toast(`${r.new_ids.length} item${r.new_ids.length === 1 ? "" : "s"} added to Review. Listen with all tracks, then Apply.`);
+    } catch (e) { fail(e); }
+  };
+  hl.innerHTML = (ov.best_hits || []).length ? "" : `<p class="help">No smeared drum hits found${ov.stems.some(k => ["drums", "kick", "snare", "toms", "cymbals"].includes(k)) ? "" : " (no drum track)"}.</p>`;
+  for (const h of ov.best_hits || []) {
+    hl.append(row(`${nice(h.stem)}: ${h.name}`, h.status ? statusText({ type: "hits", status: h.status }) : `${h.damaged} under vocals`,
+      `${h.count} hits in the song; cleanest at ${fmtP(h.best_time)}.`, () => added("/api/hits", { stem: h.stem, sound: h.sound }),
+      ov.colors[h.stem] || "#888"));
+  }
+  bl.innerHTML = (ov.best_bars || []).length ? "" : `<p class="help">No damaged repeats of a bar found.</p>`;
+  for (const g of ov.best_bars || []) {
+    bl.append(row(`${nice(g.stem)} bar from ${fmtP(g.best_time)}`, g.status ? statusText({ type: "bars", status: g.status }) : `${g.damaged.length} damaged`,
+      `Played ${g.count} times; damaged at ${g.damaged_times.map(fmtP).join(", ")}.`,
+      () => added("/api/bars", { stem: g.stem, best: g.best, damaged: g.damaged }), ov.colors[g.stem] || "#888"));
+  }
+}
 function renderGrid() {
-  renderBest();
+  renderBest(); renderHitsBars();
   const ov = st.ov, w = $("#gridWrap");
   if (ov.stage !== "detected") { w.innerHTML = `<p class="help">This fills in after step 3, Find damage.</p>`; return; }
   const STATE = { clean: "No vocals", undamaged: "Undamaged", repaired: "Repaired", repairable: "Repairable", partial: "Partly", hard: "Hard to fix" };
