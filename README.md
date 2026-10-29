@@ -73,7 +73,7 @@ Click **Open a song** and choose a file, or just drag the song into the window. 
 The steps across the top of the editor take you through the rest, one at a time, whenever you're ready:
 
 1. **Import**: done. The song is saved in your projects.
-2. **Split into instruments**: choose how and click **Split**. **4 tracks** gives drums, bass, other and vocals; **6 tracks** also separates guitar and piano, so damage is found and repaired for each of them on their own, which helps songs built on guitar or piano. This needs the separation model; if it isn't installed yet, the button offers to download it. Takes under a minute with a graphics card, or a few minutes without one.
+2. **Split into instruments**: choose how and click **Split**. **4 tracks** gives drums, bass, other and vocals; **6 tracks** also separates guitar and piano, so damage is found and repaired for each of them on their own, which helps songs built on guitar or piano. With the optional extra models (below) you can also take the vocals out with Roformer first for the cleanest result, put backing vocals on their own track, and split the drums into kick, snare, toms and cymbals. Splitting needs the separation model; if it isn't installed yet, the button offers to download it. Takes under a minute with a graphics card, or a few minutes without one.
 3. **Find damage**: click it when you want the app to look for spots the vocals damaged and suggest repairs. Nothing is applied yet: every repair waits for you, and the ones with a strong match are marked **Recommended**.
 4. **Review and export**: listen, adjust, then click **Export**.
 
@@ -108,6 +108,21 @@ Then listen with **Before**, **After**, **Only what's added**, **Source** or **O
 If a fix doesn't sound right, turn down its **Strength**, choose another place to borrow from under **Source**, or click **Pick on timeline** and click anywhere in that instrument's lane. Or simply **Reject** it.
 
 Switch the timeline to **Repaired** view to see the sound that was filled back in, shown in amber.
+
+### Extra models
+
+The start screen's **Extra models** panel offers two optional downloads, each with its own status light. Nothing downloads until you click.
+
+- **Roformer vocal models** (via the open-source [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) package): adds the **cleanest vocal removal** split options, where a BS-Roformer model takes the vocals out before Demucs splits the instruments, and the **Backing vocals on their own track** option, which uses a karaoke model to separate backing vocals from the lead. Backing vocals then appear as their own lane you can keep, turn down or mute.
+- **DrumSep** (via [mdxnet-infer](https://pypi.org/project/mdxnet-infer/)): the **Split drums into kick, snare, toms, cymbals** option.
+
+### Try another model on one part
+
+If one part still sounds rough, drag across it on the Sections bar and use **Try another model here**: pick a model and either all tracks or one instrument. The app splits the song with that model once (it's kept with the project, so trying it on other parts is instant), then adds that model's version of the part to Review under **Other takes**. Listen before and after with all tracks, then apply the ones that sound better. The suggestions also offer this for the part that lost the most.
+
+### Use the best version of repeating parts
+
+When an instrument plays the same part more than once, the **Best versions** list (Repairability tab) offers its cleanest take for the other times, matched bar by bar to the beat and level, so the part sounds the same throughout. You can pick a different take from the list, and each one goes to Review first.
 
 ### Keep parts as they are
 

@@ -44,6 +44,12 @@
       </li>
       <li class="step" data-step="review"><span class="num">4</span><div class="step-text"><b>Review and export</b><span id="reviewSub"></span></div></li>
     </ol>
+    <div class="split-extra" id="splitExtra" hidden>
+      <span class="dim">Split options</span>
+      <label><input type="checkbox" id="optBacking"> Backing vocals on their own track <i class="light small off" id="lightRoformer"></i></label>
+      <label><input type="checkbox" id="optDrums"> Split drums into kick, snare, toms, cymbals <i class="light small off" id="lightDrumsep"></i></label>
+      <span class="dim small" id="extraNote"></span>
+    </div>
     <div class="tl-toolbar">
       <div class="seg small" id="viewSeg" role="radiogroup" aria-label="Lane view">
         <button data-m="damage" class="on" title="Spectrogram with detected damage in red">Damage</button>
@@ -70,6 +76,12 @@
       <span class="pop-h" data-split-only>Clean up</span>
       <button class="small" data-act="smooth" data-split-only title="Calms the warbling, watery sound separation leaves under the vocals. You review it before it's applied.">Smooth watery sound here</button>
       <button class="small" data-act="scan" data-split-only>Find clicks and gaps here</button>
+      <span class="pop-h" data-split-only>Try another model here</span>
+      <div class="alt-row" data-split-only>
+        <select id="altMode" aria-label="Model"></select>
+        <select id="altStem" aria-label="Which track"></select>
+        <button class="small" data-act="alt">Try</button>
+      </div>
       <span class="pop-h" data-split-only>Mute</span>
       <div class="mute-row" id="muteRow" data-split-only></div>
       <button class="ghost small" data-mode="">Cancel</button>
@@ -96,6 +108,7 @@
         <button data-f="bleed">Vocal leftovers</button>
         <button data-f="hard">No good match</button>
         <button data-f="cleanup">Clicks and smoothing</button>
+        <button data-f="takes">Other takes</button>
         <button data-f="all">All</button>
       </div>
       <div class="scope" id="scope" hidden></div>
@@ -103,6 +116,11 @@
       <div class="list" id="sugList"></div>
     </div>
     <div class="tab" id="tab-grid" hidden>
+      <h3 class="panel-h">Best versions</h3>
+      <p class="help">When an instrument plays the same part more than once, you can use its cleanest take every time, so the part sounds the same throughout. Each one is added to Review for you to listen to first.</p>
+      <div id="bestList"></div>
+      <hr>
+      <h3 class="panel-h">Repairability</h3>
       <p class="help">How badly each instrument was damaged in each section, and how well it can be rebuilt from the same instrument elsewhere in the song. Click a cell to review it.</p>
       <div id="gridWrap"></div>
     </div>
@@ -165,6 +183,11 @@
       </div>
       <button class="primary" id="btnModelGet" hidden>Download</button>
       <button class="ghost" id="btnModelRetry" hidden>Try again</button>
+    </section>
+
+    <section class="extras-card" id="extrasCard">
+      <b>Extra models</b> <span class="dim small">optional, for more ways to split</span>
+      <div id="extrasList"></div>
     </section>
 
     <h2 class="start-h">Start a project</h2>
