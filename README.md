@@ -12,7 +12,7 @@ When you remove the vocals from a song, the instruments playing underneath the s
 
 - **Split a song** into drums, bass, other instruments and vocals, or use stems you already made with another tool.
 - **See the damage** for every instrument on one timeline, marked in red.
-- **Fix it automatically** from matching parts of the same song. Confident fixes are applied for you; uncertain ones wait for your OK.
+- **Get suggested fixes** from matching parts of the same song. Nothing is applied until you say so; strong matches are marked Recommended.
 - **Listen before deciding**: before and after, a looping A/B switch, only the sound that was added, or the place it was borrowed from.
 - **Stay in control**: accept or reject any fix, make it weaker or stronger, or pick a different part of the song to borrow from.
 - **See what's fixable** in every section, for every instrument, at a glance.
@@ -72,10 +72,12 @@ The steps across the top of the editor take you through the rest, one at a time,
 
 1. **Import**: done. The song is saved in your projects.
 2. **Split into instruments**: choose how (best quality, fast, or with separate guitar and piano) and click **Split**. This needs the separation model; if it isn't installed yet, the button offers to download it. Takes under a minute with a graphics card, or a few minutes without one.
-3. **Find damage**: click it when you want the app to look for spots the vocals damaged and suggest repairs. Confident repairs are applied for you; uncertain ones wait for your OK.
+3. **Find damage**: click it when you want the app to look for spots the vocals damaged and suggest repairs. Nothing is applied yet: every repair waits for you, and the ones with a strong match are marked **Recommended**.
 4. **Review and export**: listen, adjust, then click **Export**.
 
 ![The editor after splitting: each instrument has its own lane, ready for Find damage](docs/screenshots/step-split.png)
+
+To start on another song, drag it onto the editor at any time: it opens as a new project, and the one you were working on stays saved in **Songs**.
 
 After splitting you can already play, mute, solo and balance the instruments before looking for damage. You can also **Split again** with a different option, or **Find again** after changing your mind.
 

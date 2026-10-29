@@ -38,6 +38,10 @@ def main():
     sug = list(p.suggestions.values())
     from collections import Counter
     print("suggestions:", Counter((s["type"], s["status"]) for s in sug))
+    assert not any(s["status"] in ("auto", "accepted") for s in sug), "nothing may be applied without asking"
+    assert all(np.array_equal(p.render_stem(k), damaged[k]) for k in p.instruments), "stems must be untouched"
+    print("nothing applied until asked: ok;", sum(1 for s in sug if s.get("recommended")), "marked recommended")
+    p.bulk("accept")   # what the person does when they click "Apply all repairs"
     B, _ = band_matrix(44100, 40)
     nfr = damaged["vocals"].shape[1] // 512 + 1
     va_frames = np.zeros(nfr, bool)
@@ -62,7 +66,7 @@ def main():
     print(f"\nbleed suggestions: {len(bleed)} -> stems {Counter(s['stem'] for s in bleed)}, "
           f"times {sorted(round(s['start']) for s in bleed)[:12]}")
     # API paths
-    sid = next(s["id"] for s in sug if s["type"] == "repair" and s["status"] == "auto")
+    sid = next(s["id"] for s in sug if s["type"] == "repair" and s["status"] == "accepted")
     for mode in ("before", "after", "patch", "donor"):
         assert p.preview(sid, mode).shape[0] == 2
     p.set_strength(sid, 0.5); p.set_status([sid], "rejected"); p.undo(); p.undo()

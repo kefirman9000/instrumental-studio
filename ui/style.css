@@ -100,7 +100,7 @@ button.small { padding: 3px 8px; font-size: 12px; }
 .filters button { padding: 3px 9px; font-size: 12px; border-radius: 20px; background: transparent; color: var(--muted); }
 .filters button.on { background: var(--text); color: var(--bg); border-color: transparent; }
 .scope { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px dashed var(--line); border-radius: var(--radius-s); margin-bottom: 8px; }
-.bulk { display: flex; gap: 6px; margin-bottom: 10px; }
+.bulk { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .group-title { margin: 14px 0 6px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
 .group-title i { width: 4px; height: 14px; border-radius: 2px; }
 .sug { border: 1px solid transparent; border-radius: var(--radius-s); padding: 7px 8px; cursor: pointer; }
@@ -112,6 +112,7 @@ button.small { padding: 3px 8px; font-size: 12px; }
 .pill { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .pill.auto, .pill.accepted { color: var(--repair); border-color: #f0b04a66; }
 .pill.pending { color: var(--text); border-color: var(--muted); }
+.pill.recommended { color: var(--ok); border-color: #6dbf8c88; }
 .pill.low, .pill.nodonor { color: var(--damage); border-color: #e5527a66; }
 .pill.rejected { text-decoration: line-through; }
 .meter { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; flex: 1; }

@@ -94,7 +94,7 @@
     </div>
     <div class="tab" id="tab-settings" hidden>
       <div class="setting">
-        <label for="autoConf">Apply repairs automatically at or above <b id="autoConfVal"></b> confidence</label>
+        <label for="autoConf">Mark repairs as recommended at or above <b id="autoConfVal"></b> match. Nothing is applied until you choose.</label>
         <input type="range" id="autoConf" min="0.3" max="1" step="0.05">
       </div>
       <div class="setting">
@@ -203,8 +203,8 @@
 <div class="drop-zone" id="dropZone" hidden>
   <div class="drop-card">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 17v3h16v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <b>Drop a song to open it</b>
-    <span>Or drop a full set of stems, including the vocals, to import them</span>
+    <b id="dropTitle">Drop a song to open it</b>
+    <span id="dropSub">Or drop a full set of stems, including the vocals, to import them</span>
   </div>
 </div>
 
