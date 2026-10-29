@@ -12,10 +12,13 @@ from .audio import load_audio, log
 
 MODELS = {
     # key: (label, demucs model names, stems)
-    "4stem": ("Drums / Bass / Other (best quality)", ["htdemucs_ft"], ["drums", "bass", "other", "vocals"]),
-    "6stem": ("Drums / Bass / Guitar / Piano / Other", ["htdemucs_6s"], ["drums", "bass", "guitar", "piano", "other", "vocals"]),
-    "4stem_fast": ("Drums / Bass / Other (fast)", ["htdemucs"], ["drums", "bass", "other", "vocals"]),
-    "ensemble": ("Ensemble of two models (least damage, slowest)", ["htdemucs_ft", "htdemucs"],
+    "4stem": ("4 tracks: drums, bass, other (best quality)", ["htdemucs_ft"], ["drums", "bass", "other", "vocals"]),
+    "4stem_fast": ("4 tracks, fast", ["htdemucs"], ["drums", "bass", "other", "vocals"]),
+    "6stem": ("6 tracks: adds guitar and piano", ["htdemucs_6s"],
+              ["drums", "bass", "guitar", "piano", "other", "vocals"]),
+    "6stem_best": ("6 tracks, best quality (slower)", ["htdemucs_6s", "htdemucs_ft"],
+                   ["drums", "bass", "guitar", "piano", "other", "vocals"]),
+    "ensemble": ("4 tracks, least damage (two models, slowest)", ["htdemucs_ft", "htdemucs"],
                  ["drums", "bass", "other", "vocals"]),
 }
 
@@ -97,9 +100,17 @@ def separate(path, workdir, mode="4stem", progress=lambda f, m: None):
         results.append(_run_model(wav, model, os.path.join(workdir, model), progress, a * 0.97, b * 0.97))
     out = {}
     for stem in stems:
-        arrs = [load_audio(os.path.join(d, stem + ".wav"), sr)[0] for d in results]
+        # average every model that produced this track (e.g. drums from both, guitar only from the 6-track one)
+        arrs = [load_audio(os.path.join(d, stem + ".wav"), sr)[0] for d in results
+                if os.path.exists(os.path.join(d, stem + ".wav"))]
         n = min(a.shape[1] for a in arrs)
         out[stem] = np.mean([a[:, :n] for a in arrs], axis=0).astype(np.float32)
+    n = min(a.shape[1] for a in out.values())
+    out = {k: v[:, :n] for k, v in out.items()}
+    if "guitar" in out and len(results) > 1:
+        # keep the tracks adding up to the song: whatever the averaged tracks no longer cover goes to "other"
+        mix = load_audio(wav, sr)[0][:, :n]
+        out["other"] = (mix - sum(v for k, v in out.items() if k != "other")).astype(np.float32)
     return out, sr
 
 

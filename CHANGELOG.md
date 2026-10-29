@@ -1,5 +1,13 @@
 # What's new
 
+## 1.8.0
+
+- **Clicks and gaps**: Find damage now also listens for short clicks, pops and dropouts in every instrument, ignoring drum hits, note starts and natural rests. Fixes are listed under **Clicks and smoothing** for you to review.
+- **Smooth watery sound**: drag across part of the song and choose **Smooth watery sound here** to calm the warbling separation leaves under the vocals. Each fix is reviewed before it's applied.
+- **Mute** everything or one instrument in any part of the song, from the timeline or with the new **M** buttons in the Levels table. Suggestions offer to mute an instrument that's mostly leftover singing in a section.
+- **More tracks**: a new **6 tracks, best quality** split gives separate guitar and piano tracks with drums, bass and vocals from the best model. Split options now say how many tracks each gives.
+- Hear before and after with all tracks. When reviewing a repair, choose **All tracks** (every instrument as it sounds right now, including your other repairs and levels), **All tracks + vocals**, or **Just** the one instrument. Before and after always differ only by the repair you're looking at. A/B looping uses the same choice, and it's remembered.
+
 ## 1.7.1
 
 - No more black command windows popping up on Windows while the app splits songs, installs the model, reads MP3s or checks for updates.

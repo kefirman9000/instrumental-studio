@@ -64,8 +64,14 @@
     <div class="keep-pop" id="keepPop" hidden>
       <b id="keepPopTitle"></b>
       <p id="keepPopWarn" class="warn" hidden></p>
-      <button class="primary small" data-mode="original">Use the original song here</button>
+      <span class="pop-h">Keep as it is</span>
+      <button class="small" data-mode="original">Use the original song here</button>
       <button class="small" data-mode="no_edits">Keep the split, no repairs</button>
+      <span class="pop-h" data-split-only>Clean up</span>
+      <button class="small" data-act="smooth" data-split-only title="Calms the warbling, watery sound separation leaves under the vocals. You review it before it's applied.">Smooth watery sound here</button>
+      <button class="small" data-act="scan" data-split-only>Find clicks and gaps here</button>
+      <span class="pop-h" data-split-only>Mute</span>
+      <div class="mute-row" id="muteRow" data-split-only></div>
       <button class="ghost small" data-mode="">Cancel</button>
     </div>
     <div class="hint" id="pickHint" hidden>Click a spot in the <b id="pickStem"></b> lane to borrow from there. <button class="ghost small" id="pickCancel">Cancel</button></div>
@@ -89,6 +95,7 @@
         <button data-f="applied">Applied</button>
         <button data-f="bleed">Vocal leftovers</button>
         <button data-f="hard">No good match</button>
+        <button data-f="cleanup">Clicks and smoothing</button>
         <button data-f="all">All</button>
       </div>
       <div class="scope" id="scope" hidden></div>
@@ -103,6 +110,9 @@
       <h3 class="panel-h">Kept parts</h3>
       <p class="help">Parts you keep are never repaired or re-levelled. Drag across the Sections bar above the timeline to keep a part.</p>
       <div id="keepList"></div>
+      <h3 class="panel-h" style="margin-top:14px">Muted parts</h3>
+      <p class="help">Silence everything, or one instrument, in part of the song. Drag across the Sections bar and choose Mute, or use the M buttons in the table below.</p>
+      <div id="muteList"></div>
       <hr>
       <h3 class="panel-h">Levels</h3>
       <p class="help">Loudness of every instrument per section after repairs. Type a boost or cut in dB to change one instrument in one section; it applies to playback and export.</p>

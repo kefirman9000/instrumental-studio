@@ -18,6 +18,7 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const native = () => window.pywebview && window.pywebview.api;
 
 const st = {
+  hear: (() => { try { return localStorage.getItem("hear") || "mix"; } catch { return "mix"; } })(),
   ov: null, rev: 0, specs: {}, mode: "damage", version: "repaired",
   view: { start: 0, pps: 20 }, sel: null, filter: "review", scope: null, picking: null,
   expanded: new Set(),
@@ -422,7 +423,7 @@ function renderLane(k) {
   for (const s of st.ov.suggestions) {
     if (s.stem !== k) continue;
     const x0 = tToX(s.start), x1 = tToX(s.end); if (x1 < 0 || x0 > w) continue;
-    ctx.fillStyle = s.type === "bleed" ? "#d36a9a" : STATUS_COLOR[s.status] || "#888";
+    ctx.fillStyle = s.type === "bleed" ? "#d36a9a" : s.type === "glitch" ? "#ff8f5a" : s.type === "smooth" ? "#b9a5ff" : STATUS_COLOR[s.status] || "#888";
     ctx.globalAlpha = s.status === "rejected" ? 0.5 : 1;
     const y = s.type === "bleed" ? h - markH : h - markH + 3;
     ctx.fillRect(x0 + 1, y, Math.max(2, x1 - x0 - 2), s.type === "bleed" ? 3 : markH - 3);
@@ -442,6 +443,7 @@ function renderLane(k) {
     }
   }
   drawKept(ctx, w, h, true);
+  drawMuted(ctx, w, h, k);
   if (st.picking && st.picking.stem === k && st.hoverT != null) {
     const sug = st.ov.suggestions.find(s => s.id === st.picking.id);
     const x0 = tToX(st.hoverT), x1 = tToX(st.hoverT + (sug.end - sug.start));
@@ -512,8 +514,8 @@ function movePlayhead() {
 /* ------------------------------------------------------------------ previews (Web Audio, A/B looping) */
 let actx, pv = null;
 function ctx() { return actx ||= new (window.AudioContext || window.webkitAudioContext)(); }
-async function fetchBuf(id, mode, solo) {
-  const r = await fetch(`/api/preview?id=${id}&mode=${mode}&solo=${solo ? 1 : 0}&r=${st.rev}`);
+async function fetchBuf(id, mode) {
+  const r = await fetch(`/api/preview?id=${id}&mode=${mode}&hear=${st.hear || "mix"}&r=${st.rev}`);
   return ctx().decodeAudioData(await r.arrayBuffer());
 }
 function stopPreview() {
@@ -525,8 +527,7 @@ async function playPreview(id, mode, btn) {
   const was = pv && pv.key === id + mode; stopPreview(); if (was) return;
   player.pause();
   try {
-    const solo = st.previewSolo !== false;
-    const buf = await fetchBuf(id, mode, solo);
+    const buf = await fetchBuf(id, mode);
     const src = ctx().createBufferSource(); src.buffer = buf; src.connect(ctx().destination); src.start();
     pv = { key: id + mode, nodes: [src] }; btn?.classList.add("playing");
     src.onended = () => { if (pv && pv.nodes[0] === src) stopPreview(); };
@@ -536,8 +537,7 @@ async function playAB(id, btn) {
   if (pv && pv.key === id + "ab") { stopPreview(); return; }
   stopPreview(); player.pause();
   try {
-    const solo = st.previewSolo !== false;
-    const [a, b] = await Promise.all([fetchBuf(id, "before", solo), fetchBuf(id, "after", solo)]);
+    const [a, b] = await Promise.all([fetchBuf(id, "before"), fetchBuf(id, "after")]);
     const c = ctx(), ga = c.createGain(), gb = c.createGain();
     const sa = c.createBufferSource(), sb = c.createBufferSource();
     sa.buffer = a; sb.buffer = b; sa.loop = sb.loop = true;
@@ -582,10 +582,37 @@ function showKeepPop(a, b, e) {
   warn.textContent = "There's singing in this part. Using the original song here keeps the vocals too.";
   const split = st.ov.stems.length > 0;
   pop.querySelector('[data-mode="no_edits"]').hidden = !split;
+  pop.querySelectorAll("[data-split-only]").forEach(el => (el.hidden = !split));
+  const detected = st.ov.stage === "detected";
+  pop.querySelector('[data-act="scan"]').hidden = !detected;
+  const mr = $("#muteRow"); mr.innerHTML = "";
+  for (const k of [null, ...st.ov.stems]) {
+    const btn = document.createElement("button"); btn.className = "small"; btn.textContent = k ? k : "Everything";
+    btn.onclick = () => { hideKeepPop(); setMutes([...(st.ov.mixer.mute_ranges || []), { start: a, end: b, stem: k }]); };
+    mr.append(btn);
+  }
+  pop.querySelector('[data-act="smooth"]').onclick = async () => {
+    hideKeepPop();
+    try {
+      const r = await api.post("/api/smooth", { start: a, end: b });
+      await applyEdit(r);
+      if (!r.new_ids.length) return toast("No singing in that part, so there's nothing to smooth.");
+      st.filter = "cleanup"; st.scope = null; select(r.new_ids[0]);
+      toast(`${r.new_ids.length} smoothing fix${r.new_ids.length === 1 ? "" : "es"} ready to review. Listen before and after, then Apply.`, { ms: 7000 });
+    } catch (err) { fail(err); }
+  };
+  pop.querySelector('[data-act="scan"]').onclick = async () => {
+    hideKeepPop();
+    const before = st.ov.suggestions.filter(x => x.type === "glitch").length;
+    await edit("/api/glitch_scan", { start: a, end: b });
+    const now = st.ov.suggestions.filter(x => x.type === "glitch" && x.end > a && x.start < b);
+    toast(now.length ? `Found ${now.length} click${now.length === 1 ? "" : "s"} or gap${now.length === 1 ? "" : "s"} there.` : "No clicks or gaps found there.");
+    if (now.length) { st.filter = "cleanup"; select(now[0].id); }
+  };
   pop.style.left = Math.min(tl.width - 290, Math.max(180, e.clientX - tl.left - 135)) + "px";
   pop.style.top = (e.clientY - tl.top + 14) + "px";
   pop.hidden = false;
-  pop.querySelectorAll("button").forEach(btn => btn.onclick = () => {
+  pop.querySelectorAll("button[data-mode]").forEach(btn => btn.onclick = () => {
     hideKeepPop();
     if (btn.dataset.mode) setKeep([...(st.ov.mixer.keep || []), { start: a, end: b, mode: btn.dataset.mode }]);
     else renderLanes();
@@ -610,6 +637,30 @@ function renderKeepList() {
     d.querySelector("span").onclick = () => { seek(r.start); };
     w.append(d);
   });
+}
+async function setMutes(list) {
+  try { applyEdit(await api.post("/api/mixer", { mute_ranges: list })); } catch (e) { fail(e); }
+}
+function renderMuteList() {
+  const w = $("#muteList"), list = st.ov.mixer.mute_ranges || [];
+  w.innerHTML = list.length ? "" : `<p class="help">Nothing muted.</p>`;
+  list.forEach((r, i) => {
+    const d = document.createElement("div"); d.className = "keep-item";
+    d.innerHTML = `<i class="sw no_edits"></i><span></span><button class="ghost small">Unmute</button>`;
+    d.querySelector("span").textContent = `${r.stem || "Everything"}, ${fmtP(r.start)} to ${fmtP(r.end)}`;
+    d.querySelector("span").onclick = () => seek(r.start);
+    d.querySelector("button").onclick = () => setMutes(list.filter((_, j) => j !== i));
+    w.append(d);
+  });
+}
+function drawMuted(ctx, w, h, stem) {
+  for (const r of st.ov.mixer.mute_ranges || []) {
+    if (r.stem && r.stem !== stem) continue;
+    const x0 = Math.max(0, tToX(r.start)), x1 = Math.min(w, tToX(r.end)); if (x1 <= 0 || x0 >= w) continue;
+    ctx.fillStyle = "rgba(13,16,22,0.72)"; ctx.fillRect(x0, 0, x1 - x0, h);
+    ctx.fillStyle = "#e5527a"; ctx.fillRect(x0, 0, 1.5, h); ctx.fillRect(x1 - 1.5, 0, 1.5, h);
+    if (x1 - x0 > 40) { ctx.font = "600 10.5px system-ui"; ctx.textBaseline = "top"; ctx.fillText("Muted", x0 + 5, h - 24); }
+  }
 }
 const inKept = s => (st.ov.mixer.keep || []).some(r => r.start <= s.start + 0.05 && r.end >= s.end - 0.05);
 
@@ -637,6 +688,12 @@ async function runTip(a) {
   if (a.kind === "lift") return edit("/api/mixer", { vocal_lift: { ...(st.ov.mixer.vocal_lift || {}), [a.stem]: a.db } });
   if (a.kind === "filter") { st.filter = a.filter; st.scope = null; activateTab("review"); return renderReview(); }
   if (a.kind === "detect") return $("#btnDetect").onclick();
+  if (a.kind === "mute") return setMutes([...(st.ov.mixer.mute_ranges || []), { start: a.start, end: a.end, stem: a.stem }]);
+  if (a.kind === "scan") {
+    await edit("/api/glitch_scan", {});
+    const n = st.ov.suggestions.filter(x => x.type === "glitch" && x.status === "pending").length;
+    return toast(n ? `${n} click${n === 1 ? "" : "s"} or gap${n === 1 ? "" : "s"} to review.` : "No clicks or gaps found.");
+  }
   if (a.kind === "resplit") { $("#sepMode").value = a.mode; localStorage.setItem("sepMode", a.mode); return $("#btnSplit").onclick(); }
 }
 
@@ -694,7 +751,8 @@ function speedTip(mode, cpu) {
   return {
     "4stem": cpu ? "Best quality: 4 models in a row, 5-15 min per song on a CPU." : "Best quality: 4 models in a row, about a minute on a GPU.",
     "4stem_fast": cpu ? "Fast: a few minutes per song on a CPU." : "Fast: about 4x quicker than best quality.",
-    "6stem": "Adds guitar and piano lanes; the piano stem is less clean.",
+    "6stem": "6 tracks: adds guitar and piano lanes, so damage is found and repaired per instrument. The piano track is less clean.",
+    "6stem_best": cpu ? "6 tracks with drums, bass and vocals from the best model: 2 models in a row, slow on a CPU." : "6 tracks with drums, bass and vocals from the best model: 2 models in a row.",
     "ensemble": "Two models averaged: least damage, slowest.",
   }[mode] || "";
 }
@@ -734,7 +792,7 @@ $("#btnDetect").onclick = async () => {
 };
 
 function renderAll() {
-  renderSteps(); renderTips(); renderKeepList();
+  renderSteps(); renderTips(); renderKeepList(); renderMuteList();
   $("#btnUndo").disabled = !st.ov.can_undo;
   $("#btnUndo").title = st.ov.can_undo ? `Undo: ${st.ov.undo_label}` : "Nothing to undo";
   renderBadges(); renderLanes(); renderReview(); renderGrid(); renderLevels(); renderSettings();
@@ -754,6 +812,7 @@ const FILTERS = {
   review: s => s.status === "pending" || (s.type === "bleed" && s.status === "pending"),
   applied: s => ok(s),
   bleed: s => s.type === "bleed",
+  cleanup: s => s.type === "glitch" || s.type === "smooth",
   hard: s => s.status === "low" || s.status === "nodonor",
   all: () => true,
 };
@@ -763,6 +822,7 @@ function setScope(scope) { st.scope = scope; activateTab("review"); renderReview
 
 function statusText(s) {
   if (s.type === "bleed") return { pending: "Suggested", accepted: "Cleaned", rejected: "Kept as is" }[s.status] || s.status;
+  if (s.type === "glitch" || s.type === "smooth") return { pending: "Suggested", accepted: "Fixed", rejected: "Kept as is" }[s.status] || s.status;
   if (s.status === "pending" && s.recommended) return "Recommended";
   return { auto: "Applied", accepted: "Applied", pending: "Needs review", low: "Weak match", nodonor: "No source", rejected: "Rejected" }[s.status] || s.status;
 }
@@ -790,11 +850,11 @@ function renderReview() {
   const bulk = $("#bulkBar"); bulk.innerHTML = "";
   if (list.some(s => s.status !== "nodonor")) {
     const scopeArgs = { stem: st.scope?.stem ?? null, section: st.scope?.section ?? null };
-    const types = st.filter === "bleed" ? ["bleed"] : ["repair"];
+    const types = st.filter === "bleed" ? ["bleed"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "review" ? ["repair", "bleed", "glitch", "smooth"] : ["repair"];
     const mk = (label, action, cls) => { const b = document.createElement("button"); b.className = "small " + (cls || "ghost"); b.textContent = label; b.onclick = () => edit("/api/bulk", { action, ...scopeArgs, types }); bulk.append(b); };
-    const what = st.filter === "bleed" ? "cleanups" : "repairs";
+    const what = st.filter === "bleed" || st.filter === "cleanup" ? "fixes" : "repairs";
     const rec = list.filter(x => x.recommended && x.status === "pending").length;
-    if (rec && st.filter !== "bleed") mk(`Apply ${rec} recommended`, "accept_recommended", "primary");
+    if (rec && st.filter !== "bleed" && st.filter !== "cleanup") mk(`Apply ${rec} recommended`, "accept_recommended", "primary");
     mk(`Apply all${st.scope ? " here" : ""}`, "accept", "");
     mk(`Reject all${st.scope ? " here" : ""}`, "reject");
     mk("Clear decisions", "reset");
@@ -823,7 +883,11 @@ function renderReview() {
 function sugItem(s) {
   const d = document.createElement("div"); d.className = "sug" + (st.sel === s.id ? " sel" : ""); d.dataset.id = s.id;
   const color = st.ov.colors[s.stem] || "#888";
-  const label = s.type === "bleed" ? `Remove vocal leftover from ${s.stem}` : `Rebuild ${s.stem}`;
+  const label = {
+    bleed: `Remove vocal leftover from ${s.stem}`,
+    glitch: s.kind === "click" ? `Fix a click in the ${s.stem}` : `Fill a gap in the ${s.stem}`,
+    smooth: `Smooth watery ${s.stem}`,
+  }[s.type] || `Rebuild ${s.stem}`;
   d.innerHTML = `<div class="sug-row"><span class="dot" style="background:${color}"></span><span class="what"></span><span class="when">${fmtP(s.start)}</span><span class="pill ${inKept(s) ? "kept" : s.status}${!inKept(s) && s.status === "pending" && s.recommended ? " recommended" : ""}">${inKept(s) ? "In a kept part" : statusText(s)}</span></div>`;
   d.querySelector(".what").textContent = label;
   if (st.sel !== s.id) { d.onclick = () => select(s.id); return d; }
@@ -836,10 +900,11 @@ function sugItem(s) {
     facts.push(["Match quality", `<span class="meter" style="display:inline-block;width:90px;vertical-align:middle"><i style="width:${pct(s.conf)}"></i></span> ${pct(s.conf)}`]);
     if (s.donors?.length) facts.push(["Borrowed from", s.donors.map((x, i) => `${i ? "" : "<b>"}${esc(sec[x.section].name)} at ${fmtP(x.start)}${i ? "" : "</b>"}`).join(", ")]);
     if (s.manual_donor) facts.push(["", "You chose this source"]);
-  } else {
+  } else if (s.type === "bleed") {
     facts.push(["Leftover vocal", `${pct(s.conf)} certain; the part removed sits ${Math.abs(s.removed_db ?? 0).toFixed(0)} dB below the ${s.stem}`]);
   }
   if (s.note && !s.manual_donor && s.type === "repair") facts.push(["Note", esc(s.note)]);
+  if (s.type === "glitch" || s.type === "smooth") facts.push(["What", esc(s.note || "")]);
   body.innerHTML = `<div class="facts">${facts.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join("")}</div>`;
 
   if (s.status !== "nodonor") {
@@ -854,13 +919,21 @@ function sugItem(s) {
     body.append(pvRow);
     const ab = document.createElement("div"); ab.className = "ab";
     ab.innerHTML = `<button class="small abplay">Loop A/B</button><div class="seg small"><button data-ab="before">A Before</button><button data-ab="after">B After</button></div>
-      <div class="seg small" title="Hear just this instrument, or the whole instrumental"><button data-solo="1">Solo</button><button data-solo="0">In mix</button></div>`;
+      
+      <div class="hear"><span>Hear</span><div class="seg small" role="radiogroup" aria-label="What to hear">
+        <button data-hear="mix" title="Every instrument, as it sounds right now">All tracks</button>
+        <button data-hear="song" title="Every instrument plus the vocals">All tracks + vocals</button>
+        <button data-hear="solo" title="Only this instrument">Just ${esc(s.stem)}</button></div></div>`;
     ab.querySelector(".abplay").onclick = e => playAB(s.id, e.currentTarget);
     ab.querySelectorAll("[data-ab]").forEach(b => { b.classList.toggle("on", b.dataset.ab === (st.abSide || "after")); b.onclick = () => setAB(b.dataset.ab); });
-    ab.querySelectorAll("[data-solo]").forEach(b => { b.classList.toggle("on", (b.dataset.solo === "1") === (st.previewSolo !== false)); b.onclick = () => { st.previewSolo = b.dataset.solo === "1"; stopPreview(); renderReview(); }; });
+    ab.querySelectorAll("[data-hear]").forEach(b => {
+      b.classList.toggle("on", b.dataset.hear === (st.hear || "mix"));
+      b.onclick = () => { st.hear = b.dataset.hear; try { localStorage.setItem("hear", st.hear); } catch {} stopPreview(); renderReview(); };
+    });
     body.append(ab);
+    body.insertBefore(ab.querySelector(".hear"), pvRow);   // choose what you hear first, then play
 
-    const strength = document.createElement("div"); strength.className = "row";
+    const strength = document.createElement("div"); strength.className = "row"; strength.hidden = s.type === "glitch";
     strength.innerHTML = `<label>Strength</label><input type="range" min="0.2" max="1.5" step="0.05" value="${s.strength}"><output>${pct(s.strength)}</output>`;
     const sr = strength.querySelector("input"), so = strength.querySelector("output");
     sr.oninput = () => (so.textContent = pct(+sr.value));
@@ -959,6 +1032,10 @@ function renderGrid() {
 }
 
 /* ---------- levels */
+function sectionMuted(i, k) {
+  const sec = st.ov.sections[i];
+  return (st.ov.mixer.mute_ranges || []).some(r => (r.stem === k || !r.stem) && r.start <= sec.start + 0.05 && r.end >= sec.end - 0.05);
+}
 function renderLevels() {
   const ov = st.ov, w = $("#levelsWrap"), sg = ov.mixer.section_gain || {};
   if (!ov.stems.length) { w.innerHTML = `<p class="help">Levels for each instrument appear after step 2, Split into instruments.</p>`; return; }
@@ -970,7 +1047,8 @@ function renderLevels() {
       const lv = ov.levels[`${i}:${k}`]; const m = clamp((lv + 60) / 60, 0, 1);
       const g = sg[`${i}:${k}`] || 0;
       html += `<td><div class="lvl"><span class="dim small">${lv < -90 ? "silent" : lv.toFixed(1) + " dB"}</span><div class="m"><i style="width:${pct(m)};background:${ov.colors[k] || "#888"}"></i></div>`
-        + (k === "vocals" ? "" : `<input type="number" step="0.5" min="-24" max="12" value="${g}" class="${g ? "changed" : ""}" data-key="${i}:${k}" title="Boost or cut in dB">`) + `</div></td>`;
+        + (k === "vocals" ? "" : `<div class="lvl-row"><input type="number" step="0.5" min="-24" max="12" value="${g}" class="${g ? "changed" : ""}" data-key="${i}:${k}" title="Boost or cut in dB">`
+          + `<button class="mbtn ${sectionMuted(i, k) ? "on" : ""}" data-sec="${i}" data-stem="${k}" title="Mute ${k} in ${esc(sec.name)}">M</button></div>`) + `</div></td>`;
     }
     html += `</tr>`;
   });
@@ -980,6 +1058,11 @@ function renderLevels() {
     const v = clamp(+inp.value || 0, -24, 12); ov.mixer.section_gain[inp.dataset.key] = v; inp.classList.toggle("changed", !!v); pushMixer();
   });
   $("#lvlReset").onclick = () => { ov.mixer.section_gain = {}; pushMixer(); };
+  w.querySelectorAll(".mbtn").forEach(btn => btn.onclick = () => {
+    const sec = ov.sections[+btn.dataset.sec], k = btn.dataset.stem, list = ov.mixer.mute_ranges || [];
+    const same = r => r.stem === k && Math.abs(r.start - sec.start) < 0.05 && Math.abs(r.end - sec.end) < 0.05;
+    setMutes(list.some(same) ? list.filter(r => !same(r)) : [...list, { start: sec.start, end: sec.end, stem: k }]);
+  });
 }
 
 /* ---------- settings */

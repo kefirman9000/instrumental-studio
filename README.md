@@ -73,7 +73,7 @@ Click **Open a song** and choose a file, or just drag the song into the window. 
 The steps across the top of the editor take you through the rest, one at a time, whenever you're ready:
 
 1. **Import**: done. The song is saved in your projects.
-2. **Split into instruments**: choose how (best quality, fast, or with separate guitar and piano) and click **Split**. This needs the separation model; if it isn't installed yet, the button offers to download it. Takes under a minute with a graphics card, or a few minutes without one.
+2. **Split into instruments**: choose how and click **Split**. **4 tracks** gives drums, bass, other and vocals; **6 tracks** also separates guitar and piano, so damage is found and repaired for each of them on their own, which helps songs built on guitar or piano. This needs the separation model; if it isn't installed yet, the button offers to download it. Takes under a minute with a graphics card, or a few minutes without one.
 3. **Find damage**: click it when you want the app to look for spots the vocals damaged and suggest repairs. Nothing is applied yet: every repair waits for you, and the ones with a strong match are marked **Recommended**.
 4. **Review and export**: listen, adjust, then click **Export**.
 
@@ -97,7 +97,13 @@ Click any mark on the timeline, or any item in the **Review** list, to see:
 - **Match quality**: how closely the borrowed part matches. Higher is safer.
 - **Borrowed from**: which parts of the song were used to rebuild it.
 
-Then listen with **Before**, **After**, **Only what's added**, **Source** or **Original song**. **Loop A/B** plays the before and after versions together so you can flip between them instantly with the A and B keys. Choose **Solo** to hear just that instrument, or **In mix** to hear it with everything else.
+First choose what to **Hear** (the choice is remembered):
+
+- **All tracks**: every instrument, exactly as it sounds right now with your other repairs and levels. Before and after differ only by this one repair.
+- **All tracks + vocals**: the same, with the singing on top, to judge the repair in the finished song.
+- **Just the instrument**: only the instrument being repaired.
+
+Then listen with **Before**, **After**, **Only what's added**, **Source** or **Original song**. **Loop A/B** plays before and after together so you can flip between them instantly with the A and B keys.
 
 If a fix doesn't sound right, turn down its **Strength**, choose another place to borrow from under **Source**, or click **Pick on timeline** and click anywhere in that instrument's lane. Or simply **Reject** it.
 
@@ -113,6 +119,12 @@ Drag across the **Sections** bar above the timeline to select a part of the song
 - **Keep the split, no repairs**: that part stays as the separated instrumental, with no repairs and no level changes.
 
 Kept parts are hatched on the timeline and listed in the **Levels** tab, where you can switch their kind or remove them. Undo works too.
+
+### Clean up glitches and artifacts
+
+- **Clicks and gaps**: after **Find damage**, the app listens to every instrument for short clicks, pops and sudden dropouts that don't belong, and lists them under **Clicks and smoothing** in the Review tab. It ignores drum hits, note starts and the natural rests in a part. Each fix smooths over just a few milliseconds.
+- **Watery sound**: separation can leave a warbling, watery sound under the vocals. Drag across that part of the Sections bar and choose **Smooth watery sound here**. You get one fix per instrument and bar to listen to before applying.
+- **Mute**: drag across a part and choose **Mute**, either **Everything** or one instrument, or click **M** next to an instrument in a section in the Levels tab. Muted parts are listed in the Levels tab. If an instrument is mostly leftover singing in a section, the suggestions offer to mute it there.
 
 ### Make the fixed parts match the rest
 
