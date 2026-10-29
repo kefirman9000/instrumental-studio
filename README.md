@@ -95,8 +95,11 @@ button also appears in the top bar.
 ### Publishing a new version (for the maintainer)
 
 1. Bump `__version__` in `studio/__init__.py`.
-2. Commit and push, then create a GitHub release whose tag is the version, e.g. `v1.1.0`
-   (`gh release create v1.1.0 --notes "What changed"`). The release notes are shown in the app.
+2. Commit and push to `main`. That's enough: the app compares its version with the one on `main`
+   and shows the commit message as the notes.
+3. Optional: create a GitHub release (tag `v1.1.0`) to give it proper release notes. Once any
+   release exists, the app follows releases instead of `main`, so publish one for every version
+   from then on.
 
 ## How the repair works
 
