@@ -50,7 +50,7 @@ The app opens in its own window.
 
 ### The separation model
 
-Splitting songs uses Demucs, a free model that runs on your own computer. It isn't included in the download, and the app never downloads it without asking.
+The **Split** step uses Demucs, a free model that runs on your own computer. It isn't included in the download, and the app never downloads it without asking.
 
 The start screen has a **Separation model** panel with a status light:
 
@@ -58,21 +58,28 @@ The start screen has a **Separation model** panel with a status light:
 - 🟡 **Downloading**: shows progress. You can import stems or try the demo meanwhile.
 - 🟢 **Ready**: you can split songs.
 
-The same light is always in the top-right corner of the window. You only need the model for **Split a song**; **Import stems** and the demo work without it.
+The same light is always in the top-right corner of the window. You only need the model for the **Split** step. Opening songs, importing stems and the demo all work without it.
 
 ## Your first song
 
-![The start screen, with buttons to open a song, use existing stems, or try the demo](docs/screenshots/welcome.png)
+![The start screen, with the separation model status and buttons to open a song, import stems, or try the demo](docs/screenshots/welcome.png)
 
-1. Make sure the separation model light is green (see above).
-2. Click **Split a song** and choose a file, or just drag the song into the window. Splitting takes under a minute with a graphics card, or a few minutes without one.
-   - Already have stems from another tool? Click **Import stems** and select all of them, or drag them all in at once. One of them must have *vocals* in its name.
-3. When it's done, every instrument appears on the timeline. **Red** marks show where the vocals damaged that instrument.
-4. Press **Space** to play. Switch between **Original**, **Raw instrumental** and **Repaired** at the top to compare.
-5. Fixes the app is confident about are already applied. Open the **Review** tab to check the ones waiting for you.
-6. Click **Export** when you're happy.
+Click **Open a song** and choose a file, or just drag the song into the window. The song opens in the editor straight away and you can play it. Nothing is split or changed until you say so.
 
-Not ready to open your own song? Click **Try the demo song** to explore everything first. It works without the separation model.
+![The editor after opening a song: the four steps across the top, with the full song below](docs/screenshots/step-import.png)
+
+The steps across the top of the editor take you through the rest, one at a time, whenever you're ready:
+
+1. **Import**: done. The song is saved in your projects.
+2. **Split into instruments**: choose how (best quality, fast, or with separate guitar and piano) and click **Split**. This needs the separation model; if it isn't installed yet, the button offers to download it. Takes under a minute with a graphics card, or a few minutes without one.
+3. **Find damage**: click it when you want the app to look for spots the vocals damaged and suggest repairs. Confident repairs are applied for you; uncertain ones wait for your OK.
+4. **Review and export**: listen, adjust, then click **Export**.
+
+![The editor after splitting: each instrument has its own lane, ready for Find damage](docs/screenshots/step-split.png)
+
+After splitting you can already play, mute, solo and balance the instruments before looking for damage. You can also **Split again** with a different option, or **Find again** after changing your mind.
+
+Already have stems from another tool? Click **Import stems** and select all of them, or drag them all in at once (one must have *vocals* in its name). They start at step 3. Want to try everything first? **Try the demo song** walks through every step and doesn't need the separation model.
 
 ## A quick tour
 

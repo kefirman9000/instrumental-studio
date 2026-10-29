@@ -75,7 +75,7 @@ function showWelcome(on) {
 
 async function startSong(path) {
   try {
-    await api.post("/api/open_song", { path, mode: $("#sepMode").value || "4stem" });
+    await api.post("/api/open_song", { path });
     watchJob();
   } catch (e) {
     hideBusy();
@@ -91,8 +91,8 @@ function needModel() {
   card.scrollIntoView({ block: "center", behavior: "smooth" });
   setTimeout(() => card.classList.remove("attention"), 2500);
   toast(st.state?.model?.installing
-    ? "The separation model is still downloading. Split the song once the light turns green."
-    : "Splitting songs needs the separation model. Download it first; the light turns green when it's ready.", { ms: 6000 });
+    ? "The separation model is still downloading. Split the song once the light turns green; your song stays open in Songs."
+    : "Splitting needs the separation model. Download it here; the light turns green when it's ready. Your song is saved in Songs.", { ms: 7000 });
 }
 
 async function upload(file, batch) {
@@ -101,12 +101,10 @@ async function upload(file, batch) {
 }
 
 $("#btnOpenSong").onclick = async () => {
-  if (!modelReady()) return needModel();
   if (native()) { const p = await native().choose_song(); if (p) startSong(p); return; }
   $("#fileSong").click();
 };
 async function openSongFile(f) {
-  if (!modelReady()) return needModel();
   showBusy(0.01, "Copying the song into the app");
   try { const j = await upload(f, "song" + Date.now()); startSong(j.path); } catch (err) { hideBusy(); fail(err); }
 }
@@ -168,15 +166,9 @@ $("#sepMode").onchange = e => { localStorage.setItem("sepMode", e.target.value);
 // Without a graphics card the best-quality model (4 passes) is slow, so start with Fast until the person picks
 function renderSpeedTip() {
   const m = st.state?.model || {}, sel = $("#sepMode");
-  const cpu = m.installed && /CPU/i.test(m.device || "");
-  if (cpu && sel.dataset.auto) sel.value = "4stem_fast";
-  const tips = {
-    "4stem": cpu ? "Best quality runs four models in a row: on a CPU expect 5-15 minutes per song. Fast is about 4x quicker." : "Best quality runs four models in a row. Fast is about 4x quicker.",
-    "4stem_fast": "About 4x quicker than best quality, with slightly more vocal damage to repair.",
-    "6stem": "Adds guitar and piano lanes. Similar speed to Fast; the piano stem is less clean.",
-    "ensemble": "Runs two models and averages them: the least damage, but the slowest option.",
-  };
-  $("#speedTip").textContent = tips[sel.value] || "";
+  if (m.installed && /CPU/i.test(m.device || "") && sel.dataset.auto) sel.value = "4stem_fast";
+  sel.title = speedTip(sel.value, /CPU/i.test(m.device || ""));
+  if (st.ov) renderSteps();
 }
 $("#btnReveal").onclick = () => api.post("/api/reveal", {});
 
@@ -203,7 +195,7 @@ async function openWorkspace() {
   $("#workspace").hidden = false; $("#transport").hidden = false; $("#btnExport").disabled = false;
   $("#songName").textContent = st.ov.meta.name || "";
   buildLanes();
-  await loadSpectros(st.ov.stems.concat(["vocals"]), ["raw", "after", "damage"]);
+  await loadSpectros(st.ov.stems.length ? st.ov.stems.concat(["vocals"]) : ["original"], ["raw", "after", "damage"]);
   fitView();
   setVersion(st.version, true);
   renderAll();
@@ -212,7 +204,7 @@ async function openWorkspace() {
 async function loadSpectros(stems, kinds) {
   const { cols, rows } = st.ov.display;
   await Promise.all(stems.flatMap(k => kinds.map(async kind => {
-    if (k === "vocals" && kind !== "raw") return;
+    if ((k === "vocals" || k === "original") && kind !== "raw") return;
     const buf = new Uint8Array(await (await fetch(`/api/spectro?stem=${k}&kind=${kind}&r=${st.rev}`)).arrayBuffer());
     (st.specs[k] ||= {})[kind + "Data"] = buf;
   })));
@@ -220,7 +212,7 @@ async function loadSpectros(stems, kinds) {
     const s = st.specs[k];
     for (const kind of ["raw", "after", "damage"]) s[kind] = s[kind] || null;
     s.raw = paintSpec(s.rawData, cols, rows, null);
-    if (k !== "vocals") {
+    if (k !== "vocals" && k !== "original") {
       s.damage = paintSpec(s.rawData, cols, rows, { overlay: s.damageData, color: [229, 82, 122] });
       s.after = paintSpec(s.afterData, cols, rows, { fillFrom: s.rawData, color: [240, 176, 74] });
     }
@@ -264,6 +256,14 @@ function paintSpec(data, cols, rows, opt) {
 
 function buildLanes() {
   const wrap = $("#stemLanes"); wrap.innerHTML = "";
+  $(".vox-lane").hidden = !st.ov.stems.length;
+  if (!st.ov.stems.length) {
+    const lane = document.createElement("div"); lane.className = "lane stem-lane full-lane"; lane.dataset.stem = "original";
+    lane.innerHTML = `<div class="lane-head"><div class="head-row"><span class="dot" style="background:var(--text)"></span><span>Full song</span></div>
+      <div class="badges"><span>Split it to see each instrument</span></div></div><canvas></canvas>`;
+    lane.querySelector("canvas").addEventListener("click", e => seek(xToTime(e, e.currentTarget)));
+    wrap.append(lane);
+  }
   for (const k of st.ov.stems) {
     const lane = document.createElement("div"); lane.className = "lane stem-lane"; lane.dataset.stem = k;
     lane.innerHTML = `
@@ -373,7 +373,7 @@ const STATUS_COLOR = { auto: "#f0b04a", accepted: "#f0b04a", pending: "#e4e8ef",
 function renderLane(k) {
   const lane = $(`.stem-lane[data-stem="${k}"]`); if (!lane) return;
   const cv = lane.querySelector("canvas"); const [ctx, w, h] = prepCanvas(cv);
-  const spec = st.specs[k]?.[st.mode]; const fps = st.ov.display.fps;
+  const spec = st.specs[k]?.[st.mode] || st.specs[k]?.raw; const fps = st.ov.display.fps;
   ctx.imageSmoothingEnabled = true; ctx.fillStyle = "#151922"; ctx.fillRect(0, 0, w, h);
   const markH = 8;
   if (spec) ctx.drawImage(spec, st.view.start * fps, 0, viewSec() * fps, spec.height, 0, 0, w, h - markH);
@@ -412,8 +412,8 @@ function renderLane(k) {
 
 function renderLanes() {
   if (!st.ov) return;
-  renderRuler(); renderVox();
-  for (const k of st.ov.stems) renderLane(k);
+  renderRuler(); if (st.ov.stems.length) renderVox();
+  for (const k of (st.ov.stems.length ? st.ov.stems : ["original"])) renderLane(k);
   movePlayhead();
 }
 
@@ -528,7 +528,101 @@ async function applyEdit(r, opt = {}) {
 }
 $("#btnUndo").onclick = () => edit("/api/undo", {});
 
+/* ---------- steps: import -> split -> find damage -> review */
+function renderSteps() {
+  const ov = st.ov, stage = ov.stage, m = st.state?.model || {};
+  const demo = ov.meta.source === "demo";
+  const order = ["imported", "split", "detected"];
+  const at = order.indexOf(stage);
+  const mark = (name, done, current, locked) => {
+    const el = $(`.step[data-step="${name}"]`);
+    el.classList.toggle("done", done); el.classList.toggle("current", current); el.classList.toggle("locked", locked);
+  };
+  mark("import", true, false, false);
+  mark("split", at >= 1, at === 0, false);
+  mark("detect", at >= 2, at === 1, at < 1);
+  mark("review", false, at === 2, at < 2);
+
+  const split = $("#btnSplit"), sel = $("#sepMode"), modelOk = m.installed || demo;
+  sel.hidden = demo;
+  if (at >= 1) {
+    $("#splitSub").textContent = `Split with ${ov.meta.separation || "a separator"}: ${ov.stems.join(", ")} and vocals.`;
+    split.textContent = "Split again"; split.className = "ghost small"; split.disabled = false;
+    sel.hidden = true;
+  } else if (demo) {
+    $("#splitSub").textContent = "The demo comes pre-split, no model needed.";
+    split.textContent = "Split"; split.className = "primary"; split.disabled = false;
+  } else if (modelOk) {
+    $("#splitSub").textContent = speedTip(sel.value, /CPU/i.test(m.device || ""));
+    split.textContent = "Split"; split.className = "primary"; split.disabled = false;
+  } else if (m.installing) {
+    $("#splitSub").textContent = `Waiting for the separation model: ${pct(m.progress || 0)}.`;
+    split.textContent = "Split"; split.className = ""; split.disabled = true;
+  } else {
+    $("#splitSub").textContent = `Needs the separation model (one-time download, ${m.plan?.size || "about 1-3 GB"}).`;
+    split.textContent = "Get the model"; split.className = ""; split.disabled = false;
+  }
+  const det = $("#btnDetect");
+  det.disabled = at < 1;
+  if (at < 1) { $("#detectSub").textContent = "Available after splitting."; det.textContent = "Find damage"; det.className = ""; }
+  else if (at === 1) { $("#detectSub").textContent = "Looks for instrument sound the vocals took, and suggests repairs."; det.textContent = "Find damage"; det.className = "primary"; }
+  else {
+    const n = ov.suggestions.filter(x => x.type === "repair").length;
+    $("#detectSub").textContent = `${n} spot${n === 1 ? "" : "s"} found.`; det.textContent = "Find again"; det.className = "ghost small";
+  }
+  const waiting = ov.suggestions.filter(x => x.status === "pending").length;
+  $("#reviewSub").textContent = at < 2 ? "After finding damage." : waiting ? `${waiting} waiting for you in the Review tab.` : "Everything is decided. Export when ready.";
+  $("#btnExport").disabled = at < 1;
+  $("#viewSeg").hidden = at < 1; $(".legend").hidden = at < 2;
+  // what you can listen to
+  $$("#versionSeg button").forEach(b => { b.disabled = b.dataset.v !== "original" && at < 1; });
+  if (at < 1 && st.version !== "original") setVersion("original");
+}
+function speedTip(mode, cpu) {
+  return {
+    "4stem": cpu ? "Best quality: 4 models in a row, 5-15 min per song on a CPU." : "Best quality: 4 models in a row, about a minute on a GPU.",
+    "4stem_fast": cpu ? "Fast: a few minutes per song on a CPU." : "Fast: about 4x quicker than best quality.",
+    "6stem": "Adds guitar and piano lanes; the piano stem is less clean.",
+    "ensemble": "Two models averaged: least damage, slowest.",
+  }[mode] || "";
+}
+$("#btnSplit").onclick = async () => {
+  const ov = st.ov, m = st.state?.model || {};
+  if (ov.stage !== "imported") {
+    const lose = ov.user_decisions ? ` Your ${ov.user_decisions} review decision(s) will be cleared.` : "";
+    if (!confirm(`Split the song again? Damage you've found will need to be found again.${lose}`)) return;
+  }
+  if (!m.installed && ov.meta.source !== "demo") {
+    if (m.installing) return;
+    return installModelFromStep();
+  }
+  try { await api.post("/api/split", { mode: $("#sepMode").value || "4stem" }); watchJob(); }
+  catch (e) { if (e.message === "need_model") installModelFromStep(); else fail(e); }
+};
+async function installModelFromStep() {
+  const m = st.state?.model || {};
+  if (!confirm(`Download the separation model now? It's a one-time download of ${m.plan?.size || "about 1-3 GB"}, set up to run on ${m.plan?.runs_on || "your computer"}. You can keep working meanwhile.`)) return;
+  await installModel(false);
+  watchModelInEditor();
+}
+function watchModelInEditor() {
+  const t = setInterval(async () => {
+    try {
+      const s = await api.get("/api/state"); st.state = s; renderModel(s); if (st.ov) renderSteps();
+      if (!s.model.installing) clearInterval(t);
+    } catch {}
+  }, 1000);
+}
+$("#btnDetect").onclick = async () => {
+  if (st.ov.stage === "detected") {
+    const lose = st.ov.user_decisions ? ` Your ${st.ov.user_decisions} review decision(s) will be cleared.` : "";
+    if (!confirm(`Look for damage again from scratch?${lose}`)) return;
+  }
+  try { await api.post("/api/detect"); watchJob(); } catch (e) { fail(e); }
+};
+
 function renderAll() {
+  renderSteps();
   $("#btnUndo").disabled = !st.ov.can_undo;
   $("#btnUndo").title = st.ov.can_undo ? `Undo: ${st.ov.undo_label}` : "Nothing to undo";
   renderBadges(); renderLanes(); renderReview(); renderGrid(); renderLevels(); renderSettings();
@@ -537,6 +631,7 @@ function renderAll() {
 function renderBadges() {
   for (const k of st.ov.stems) {
     const s = st.ov.stem_summary[k]; const el = $(`.stem-lane[data-stem="${k}"] .badges`); if (!el) continue;
+    if (st.ov.stage !== "detected") { el.innerHTML = "<span>Not checked for damage yet</span>"; continue; }
     el.innerHTML = s.count ? `<span>Damage <b>${pct(Math.min(1, s.damage))}</b></span><span>Fixable <b>${pct(s.repairability)}</b></span>` : `<span>No damage found</span>`;
   }
 }
@@ -593,7 +688,9 @@ function renderReview() {
   const wrap = $("#sugList"); wrap.innerHTML = "";
   if (!list.length) {
     const p = document.createElement("p"); p.className = "help";
-    p.textContent = st.filter === "review" ? "Nothing waiting for review. Applied repairs are under Applied; play the song with Repaired selected to hear them." : "Nothing in this list.";
+    p.textContent = ov.stage === "imported" ? "Nothing to review yet. Split the song into instruments (step 2), then click Find damage (step 3)."
+      : ov.stage === "split" ? "Nothing to review yet. Click Find damage (step 3) to look for spots the vocals damaged."
+      : st.filter === "review" ? "Nothing waiting for review. Applied repairs are under Applied; play the song with Repaired selected to hear them." : "Nothing in this list.";
     wrap.append(p); return;
   }
   let lastSec = -1;
@@ -712,6 +809,7 @@ $("#pickCancel").onclick = endPick;
 /* ---------- repairability grid */
 function renderGrid() {
   const ov = st.ov, w = $("#gridWrap");
+  if (ov.stage !== "detected") { w.innerHTML = `<p class="help">This fills in after step 3, Find damage.</p>`; return; }
   const STATE = { clean: "No vocals", undamaged: "Undamaged", repaired: "Repaired", repairable: "Repairable", partial: "Partly", hard: "Hard to fix" };
   let html = `<table class="grid"><thead><tr><th></th>${ov.stems.map(k => `<th><span class="dot" style="display:inline-block;background:${ov.colors[k]}"></span> ${esc(k)}</th>`).join("")}</tr></thead><tbody>`;
   html += `<tr><th class="sec">Whole song</th>${ov.stems.map(k => { const s = ov.stem_summary[k];
@@ -740,6 +838,7 @@ function renderGrid() {
 /* ---------- levels */
 function renderLevels() {
   const ov = st.ov, w = $("#levelsWrap"), sg = ov.mixer.section_gain || {};
+  if (!ov.stems.length) { w.innerHTML = `<p class="help">Levels for each instrument appear after step 2, Split into instruments.</p>`; return; }
   const cols = ov.stems.concat(["vocals"]);
   let html = `<table class="levels"><thead><tr><th></th>${cols.map(k => `<th>${esc(k)}</th>`).join("")}</tr></thead><tbody>`;
   ov.sections.forEach((sec, i) => {
@@ -916,7 +1015,7 @@ function renderModel(s) {
     ok: ["Separation model ready", `Songs are split on ${m.device || runsOn}.${m.note ? " " + m.note : ""}`],
     busy: [`Downloading the separation model: ${pct(m.progress || 0)}`, `${m.message || "Starting"}. You can import stems or try the demo meanwhile.`],
     err: ["Separation model not installed", m.error || "Something went wrong."],
-    off: ["Separation model not installed", `Needed only for splitting songs. One-time download of ${size}, set up to run on ${runsOn}. Nothing downloads until you click the button.`],
+    off: ["Separation model not installed", `Needed only for the Split step. You can open songs without it. One-time download of ${size}, set up to run on ${runsOn}. Nothing downloads until you click the button.`],
   }[state];
   $("#modelLight").className = "light " + state;
   $("#modelTitle").textContent = text[0];
@@ -925,10 +1024,7 @@ function renderModel(s) {
   const get = $("#btnModelGet");
   get.hidden = state !== "off"; get.textContent = `Download (${size.replace(/^about /, "")})`;
   $("#btnModelRetry").hidden = state !== "err";
-  $("#btnOpenSong").classList.toggle("primary", state === "ok");
-  const nm = $("#needsModel");
-  nm.querySelector("i").className = "light small " + (state === "ok" ? "ok" : state === "busy" ? "busy" : "off");
-  nm.querySelector("span").textContent = state === "ok" ? "Separation model ready" : state === "busy" ? "Waiting for the model download" : "Needs the separation model";
+  $("#btnOpenSong").classList.add("primary");
   $("#modelPillLight").className = "light small " + state;
   $("#modelPillText").textContent = { ok: "Model ready", busy: `Model ${pct(m.progress || 0)}`, err: "Model not installed", off: "Model not installed" }[state];
   $("#engineInfo").textContent = text[0] + ". " + text[1];
