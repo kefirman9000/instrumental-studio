@@ -201,4 +201,11 @@ legend { color: var(--muted); padding: 0 4px; }
 label.check { display: flex; gap: 8px; align-items: flex-start; line-height: 1.4; margin: 10px 0 0; }
 label.check input { margin-top: 3px; }
 .update-pill { border-color: var(--repair); color: var(--repair); background: transparent; }
-.welcome-ver { margin-top: 30px; }
+
+/* ---------- welcome: model status + updates */
+.model-strip { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--bg2); }
+.model-strip span { flex: none; max-width: 60%; }
+.model-strip.err { border-color: var(--damage); }
+.model-strip.err span { color: var(--damage); max-width: none; flex: 1; }
+.small-bar { flex: 1; margin: 0; height: 4px; }
+.welcome-foot { display: flex; align-items: center; gap: 10px; margin-top: 30px; flex-wrap: wrap; }

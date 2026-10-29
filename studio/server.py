@@ -15,6 +15,7 @@ import numpy as np
 
 from . import separate as SEP
 from . import updater as UP
+from . import installer as INST
 from . import __version__
 from .audio import load_audio, wav_bytes, log
 from .project import Project
@@ -36,6 +37,8 @@ class State:
     update = {"info": None, "error": None, "checking": False, "installing": False, "progress": 0.0,
               "message": "", "installed": None, "auto": False}
     just_updated = False
+    model = {"installed": False, "installing": False, "progress": 0.0, "message": "", "error": None,
+             "device": "", "note": None}
 
 
 S = State()
@@ -50,7 +53,59 @@ def _slug(name):
 
 
 def _progress(f, m):
-    S.job.update(progress=float(f), message=m)
+    if f is None:
+        S.job.update(message=m)
+    else:
+        S.job.update(progress=float(f), message=m)
+
+
+# ------------------------------------------------------------------ separation model install
+_model_lock = threading.Lock()
+
+
+def _probe_device():
+    S.model["device"] = SEP.device_info()[1]
+
+
+def start_model_install(force=False):
+    """Install Demucs + PyTorch in the background (once). Safe to call repeatedly."""
+    with _model_lock:
+        if S.model["installing"] or (S.model["installed"] and not force):
+            return
+        S.model.update(installing=True, error=None, progress=0.0, message="Starting")
+
+    def prog(f, m):
+        if f is not None:
+            S.model["progress"] = float(f)
+        S.model["message"] = m
+
+    def run():
+        try:
+            res = INST.install(prog)
+            S.model.update(installed=True, note=res.get("note"))
+            SEP._DEVICE = None
+            _probe_device()
+        except Exception as e:
+            traceback.print_exc()
+            S.model["error"] = str(e)
+        finally:
+            S.model["installing"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _wait_for_model():
+    """Used by a song job: install the model if needed and wait, mirroring its progress."""
+    if SEP.demucs_available():
+        return
+    start_model_install()
+    while S.model["installing"]:
+        S.job.update(progress=0.02 + 0.3 * S.model["progress"],
+                     message="Installing the separation model, one time only: " + (S.model["message"] or ""))
+        time.sleep(0.5)
+    if S.model["error"]:
+        raise RuntimeError(S.model["error"])
+
 
 
 def _start_job(fn, *args):
@@ -77,11 +132,15 @@ def _job_song(path, mode):
     root = _slug(path)
     p = Project(root)
     p.meta["name"] = os.path.splitext(os.path.basename(path))[0]
-    _progress(0.01, "Loading song")
+    first = not SEP.demucs_available()
+    _wait_for_model()
+    base = 0.32 if first else 0.02
+    _progress(base, "Loading song")
     original, sr = load_audio(path)
     work = os.path.join(root, "work")
     os.makedirs(work, exist_ok=True)
-    stems, sr = SEP.separate(path, work, mode, lambda f, m: _progress(0.02 + 0.5 * f, m))
+    stems, sr = SEP.separate(path, work, mode,
+                             lambda f, m: _progress(None if f is None else base + (0.52 - base) * f, m))
     shutil.rmtree(work, ignore_errors=True)
     p.meta["separation"] = SEP.MODELS[mode][0]
     p.set_stems(stems, sr, original, source=path)
@@ -228,13 +287,14 @@ class Handler(BaseHTTPRequestHandler):
                 with open(fp, "rb") as fh:
                     return self._send(200, fh.read(), ctype + ("; charset=utf-8" if ctype.startswith("text") else ""))
             if path == "/api/state":
-                dev, devname = SEP.device_info() if SEP.demucs_available() else ("cpu", "")
+                S.model["installed"] = S.model["installed"] or SEP.demucs_available()
+                devname = S.model["device"]
                 return self._send(200, {
                     "job": S.job, "rev": S.rev, "has_project": S.project is not None,
                     "project": S.project.meta.get("name") if S.project else None,
                     "demucs": SEP.demucs_available(), "device": devname,
                     "models": {k: v[0] for k, v in SEP.MODELS.items()}, "home": HOME,
-                    "projects": list_projects(), "version": __version__, "repo": UP.REPO,
+                    "projects": list_projects(), "model": S.model, "version": __version__, "repo": UP.REPO,
                     "update": S.update, "update_prefs": UP.load_prefs(HOME), "just_updated": S.just_updated})
             if path == "/api/overview":
                 return self._send(200, {"rev": S.rev, "overview": self._proj().overview()})
@@ -290,8 +350,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "path": dest, "folder": folder})
             d = self._json()
             if path == "/api/open_song":
-                if not SEP.demucs_available():
-                    return self._send(400, {"error": "need_demucs"})
                 _start_job(_job_song, d["path"], d.get("mode", "4stem"))
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
@@ -308,6 +366,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if path == "/api/delete_project":
                 shutil.rmtree(os.path.join(PROJECTS, os.path.basename(d["id"])), ignore_errors=True)
+                return self._send(200, {"ok": True})
+            if path == "/api/model/install":
+                start_model_install(force=bool(d.get("force")))
                 return self._send(200, {"ok": True})
             if path == "/api/update/check":
                 return self._send(200, do_check())
@@ -413,6 +474,12 @@ def serve(port=0, just_updated=False):
         os.makedirs(d, exist_ok=True)
     S.just_updated = just_updated
     threading.Thread(target=_startup_update, daemon=True).start()
+    # get the separation model ready in the background so the first song doesn't wait for it
+    if SEP.demucs_available():
+        S.model["installed"] = True
+        threading.Thread(target=_probe_device, daemon=True).start()
+    elif UP.load_prefs(HOME).get("auto_install_model", True):
+        start_model_install()
     for attempt in range(40):   # after an update restart the old copy may still hold the port briefly
         try:
             httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)

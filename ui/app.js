@@ -39,9 +39,7 @@ async function refreshState() {
     for (const [k, v] of Object.entries(s.models)) sel.add(new Option(v, k));
     sel.value = localStorage.getItem("sepMode") || "4stem";
   }
-  $("#engineInfo").textContent = s.demucs
-    ? `Separation model installed. Running on: ${s.device}.`
-    : "Separation model not installed yet (pip install demucs). Imported stems and the demo still work.";
+  renderModel(s);
   const rec = $("#recent"); rec.innerHTML = "";
   if (s.projects.length) {
     const h = document.createElement("h2"); h.textContent = "Recent songs"; rec.append(h);
@@ -68,6 +66,7 @@ async function loadProject(id) {
 
 function showWelcome(on) {
   $("#welcome").hidden = !on;
+  $("#btnUndo").hidden = on; $("#btnExport").hidden = on;
   if (on) refreshState();
 }
 
@@ -75,7 +74,7 @@ async function startSong(path) {
   try {
     await api.post("/api/open_song", { path, mode: $("#sepMode").value || "4stem" });
     watchJob();
-  } catch (e) { if (e.message === "need_demucs") $("#dlgDemucs").showModal(); else fail(e); }
+  } catch (e) { fail(e); }
 }
 
 async function upload(file, batch) {
@@ -84,7 +83,6 @@ async function upload(file, batch) {
 }
 
 $("#btnOpenSong").onclick = async () => {
-  if (!st.state?.demucs) { $("#dlgDemucs").showModal(); return; }
   if (native()) { const p = await native().choose_song(); if (p) startSong(p); return; }
   $("#fileSong").click();
 };
@@ -752,6 +750,12 @@ function renderUpdate(s) {
   const u = s.update, info = u.info, prefs = s.update_prefs;
   $("#verNow").textContent = `Version ${s.version}`;
   $("#welcomeVer").textContent = `Instrumental Studio ${s.version}`;
+  $("#welcomeUpdStatus").textContent = $("#updStatus").textContent;
+  $("#btnWelcomeCheck").disabled = u.checking || u.installing;
+  const wi = $("#btnWelcomeInstall");
+  wi.hidden = !((info && info.available) || u.installed);
+  wi.disabled = u.installing;
+  wi.textContent = u.installed ? "Restart to update" : u.installing ? (u.message || "Installing…") : `Install ${info?.latest || "update"}`;
   $("#updRepo").textContent = `github.com/${s.repo}`;
   $("#updOnStart").checked = !!prefs.check_on_start; $("#updAuto").checked = !!prefs.auto_install;
   let status = "";
@@ -762,6 +766,7 @@ function renderUpdate(s) {
   else if (info && info.latest) status = `You have the latest version.`;
   else if (info) status = info.message || "";
   $("#updStatus").textContent = status;
+  $("#welcomeUpdStatus").textContent = status;
   $("#btnCheckUpdate").disabled = u.checking || u.installing;
   const showBox = !!(info && info.available && !u.installed);
   $("#updBox").hidden = !showBox;
@@ -808,6 +813,8 @@ async function installUpdate() {
   try { await api.post("/api/update/install"); pollUpdate(); } catch (e) { fail(e); }
 }
 $("#btnInstallUpdate").onclick = installUpdate;
+$("#btnWelcomeCheck").onclick = () => $("#btnCheckUpdate").onclick();
+$("#btnWelcomeInstall").onclick = () => (st.state?.update?.installed ? restartApp(false) : installUpdate());
 $("#btnRestart").onclick = () => restartApp(false);
 $("#updPill").onclick = () => {
   const u = st.state?.update;
@@ -833,6 +840,35 @@ $("#updAuto").onchange = async () => {
   const u = st.state?.update;
   if ($("#updAuto").checked && u?.info?.available && !u.installing && !u.installed) installUpdate();
 };
+
+/* ------------------------------------------------------------------ separation model status */
+let modelTimer = null;
+function renderModel(s) {
+  const m = s.model || {}, strip = $("#modelStrip");
+  let info;
+  if (m.installing) info = `Getting the separation model ready (one time, about 2-3 GB). ${m.message || ""}`;
+  else if (m.error) info = `The separation model couldn't be installed. ${m.error}`;
+  else if (m.installed) info = `Separation model ready${m.device ? ", running on " + m.device : ""}.${m.note ? " " + m.note : ""}`;
+  else info = "The separation model installs automatically the first time you open a song.";
+  $("#engineInfo").textContent = info;
+  $("#btnModelReinstall").disabled = !!m.installing;
+  strip.hidden = !(m.installing || m.error);
+  strip.classList.toggle("err", !!m.error && !m.installing);
+  $("#modelMsg").textContent = m.installing ? `Getting the separation model ready: ${pct(m.progress || 0)}` : (m.error || "");
+  $("#modelMsg").title = m.message || "";
+  $("#modelBarWrap").hidden = !m.installing; $("#modelBar").style.width = pct(m.progress || 0);
+  $("#btnModelRetry").hidden = !(m.error && !m.installing);
+  if (m.installing && !modelTimer) {
+    modelTimer = setInterval(async () => {
+      try { const s2 = await api.get("/api/state"); st.state = s2; renderModel(s2); if (!s2.model.installing) { clearInterval(modelTimer); modelTimer = null; } } catch {}
+    }, 1000);
+  }
+}
+async function installModel(force) {
+  try { await api.post("/api/model/install", { force }); renderModel(await api.get("/api/state")); } catch (e) { fail(e); }
+}
+$("#btnModelRetry").onclick = () => installModel(false);
+$("#btnModelReinstall").onclick = () => { if (confirm("Download and reinstall the separation model? This takes a few minutes.")) installModel(true); };
 
 /* ------------------------------------------------------------------ boot */
 (async function boot() {

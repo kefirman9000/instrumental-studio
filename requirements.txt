@@ -1,4 +1,5 @@
 numpy>=1.24
 scipy>=1.10
 pywebview>=4.0      # gives the app its own window (optional: falls back to a Chrome/Edge app window)
-demucs>=4.0         # splits songs into instruments (optional if you import your own stems)
+# The separation model (Demucs + PyTorch) installs itself the first time the app starts,
+# matched to your graphics card. Nothing to add here.
