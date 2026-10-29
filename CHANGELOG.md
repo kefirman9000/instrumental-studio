@@ -1,5 +1,11 @@
 # What's new
 
+## 1.10.0
+
+- **Best hits**: finds each repeated drum sound (kick, snare, hi-hat and cymbals, toms), picks its cleanest hit, and fills in what the vocals took from every smeared one, lined up to the sample and matched to how hard it was played.
+- **Repeated bars**: riffs and patterns played again and again; damaged repeats are replaced by the cleanest one, matched to the beat and level.
+- **Clean up this part**: drag across a glitchy part and get every available fix for it in one go (clicks and gaps, smoothing, rebuilt drum hits and bars), all in Review to hear before applying.
+
 ## 1.9.0
 
 - **Try another model on one part.** Drag across a part, choose **Try another model here**, and pick a model and a track (or all tracks). That model's version of the part goes to Review under **Other takes** to compare before applying. The split is kept with the project, so trying it elsewhere is instant. Suggestions offer this for the part that lost the most.

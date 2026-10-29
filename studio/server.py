@@ -571,6 +571,16 @@ class Handler(BaseHTTPRequestHandler):
                 p.update_settings(d)
             elif path == "/api/glitch_scan":
                 p.scan_glitches(d.get("start"), d.get("end"))
+            elif path in ("/api/hits", "/api/bars", "/api/cleanup"):
+                if path == "/api/hits":
+                    ids = p.make_hits(d["stem"], int(d["sound"]))
+                elif path == "/api/bars":
+                    ids = [p.make_bars(d["stem"], int(d["best"]), [int(v) for v in d["damaged"]])]
+                else:
+                    ids = p.clean_up(float(d["start"]), float(d["end"]))
+                res = self._edited()
+                res["new_ids"] = ids
+                return self._send(200, res)
             elif path == "/api/take":
                 sid = p.make_take(d["stem"], int(d["section"]), int(d["source"]))
                 res = self._edited()

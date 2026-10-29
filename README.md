@@ -120,6 +120,17 @@ The start screen's **Extra models** panel offers two optional downloads, each wi
 
 If one part still sounds rough, drag across it on the Sections bar and use **Try another model here**: pick a model and either all tracks or one instrument. The app splits the song with that model once (it's kept with the project, so trying it on other parts is instant), then adds that model's version of the part to Review under **Other takes**. Listen before and after with all tracks, then apply the ones that sound better. The suggestions also offer this for the part that lost the most.
 
+### Rebuild repeated sounds from their cleanest copy
+
+Songs repeat the same sounds over and over, so for nearly every damaged one there's a clean copy somewhere. The Repairability tab lists them:
+
+- **Best hits**: the app finds each drum sound (kick, snare, hi-hat and cymbals, toms) and every time it's played, picks the cleanest hit, and fills in what the vocals took from each smeared one, lined up to the sample and matched to how hard it was played. Works on the drum track, or on the separate kick, snare, toms and cymbals tracks when you split the drums.
+- **Repeated bars**: riffs and patterns an instrument plays again and again. Damaged repeats are replaced by the cleanest one, matched to the beat and level.
+
+### Clean up a glitchy part
+
+Drag across a part that sounds glitchy or artifacted and choose **Clean up this part**. In one go the app looks for clicks and gaps there, prepares smoothing for the watery separation sound under the vocals, and rebuilds damaged drum hits and repeated bars from their cleanest copies. Everything lands in Review for you to hear first; apply what helps, reject the rest. If it's beyond saving, the same menu can keep the original recording there, try another model, or mute it.
+
 ### Use the best version of repeating parts
 
 When an instrument plays the same part more than once, the **Best versions** list (Repairability tab) offers its cleanest take for the other times, matched bar by bar to the beat and level, so the part sounds the same throughout. You can pick a different take from the list, and each one goes to Review first.

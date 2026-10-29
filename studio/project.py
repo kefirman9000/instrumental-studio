@@ -12,6 +12,7 @@ from .audio import EPS, HOP, N_FFT, load_audio, save_audio, stft, log
 from .repair import match_window, refine_lag, repair_window, bleed_window, smooth_window, MARGIN, XFADE, _window_weight
 from .audio import segment
 from . import glitch as GL
+from . import hits as HT
 
 DISPLAY_BANDS = 96
 DS = 4                      # display columns = analysis frames / DS  (~21.5 columns per second)
@@ -101,6 +102,8 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
+        for cache in ("_sounds_cache", "_dscale"):
+            self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
             np.save(os.path.join(self.root, "stems", k + ".npy"), v)
@@ -365,7 +368,7 @@ class Project:
         for sid, sug in self.suggestions.items():
             if sug["stem"] != k or not self._applied(sug) or sid not in self.patches:
                 continue
-            if sug["type"] in ("take", "alt"):
+            if sug["type"] in ("take", "alt", "bars"):
                 takes.append(sid)
                 continue
             lo, p = self.patches[sid]
@@ -579,7 +582,7 @@ class Project:
             y = self.mix("repaired", region=(da, db))
             return y + self.stems["vocals"][:, da:db] if hear == "song" else y
 
-        if sug["type"] in ("take", "alt") and mode in ("before", "after", "patch"):
+        if sug["type"] in ("take", "alt", "hits", "bars") and mode in ("before", "after", "patch"):
             def render(status):
                 old = sug["status"]
                 sug["status"] = status
@@ -884,6 +887,214 @@ class Project:
             self.patches[sid] = (a, patch.astype(np.float16))
             self.take_w[sid] = (a, W.astype(np.float16))
             return sid
+
+    # ------------------------------------------------------------------ best hits (kick, snare, hi-hat...)
+    PERCUSSIVE = ("drums", "kick", "snare", "toms", "cymbals")
+
+    def _sounds(self, k):
+        cache = self.__dict__.setdefault("_sounds_cache", {})
+        if k not in cache:
+            x = self.stems[k].mean(0)
+            pos, clusters, F, lv, centers = HT.find_sounds(x, self.sr)
+            vc = self._vocal_curve(0, x.shape[0])
+            cov = vc[np.clip(pos + int(0.02 * self.sr), 0, len(vc) - 1)] if len(pos) else np.zeros(0)
+            sounds = []
+            for ci, c in enumerate(clusters):
+                clean = [i for i in c if cov[i] < 0.08]
+                damaged = [i for i in c if cov[i] >= 0.3]
+                if len(clean) < 2 or not damaged:
+                    continue
+                # most typical clean hit: closest to the clean hits' average shape, at a typical level
+                centroid = F[clean].mean(0)
+                med = np.median(lv[clean])
+                score = [float(((F[i] - centroid) ** 2).mean() + 0.05 * abs(lv[i] - med)) for i in clean]
+                best = clean[int(np.argmin(score))]
+                sounds.append({"id": ci, "name": HT.name_sound(F[c].mean(0), centers), "count": len(c),
+                               "clean": len(clean), "damaged": [int(i) for i in damaged], "best": int(best)})
+            cache[k] = {"pos": pos, "next": np.r_[pos[1:], x.shape[0]] if len(pos) else pos, "F": F, "lv": lv,
+                        "sounds": sounds}
+        return cache[k]
+
+    def best_hits(self):
+        if self.stage != "detected":
+            return []
+        out = []
+        for k in self.instruments:
+            if k not in self.PERCUSSIVE:
+                continue
+            sd = self._sounds(k)
+            for snd in sd["sounds"]:
+                t_best = float(sd["pos"][snd["best"]] / self.sr)
+                secs = sorted({self._section_of(sd["pos"][i] / self.sr) for i in snd["damaged"]})
+                existing = [x for x in self.suggestions.values() if x["type"] == "hits" and x["stem"] == k
+                            and x.get("sound") == snd["id"]]
+                out.append({"stem": k, "sound": snd["id"], "name": snd["name"], "count": snd["count"],
+                            "damaged": len(snd["damaged"]), "best_time": t_best, "sections": secs,
+                            "status": existing[0]["status"] if existing else None})
+        return out
+
+    def make_hits(self, k, sound_id, start=None, end=None):
+        """Offer to rebuild every vocal-damaged hit of one repeated sound from its cleanest example,
+        one review item per section. Nothing is applied until the person applies it."""
+        with self.lock:
+            sd = self._sounds(k)
+            snd = next(x for x in sd["sounds"] if x["id"] == sound_id)
+            raw = self.stems[k]
+            n = raw.shape[1]
+            pos, nxt = sd["pos"], sd["next"]
+            bp = int(pos[snd["best"]])
+            best_len = int(min(nxt[snd["best"]] - bp, 0.35 * self.sr))
+            pre = int(0.003 * self.sr)
+            best = raw[:, max(0, bp - pre):bp + best_len]
+            Fb = sd["F"][snd["best"]]
+            B, _ = HT._bands(self.sr)
+            by_sec = {}
+            for i in snd["damaged"]:
+                t_i = pos[i] / self.sr
+                if (start is not None and t_i < start) or (end is not None and t_i >= end):
+                    continue
+                by_sec.setdefault(self._section_of(pos[i] / self.sr), []).append(i)
+            ids = []
+            for si, hits_i in by_sec.items():
+                sec = self.sections[si]
+                a, b = max(0, int(sec["start"] * self.sr) - 2048), min(n, int(sec["end"] * self.sr) + int(0.4 * self.sr))
+                patch = np.zeros((2, b - a), np.float32)
+                used = 0
+                for i in hits_i:
+                    p0 = int(pos[i])
+                    L = int(min(nxt[i] - p0, best_len, 0.25 * self.sr))
+                    if L < int(0.03 * self.sr) or p0 - pre - MARGIN < a or p0 + L + MARGIN > b:
+                        continue
+                    # line the clean hit up with this one, sample-accurately, then fill in only what the
+                    # vocals took (same engine as repairs, with the clean hit as the source)
+                    tgt = raw[:, p0 - pre:p0 + L].mean(0)
+                    sh = HT.align(best.mean(0)[:pre + L], tgt, int(0.002 * self.sr))
+                    lag = (bp - p0) - sh
+                    res = repair_window(raw, self.stems["vocals"], self.inst_sum, p0 - pre, p0 + L, [lag], 1.0, 1.0,
+                                        self.B, self.centers, self.sr, self._level_floor(k))
+                    if res["severity"] < 0.02:
+                        continue                      # this hit wasn't really damaged
+                    lo = res["lo"]
+                    q = res["patch"]
+                    o0, o1 = max(lo, a), min(lo + q.shape[1], b)
+                    patch[:, o0 - a:o1 - a] += q[:, o0 - lo:o1 - lo]
+                    used += 1
+                if not used:
+                    continue
+                hits_i = hits_i[:used] if used < len(hits_i) else hits_i
+                sid = f"h_{k}_{sound_id}_{si}" + ("" if start is None else f"_{int(start * 100)}")
+                self.suggestions[sid] = {
+                    "id": sid, "type": "hits", "stem": k, "sound": sound_id, "status": "pending",
+                    "start": sec["start"], "end": sec["end"], "section": si, "conf": 1.0, "severity": 0.0,
+                    "strength": 1.0, "donors": [{"beat": 0, "start": bp / self.sr, "end": (bp + best_len) / self.sr,
+                                                 "section": self._section_of(bp / self.sr), "match": 1.0, "vocal_overlap": 0.0}],
+                    "note": f"Rebuilds {len(hits_i)} {snd['name']} hit{'s' if used != 1 else ''} the vocals smeared, "
+                            f"filling in what's missing from the cleanest one at {bp / self.sr:.1f}s"}
+                self.suggestions[sid]["note"] = self.suggestions[sid]["note"].replace(f"Rebuilds {len(hits_i)}", f"Rebuilds {used}")
+                self.patches[sid] = (a, patch.astype(np.float16))
+                ids.append(sid)
+            return ids
+
+    # ------------------------------------------------------------------ best bars (riffs and patterns that repeat)
+    def _bar_cover(self, k, wi):
+        F, C, R = self.stem_feats[k]
+        s0, L = self.windows[wi]
+        E = np.exp(F[s0:s0 + L])
+        lost = 0.0
+        for x in self.suggestions.values():
+            if x["type"] == "repair" and x["stem"] == k and x.get("window") == wi:
+                lost = x.get("severity", 0.0)
+        return float(max(3 * lost, (E * R[s0:s0 + L]).sum() / (E.sum() + EPS))), float(np.log(E.sum(1).mean() + EPS))
+
+    def best_bars(self, min_sim=0.85):
+        """Groups of bars where an instrument plays the same thing, with a clean one to copy from."""
+        if self.stage != "detected":
+            return []
+        out = []
+        for k in [x for x in self.instruments if x not in NOT_REPAIRED and x not in self.PERCUSSIVE]:
+            mb, mc = self._dist_scale(k)
+            nb = len(self.windows)
+            info = [self._bar_cover(k, w) for w in range(nb)]
+            loud = np.array([x[1] for x in info])
+            playing = loud > np.percentile(loud, 90) - 6
+            todo = [w for w in range(nb) if playing[w] and self.windows[w][1] == self.windows[0][1] or playing[w]]
+            used = set()
+            for w in sorted(todo, key=lambda w: info[w][0]):          # seed from the cleanest bars
+                if w in used or info[w][0] > 0.08:
+                    continue
+                group = [w]
+                for v in todo:
+                    if v == w or v in used:
+                        continue
+                    d = self._bar_dist(k, w, v)
+                    if d and 1.3 * (1 - (0.5 * d[0] / mb + 0.5 * d[1] / mc)) >= min_sim:
+                        group.append(v)
+                damaged = [v for v in group if info[v][0] >= 0.1]
+                if len(group) >= 3 and damaged:
+                    used.update(group)
+                    existing = self.suggestions.get(f"b_{k}_{w}")
+                    out.append({"stem": k, "best": w, "best_time": self.beat_times[self.windows[w][0]],
+                                "count": len(group), "damaged": damaged,
+                                "status": existing["status"] if existing else None})
+        return out
+
+    def make_bars(self, k, best_w, damaged):
+        """Offer to replace the damaged repeats of a bar with its cleanest repeat (beat-aligned, level-matched)."""
+        with self.lock:
+            raw = self.stems[k]
+            n = raw.shape[1]
+            src_audio = self.render_stem(k)
+            F, C, R = self.stem_feats[k]
+            sb, Lb = self.windows[best_w]
+            starts = [self._window_samples(*self.windows[v]) for v in damaged]
+            a = max(0, min(x[0] for x in starts) - XFADE)
+            b = min(n, max(x[1] for x in starts) + XFADE)
+            acc = np.zeros((2, b - a), np.float32)
+            W = np.zeros(b - a, np.float32)
+            for v, (t0, t1) in zip(damaged, starts):
+                st_, Lt = self.windows[v]
+                if Lt != Lb:
+                    continue
+                rel = (1 - R[st_:st_ + Lt]) * (1 - R[sb:sb + Lb])
+                dlog = float((rel * (F[st_:st_ + Lt] - F[sb:sb + Lb])).sum() / (rel.sum() + EPS))
+                g = float(np.clip(np.exp(dlog / 2), 0.5, 2.0))
+                lag = refine_lag(self.stem_env[k], self.beats[st_], self.beats[st_ + Lt], self.beats[sb])
+                lo, hi = max(a, t0 - XFADE // 2), min(b, t1 + XFADE // 2)
+                w = _window_weight(hi - lo, t0 - lo, t1 - lo)
+                acc[:, lo - a:hi - a] += segment(src_audio, lo + lag, hi + lag) * g * w[None, :]
+                W[lo - a:hi - a] += w
+            W = np.clip(W, 0, 1)
+            sid = f"b_{k}_{best_w}"
+            t_best = self.beat_times[sb]
+            self.suggestions[sid] = {
+                "id": sid, "type": "bars", "stem": k, "status": "pending",
+                "start": starts[0][0] / self.sr, "end": starts[-1][1] / self.sr, "section": self._section_of(starts[0][0] / self.sr),
+                "conf": 1.0, "severity": 0.0, "strength": 1.0, "bars": [int(v) for v in damaged],
+                "donors": [{"beat": int(sb), "start": t_best, "end": self.beat_times[sb + Lb], "section": self._section_of(t_best),
+                            "match": 1.0, "vocal_overlap": 0.0}],
+                "note": f"Replaces {len(damaged)} damaged repeat{'s' if len(damaged) != 1 else ''} of this {k} bar with its "
+                        f"cleanest repeat, at {t_best:.1f}s"}
+            self.patches[sid] = (a, (acc - raw[:, a:b] * W[None, :]).astype(np.float16))
+            self.take_w[sid] = (a, W.astype(np.float16))
+            return sid
+
+    # ------------------------------------------------------------------ clean up one part in one go
+    def clean_up(self, start, end):
+        """Everything that can tidy [start, end): click/gap scan, smoothing under the vocals, rebuilt
+        drum hits and repeated bars that fall in it. All added for review; nothing applied."""
+        ids = []
+        before = set(self.suggestions)
+        self.scan_glitches(start, end)
+        ids += [i for i in self.suggestions if i not in before]
+        ids += self.smooth_range(start, end, [k for k in self.instruments if k not in self.PERCUSSIVE and k not in NOT_REPAIRED])
+        for h in self.best_hits():
+            if any(start <= self.sections[si]["end"] and self.sections[si]["start"] <= end for si in h["sections"]):
+                ids += self.make_hits(h["stem"], h["sound"], start, end)
+        for g in self.best_bars():
+            dmg = [v for v in g["damaged"] if start <= self.beat_times[self.windows[v][0]] < end]
+            if dmg:
+                ids.append(self.make_bars(g["stem"], g["best"], dmg))
+        return ids
 
     # ------------------------------------------------------------------ other models for one part
     def alt_modes(self):
@@ -1353,6 +1564,19 @@ class Project:
                                   "Using that take keeps the part consistent every time it comes round.",
                         "button": "Show them", "action": {"kind": "tab", "tab": "grid"}})
 
+        bh = [h for h in self.best_hits() if not h["status"]]
+        bb = [g for g in self.best_bars() if not g["status"]]
+        if bh or bb:
+            what = []
+            if bh:
+                what.append(f"{sum(h['damaged'] for h in bh)} drum hits ({', '.join(sorted({h['name'] for h in bh}))})")
+            if bb:
+                what.append(f"{sum(len(g['damaged']) for g in bb)} repeated bars")
+            out.append({"id": "best_parts", "title": "Rebuild repeated sounds from their cleanest copy",
+                        "detail": f"{' and '.join(what).capitalize()} repeat elsewhere without singing over them. "
+                                  "The clean copy fills in what the vocals took, so every repeat sounds the same.",
+                        "button": "Show them", "action": {"kind": "tab", "tab": "grid"}})
+
         if self._applied_count() != self.meta.get("glitch_scan_applied", 0):
             out.append({"id": "rescan", "title": "Listen for clicks and dropouts again",
                         "detail": "You've changed repairs since the last check. A quick scan catches any new click or gap.",
@@ -1417,5 +1641,8 @@ class Project:
             "stage": self.stage, "has_original_display": "original" in self.display.get("raw", {}),
             "tips": self.tips(),
             "best_versions": self.best_versions(),
+            "best_hits": self.best_hits(),
+            "best_bars": [{**g, "damaged_times": [self.beat_times[self.windows[v][0]] for v in g["damaged"]]}
+                          for g in self.best_bars()],
             "user_decisions": sum(1 for x in self.suggestions.values() if x["status"] in ("accepted", "rejected")),
         }

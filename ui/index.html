@@ -75,6 +75,7 @@
       <button class="small" data-mode="no_edits">Keep the split, no repairs</button>
       <span class="pop-h" data-split-only>Clean up</span>
       <button class="small" data-act="smooth" data-split-only title="Calms the warbling, watery sound separation leaves under the vocals. You review it before it's applied.">Smooth watery sound here</button>
+      <button class="small" data-act="cleanup" data-split-only title="Finds clicks and gaps, smooths watery sound, and rebuilds damaged drum hits and repeated bars in this part. Everything goes to Review first.">Clean up this part (all of the below)</button>
       <button class="small" data-act="scan" data-split-only>Find clicks and gaps here</button>
       <span class="pop-h" data-split-only>Try another model here</span>
       <div class="alt-row" data-split-only>
@@ -119,6 +120,12 @@
       <h3 class="panel-h">Best versions</h3>
       <p class="help">When an instrument plays the same part more than once, you can use its cleanest take every time, so the part sounds the same throughout. Each one is added to Review for you to listen to first.</p>
       <div id="bestList"></div>
+      <h3 class="panel-h" style="margin-top:14px">Best hits</h3>
+      <p class="help">Drum sounds repeat hundreds of times. Hits the vocals smeared are filled in from the cleanest identical hit.</p>
+      <div id="hitList"></div>
+      <h3 class="panel-h" style="margin-top:14px">Repeated bars</h3>
+      <p class="help">Riffs and patterns an instrument plays again and again. Damaged repeats are replaced by the cleanest one.</p>
+      <div id="barList"></div>
       <hr>
       <h3 class="panel-h">Repairability</h3>
       <p class="help">How badly each instrument was damaged in each section, and how well it can be rebuilt from the same instrument elsewhere in the song. Click a cell to review it.</p>
