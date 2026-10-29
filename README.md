@@ -24,6 +24,7 @@ When you remove the vocals from a song, the instruments playing underneath the s
 
 You do this once. It takes about 10 minutes, most of it waiting for downloads.
 
+
 1. **Download the app.** Go to the [latest release](https://github.com/kefirman9000/instrumental-studio/releases/latest), download **InstrumentalStudio-x.x.x.zip**, and unzip it somewhere you'll find it again, such as your Documents folder.
 
 2. **Install Python** (version 3.10 or newer) from [python.org/downloads](https://www.python.org/downloads/).
@@ -39,28 +40,25 @@ You do this once. It takes about 10 minutes, most of it waiting for downloads.
    ```
    pip install -r requirements.txt
    ```
-   This includes Demucs, the free model that splits songs into instruments. It's a large download (about 2 GB).
-
-   > **Have an NVIDIA graphics card?** Splitting is many times faster on it. Before step 4, install the GPU version of PyTorch using the command [pytorch.org](https://pytorch.org/get-started/locally/) gives you. Macs with Apple silicon use their GPU automatically.
 
 5. **Start it.**
    - Windows: double-click **Start Instrumental Studio (Windows).bat**
    - Mac: double-click **Start Instrumental Studio (Mac).command**. The first time, macOS may block it: right-click it, choose **Open**, then **Open** again.
    - Linux: run `./start.sh` in the terminal
 
-The app opens in its own window.
+The app opens in its own window. The first time, it also downloads and sets up the separation model in the background (about 2–3 GB, a few minutes). It picks the right version for your computer by itself: NVIDIA graphics cards and Apple silicon Macs are used automatically for much faster splitting. You can try the demo song while it finishes.
 
 ## Your first song
 
 ![The start screen, with buttons to open a song, use existing stems, or try the demo](docs/screenshots/welcome.png)
 
-1. Click **Open a song** and choose a file. Splitting takes under a minute with a graphics card, or a few minutes without one.
+1. Click **Open a song** and choose a file. Splitting takes under a minute with a graphics card, or a few minutes without one. If the separation model is still installing, the app waits for it and then carries on.
 2. When it's done, every instrument appears on the timeline. **Red** marks show where the vocals damaged that instrument.
 3. Press **Space** to play. Switch between **Original**, **Raw instrumental** and **Repaired** at the top to compare.
 4. Fixes the app is confident about are already applied. Open the **Review** tab to check the ones waiting for you.
 5. Click **Export** when you're happy.
 
-Not ready to open your own song? Click **Try the demo song** to explore everything first. It doesn't need the splitting model.
+Not ready to open your own song? Click **Try the demo song** to explore everything first. It works right away, even while the separation model is still installing.
 
 ## A quick tour
 
@@ -110,7 +108,7 @@ The **Levels** tab shows how loud every instrument is in every section. Type a n
 
 ![The update settings, with a button to check for updates and a checkbox to install them automatically](docs/screenshots/updates.png)
 
-Go to **Settings → Check for updates**. If a new version exists, you'll see what changed and an **Install update** button. The app restarts when it's done. An update button also appears in the top bar whenever one is ready.
+Click **Check for updates** at the bottom of the start screen, or in **Settings**. If a new version exists, you'll see what changed and an **Install update** button. The app restarts when it's done. An update button also appears in the top bar whenever one is ready.
 
 Tick **Install updates automatically** if you'd like new versions to install by themselves when the app starts.
 
@@ -125,7 +123,7 @@ Updates never touch your songs, projects or exports. The previous version is kep
 
 ## Troubleshooting
 
-**"One more step to split songs" appears when I open a song.** Demucs isn't installed. Run `pip install demucs` in a terminal, then close and reopen the app.
+**"The separation model couldn't be installed."** Click **Try again** on the start screen, or Settings → **Reinstall separation model**. The message says what went wrong; most often it's the internet connection or not enough disk space (it needs about 3 GB). If it says your Python isn't supported, install Python 3.12 or 3.13 from python.org.
 
 **MP3 files won't open.** ffmpeg is missing. Install it (step 3 above) and restart the app, or convert the song to WAV.
 

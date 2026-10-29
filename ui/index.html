@@ -93,6 +93,7 @@
         <select id="sepMode"></select>
       </div>
       <p class="help" id="engineInfo"></p>
+      <button class="ghost" id="btnModelReinstall">Reinstall separation model</button>
       <button class="ghost" id="btnReveal">Show projects folder</button>
       <hr>
       <div class="updates" id="updates">
@@ -120,10 +121,20 @@
     <div class="actions">
       <button class="big primary" id="btnOpenSong"><b>Open a song</b><span>MP3, WAV, FLAC, M4A</span></button>
       <button class="big" id="btnOpenStems"><b>Use stems you already have</b><span>From UVR, Spleeter or another separator</span></button>
-      <button class="big" id="btnDemo"><b>Try the demo song</b><span>No separation model needed</span></button>
+      <button class="big" id="btnDemo"><b>Try the demo song</b><span>Works right away</span></button>
     </div>
     <div class="recent" id="recent"></div>
-    <p class="dim small welcome-ver" id="welcomeVer"></p>
+    <div class="model-strip" id="modelStrip" hidden>
+      <span id="modelMsg"></span>
+      <div class="bar small-bar" id="modelBarWrap"><i id="modelBar"></i></div>
+      <button class="ghost small" id="btnModelRetry" hidden>Try again</button>
+    </div>
+    <div class="welcome-foot">
+      <span class="dim" id="welcomeVer"></span>
+      <button class="ghost small" id="btnWelcomeCheck">Check for updates</button>
+      <span class="dim small" id="welcomeUpdStatus"></span>
+      <button class="primary small" id="btnWelcomeInstall" hidden>Install update</button>
+    </div>
     <input type="file" id="fileSong" accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.aiff,.aif,.opus" hidden>
     <input type="file" id="fileStems" accept="audio/*" multiple hidden>
   </div>
@@ -156,16 +167,7 @@
   </form>
 </dialog>
 
-<dialog id="dlgDemucs">
-  <form method="dialog">
-    <h2>One more step to split songs</h2>
-    <p>Splitting a song into instruments uses Demucs, a free model that runs on your computer. Install it once from a terminal:</p>
-    <pre>pip install demucs</pre>
-    <p>Then close and reopen Instrumental Studio. A computer with an NVIDIA GPU or Apple silicon splits a song in under a minute; on a regular CPU expect several minutes.</p>
-    <p>You can still use stems you already have, or try the demo song.</p>
-    <div class="dlg-actions"><button value="ok" class="primary">Got it</button></div>
-  </form>
-</dialog>
+
 
 <div class="toast" id="toast" hidden></div>
 <audio id="player" preload="auto"></audio>

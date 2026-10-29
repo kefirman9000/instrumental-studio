@@ -1,5 +1,4 @@
 """Source separation with Demucs (runs on your machine; GPU used automatically if present)."""
-import glob
 import os
 import re
 import subprocess
@@ -20,56 +19,81 @@ MODELS = {
 
 
 def demucs_available():
-    try:
-        import demucs  # noqa: F401
-        return True
-    except Exception:
-        return False
+    from .installer import installed
+    return installed()
+
+
+_DEVICE = None
 
 
 def device_info():
+    """(device, human description). Probed once in a subprocess so the app stays light."""
+    global _DEVICE
+    if _DEVICE:
+        return _DEVICE
+    code = ("import torch;"
+            "c=torch.cuda.is_available();"
+            "m=getattr(torch.backends,'mps',None) and torch.backends.mps.is_available();"
+            "print('cuda|'+torch.cuda.get_device_name(0) if c else 'mps|Apple GPU' if m else 'cpu|CPU')")
     try:
-        import torch
-        if torch.cuda.is_available():
-            return "cuda", torch.cuda.get_device_name(0)
-        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-            return "mps", "Apple GPU"
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+        dev, name = r.stdout.strip().split("|", 1)
     except Exception:
-        pass
-    return "cpu", "CPU (slow — expect several minutes per song)"
+        dev, name = "cpu", "CPU"
+    if dev == "cpu":
+        name = "CPU (slow: expect several minutes per song)"
+    _DEVICE = (dev, name)
+    return _DEVICE
 
 
-def _run_demucs(path, model, outdir, device, progress, frac0, frac1):
-    cmd = [sys.executable, "-m", "demucs", "-n", model, "-o", outdir, "-d", device, "--float32", path]
+def _run_model(wav_path, model, outdir, progress, frac0, frac1):
+    cmd = [sys.executable, "-m", "studio.demucs_worker", model, wav_path, outdir, "auto"]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     log("Running: " + " ".join(cmd))
-    p = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
-    tail = []
-    for line in p.stderr:
-        tail = (tail + [line])[-20:]
-        for m in re.finditer(r"(\d+)%\|", line):
-            pct = int(m.group(1)) / 100.0
-            progress(frac0 + (frac1 - frac0) * pct, f"Separating with {model}")
+    progress(frac0, f"Loading {model} (downloads once, about 80-300 MB)")
+    p = subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    tail, passes, done_passes, last = [], 1, 0, 0.0
+    for chunk in iter(lambda: p.stdout.readline(), ""):
+        for line in re.split(r"[\r\n]", chunk):   # tqdm redraws with carriage returns
+            if not line.strip():
+                continue
+            tail = (tail + [line])[-20:]
+            if line.startswith("PASSES"):
+                passes = max(1, int(line.split()[1]))
+                continue
+            if line.startswith("FALLBACK"):
+                progress(None, "The GPU couldn't run this model; continuing on the CPU")
+                continue
+            m = re.search(r"(\d+)%\|", line)
+            if m:
+                pct = int(m.group(1)) / 100.0
+                if pct + 0.2 < last:          # a new model in the bag started
+                    done_passes = min(done_passes + 1, passes - 1)
+                last = pct
+                f = (done_passes + pct) / passes
+                progress(frac0 + (frac1 - frac0) * f, f"Separating with {model}")
     p.wait()
-    if p.returncode != 0:
-        raise RuntimeError("Demucs failed:\n" + "".join(tail))
-    hits = glob.glob(os.path.join(outdir, model, "*", "vocals.wav"))
-    if not hits:
-        raise RuntimeError("Demucs finished but no stems were found.")
-    return os.path.dirname(hits[0])
+    if p.returncode != 0 or not os.path.exists(os.path.join(outdir, "vocals.wav")):
+        raise RuntimeError("Separation failed:\n" + "\n".join(tail[-12:]))
+    return outdir
 
 
 def separate(path, workdir, mode="4stem", progress=lambda f, m: None):
     """Return dict stem_name -> (2, n) float32 array, and the sample rate."""
     if not demucs_available():
-        raise RuntimeError("Demucs is not installed. Run:  pip install demucs   (then restart the app)")
+        raise RuntimeError("The separation model isn't installed yet.")
+    from scipy.io import wavfile
     label, models, stems = MODELS[mode]
-    device, _ = device_info()
+    sr = 44100
+    os.makedirs(workdir, exist_ok=True)
+    audio, _ = load_audio(path, sr)                 # ffmpeg / scipy, not torchaudio
+    wav = os.path.join(workdir, "input.wav")
+    wavfile.write(wav, sr, audio.T.astype(np.float32))
     results = []
     for i, model in enumerate(models):
         a, b = i / len(models), (i + 1) / len(models)
-        d = _run_demucs(path, model, os.path.join(workdir, "demucs"), device, progress, a * 0.95, b * 0.95)
-        results.append(d)
-    out, sr = {}, 44100
+        results.append(_run_model(wav, model, os.path.join(workdir, model), progress, a * 0.97, b * 0.97))
+    out = {}
     for stem in stems:
         arrs = [load_audio(os.path.join(d, stem + ".wav"), sr)[0] for d in results]
         n = min(a.shape[1] for a in arrs)
