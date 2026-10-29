@@ -18,6 +18,7 @@ from . import updater as UP
 from . import installer as INST
 from . import __version__
 from .audio import load_audio, wav_bytes, log
+from . import proc as PR
 from .project import Project
 
 UI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
@@ -65,7 +66,10 @@ _model_lock = threading.Lock()
 
 
 def _probe_device():
-    S.model["device"] = SEP.device_info()[1]
+    try:
+        S.model["device"] = SEP.device_info()[1]
+    except Exception:
+        S.model["device"] = "unknown (couldn't check)"
 
 
 def start_model_install(force=False):
@@ -105,13 +109,58 @@ def _model_plan():
     return S.model["plan"]
 
 
+_extras_checked = [0.0]
+
+
 def extras_state():
+    fresh = time.time() - _extras_checked[0] > 10          # checking the disk on every poll isn't needed
     for key, e in INST.EXTRAS.items():
         st = S.extras.setdefault(key, {"installing": False, "progress": 0.0, "message": "", "error": None})
         st.update(label=e["label"], what=e["what"], size=e["size"])
-        if not st["installing"]:
+        if not st["installing"] and (fresh or "installed" not in st):
             st["installed"] = INST.extra_installed(key)
+    if fresh:
+        _extras_checked[0] = time.time()
     return S.extras
+
+
+# ------------------------------------------------------------------ troubleshooting
+MARKER = os.path.join(HOME, ".starting")
+
+
+def stop_everything():
+    PR.CANCEL.set()
+    n = PR.kill_all()
+    for st in S.extras.values():
+        if st.get("installing"):
+            st.update(installing=False, error="Stopped.")
+    if S.model.get("installing"):
+        S.model.update(installing=False, error="Stopped. Click Try again to start the download again.")
+    return n
+
+
+def clear_model_files():
+    """Delete downloaded separation model weights (they download again on the next split).
+    Leaves other programs' files alone: only Demucs checkpoints (*.th) and this app's own models folder."""
+    removed = 0
+    roots = [os.environ.get("TORCH_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "torch")]
+    if os.name == "nt":
+        roots.append(os.path.join(os.environ.get("LOCALAPPDATA", ""), "torch"))
+    for r in roots:
+        ck = os.path.join(r, "hub", "checkpoints")
+        if os.path.isdir(ck):
+            for f in os.listdir(ck):
+                if f.endswith(".th") or f.endswith(".th.partial") or f.endswith(".partial"):
+                    try:
+                        os.remove(os.path.join(ck, f))
+                        removed += 1
+                    except OSError:
+                        pass
+    mine = os.path.join(HOME, "models")
+    if os.path.isdir(mine):
+        removed += sum(len(fs) for _, _, fs in os.walk(mine))
+        shutil.rmtree(mine, ignore_errors=True)
+    return removed
 
 
 def start_extra_install(key):
@@ -155,12 +204,16 @@ def _wait_for_model():
 def _start_job(fn, *args):
     if S.job["running"]:
         raise RuntimeError("Already working on a song — wait for it to finish.")
-    S.job.update(running=True, progress=0.0, message="Starting", error=None, result=None)
+    PR.CANCEL.clear()
+    S.job.update(running=True, progress=0.0, message="Starting", error=None, result=None, started=time.time(),
+                 stopped=False)
 
     def run():
         try:
             fn(*args)
             S.job.update(progress=1.0, message="Ready")
+        except PR.Stopped:
+            S.job.update(error=None, stopped=True, message="Stopped")
         except Exception as e:
             traceback.print_exc()
             S.job.update(error=str(e), message="Failed")
@@ -423,7 +476,8 @@ class Handler(BaseHTTPRequestHandler):
                     "demucs": SEP.demucs_available(), "device": devname,
                     "models": {k: v[0] for k, v in SEP.MODELS.items()}, "home": HOME,
                     "projects": list_projects(), "model": S.model, "extras": extras_state(), "version": __version__, "repo": UP.REPO,
-                    "update": S.update, "update_prefs": UP.load_prefs(HOME), "just_updated": S.just_updated})
+                    "update": S.update, "update_prefs": UP.load_prefs(HOME), "just_updated": S.just_updated,
+                    "safe": getattr(S, "safe", False)})
             if path == "/api/overview":
                 return self._send(200, {"rev": S.rev, "overview": self._proj().overview()})
             if path == "/api/spectro":
@@ -546,9 +600,36 @@ class Handler(BaseHTTPRequestHandler):
                 prefs.update({k: bool(v) for k, v in d.items() if k in ("check_on_start", "auto_install")})
                 UP.save_prefs(HOME, prefs)
                 return self._send(200, {"ok": True, "prefs": prefs})
-            if path == "/api/update/restart":
-                if S.job["running"]:
-                    return self._send(400, {"error": "Wait for the current song to finish processing, then restart."})
+            if path == "/api/stop":
+                n = stop_everything()
+                return self._send(200, {"ok": True, "stopped": n})
+            if path == "/api/booted":
+                try:
+                    os.remove(MARKER)
+                except OSError:
+                    pass
+                return self._send(200, {"ok": True})
+            if path == "/api/reset":
+                what = d.get("what")
+                if what == "models":
+                    stop_everything()
+                    n = clear_model_files()
+                    return self._send(200, {"ok": True, "message": f"Removed {n} downloaded model file{'s' if n != 1 else ''}. They download again the next time you split a song."})
+                if what == "settings":
+                    try:
+                        os.remove(UP.prefs_path(HOME))
+                    except OSError:
+                        pass
+                    return self._send(200, {"ok": True, "message": "App settings are back to their defaults."})
+                if what == "project":
+                    S.project = None
+                    S.rev += 1
+                    return self._send(200, {"ok": True, "message": "Closed the open song. Your projects are untouched."})
+                return self._send(400, {"error": "Unknown reset."})
+            if path in ("/api/update/restart", "/api/restart"):
+                if S.job["running"] and not d.get("force"):
+                    return self._send(400, {"error": "Something is still running. Press Stop first, or restart anyway."})
+                stop_everything()
                 if S.project:
                     S.project.save()
                 self._send(200, {"ok": True})
@@ -571,6 +652,11 @@ class Handler(BaseHTTPRequestHandler):
                 p.update_settings(d)
             elif path == "/api/glitch_scan":
                 p.scan_glitches(d.get("start"), d.get("end"))
+            elif path == "/api/apply_best":
+                ids = p.apply_best(d.get("kind", "all"), bool(d.get("accept", True)))
+                res = self._edited()
+                res["new_ids"] = ids
+                return self._send(200, res)
             elif path in ("/api/hits", "/api/bars", "/api/cleanup"):
                 if path == "/api/hits":
                     ids = p.make_hits(d["stem"], int(d["sound"]))
@@ -657,14 +743,21 @@ def _startup_update():
             S.update["error"] = str(e)
 
 
-def serve(port=0, just_updated=False):
+def serve(port=0, just_updated=False, safe=False):
     for d in (PROJECTS, EXPORTS, UPLOADS):
         os.makedirs(d, exist_ok=True)
     S.just_updated = just_updated
-    threading.Thread(target=_startup_update, daemon=True).start()
+    S.safe = safe
+    if not safe:
+        threading.Thread(target=_startup_update, daemon=True).start()
     # nothing is downloaded without asking: just find out what the download would be
-    if SEP.demucs_available():
-        S.model["installed"] = True
+    try:
+        S.model["installed"] = SEP.demucs_available()
+    except Exception:
+        S.model["installed"] = False
+    if safe:
+        S.model["device"] = "not checked (safe mode)"
+    elif S.model["installed"]:
         threading.Thread(target=_probe_device, daemon=True).start()
     else:
         threading.Thread(target=_model_plan, daemon=True).start()

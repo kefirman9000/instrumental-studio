@@ -301,3 +301,18 @@ label.check input { margin-top: 3px; }
 
 .alt-row { display: flex; gap: 4px; flex-wrap: wrap; }
 .alt-row select { font-size: 12px; max-width: 100%; flex: 1 1 120px; }
+
+.bulk-best { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 4px; background: var(--bg); }
+.panel-h { display: flex; align-items: center; gap: 8px; }
+.hdr-btn { margin-left: auto; font-weight: 400; }
+.best-item .btns { display: flex; gap: 6px; }
+
+.busy-foot { display: flex; justify-content: space-between; }
+.busy-actions { display: flex; gap: 8px; margin-top: 12px; }
+.safe-banner { border: 1px solid var(--repair); border-radius: var(--radius-m); padding: 10px 12px; margin-top: 20px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.safe-banner span { color: var(--muted); line-height: 1.45; }
+#dlgReset { width: 520px; }
+.reset-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.reset-item div { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.reset-item span { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.stuck { position: fixed; inset: 0; background: #0d1016e6; display: grid; place-items: center; z-index: 60; }

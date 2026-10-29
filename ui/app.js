@@ -3,7 +3,14 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const api = {
-  async get(path) { const r = await fetch(path); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; },
+  async get(path, timeoutMs = 15000) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const r = await fetch(path, { signal: ctl.signal }); const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText); noteAlive(); return j;
+    } catch (e) { if (e.name === "AbortError") { noteStuck(); throw new Error("The app took too long to answer."); } throw e; }
+    finally { clearTimeout(t); }
+  },
   async post(path, body) {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
     const j = await r.json();
@@ -180,12 +187,21 @@ function renderSpeedTip() {
 $("#btnReveal").onclick = () => api.post("/api/reveal", {});
 
 /* ------------------------------------------------------------------ busy */
-function showBusy(f, msg) { $("#busy").hidden = false; $("#busyMsg").textContent = msg; $("#busyBar").style.width = pct(f); $("#busyPct").textContent = pct(f); }
+let busySince = 0;
+function showBusy(f, msg) {
+  if ($("#busy").hidden) busySince = Date.now();
+  const secs = Math.round((Date.now() - busySince) / 1000);
+  $("#busyTime").textContent = secs >= 5 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")} elapsed` : "";
+  $("#btnBusyHelp").hidden = secs < 45;
+  $("#busy").hidden = false; $("#busyMsg").textContent = msg; $("#busyBar").style.width = pct(f); $("#busyPct").textContent = pct(f); }
 function hideBusy() { $("#busy").hidden = true; }
 async function watchJob() {
   for (;;) {
-    const s = await api.get("/api/state");
+    let s;
+    try { s = await api.get("/api/state"); }
+    catch { await new Promise(r => setTimeout(r, 1000)); continue; }
     const j = s.job;
+    if (j.stopped && !j.running) { hideBusy(); toast("Stopped."); if (s.has_project) await openWorkspace(); return; }
     if (j.error) { hideBusy(); fail(new Error(j.error)); return; }
     showBusy(j.progress, j.message || "Working");
     if (!j.running && s.has_project) {
@@ -1077,7 +1093,8 @@ function renderBest() {
   for (const x of list) {
     const d = document.createElement("div"); d.className = "best-item";
     d.innerHTML = `<div class="bi-top"><span class="dot" style="background:${st.ov.colors[x.stem] || "#888"}"></span><b></b><span class="pill"></span></div>
-      <p></p><div class="row"><label>Use take from</label><select></select><button class="small">Add to review</button></div>`;
+      <p></p><div class="row"><label>Use take from</label><select></select></div>
+      <div class="btns"><button class="small primary">Apply</button><button class="small">Add to review</button></div>`;
     d.querySelector("b").textContent = `${x.stem} in ${x.name}`;
     const pill = d.querySelector(".pill");
     pill.textContent = x.status ? statusText({ type: "take", status: x.status }) : `${pct(x.cover)} lost here`;
@@ -1085,48 +1102,70 @@ function renderBest() {
     const sel = d.querySelector("select");
     for (const c of x.candidates) sel.add(new Option(`${c.name}: ${pct(c.similarity)} alike, ${pct(c.cover)} lost`, c.section));
     if (x.source != null) sel.value = x.source;
-    d.querySelector("button").onclick = async () => {
-      try {
-        const r = await api.post("/api/take", { stem: x.stem, section: x.section, source: +sel.value });
-        await applyEdit(r); st.filter = "takes"; st.scope = null; select(r.new_ids[0]);
-        toast("Added to Review. Listen to before and after with all tracks, then Apply.");
-      } catch (e) { fail(e); }
-    };
+    const [ap, rv] = d.querySelectorAll(".btns button");
+    ap.onclick = () => addFixes("/api/take", { stem: x.stem, section: x.section, source: +sel.value }, true);
+    rv.onclick = () => addFixes("/api/take", { stem: x.stem, section: x.section, source: +sel.value }, false);
     w.append(d);
   }
 }
+// Create fixes and either apply them right away or queue them for review; either way stay on this tab
+async function addFixes(path, body, accept) {
+  try {
+    const r = await api.post(path, body);
+    if (accept && r.new_ids.length) {
+      await applyEdit(await api.post("/api/status", { ids: r.new_ids, status: "accepted" }));
+    } else await applyEdit(r);
+    const n = r.new_ids.length;
+    if (!n) return toast("Nothing there was damaged enough to rebuild.");
+    toast(accept ? `Applied ${n} fix${n === 1 ? "" : "es"}. Undo takes ${n === 1 ? "it" : "them"} back.`
+                 : `Added ${n} item${n === 1 ? "" : "s"} to Review.`,
+      { action: ["Show in Review", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
+  } catch (e) { fail(e); }
+}
+async function applyBest(kind, accept) {
+  try {
+    const r = await api.post("/api/apply_best", { kind, accept });
+    await applyEdit(r);
+    const n = r.new_ids.length;
+    if (!n) return toast("Nothing left to rebuild there.");
+    toast(accept ? `Applied ${n} repeated-part fix${n === 1 ? "" : "es"}. Undo takes them all back in one step.`
+                 : `Added ${n} item${n === 1 ? "" : "s"} to Review.`,
+      { ms: 8000, action: ["Show in Review", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
+  } catch (e) { fail(e); }
+}
+$$("#bulkBest button, .hdr-btn").forEach(b => b.onclick = () => applyBest(b.dataset.kind, b.dataset.accept === "1"));
+
 function renderHitsBars() {
   const ov = st.ov, hl = $("#hitList"), bl = $("#barList");
   if (ov.stage !== "detected") { hl.innerHTML = bl.innerHTML = `<p class="help">Available after Find damage.</p>`; return; }
   const row = (title, pillText, body, onAdd, color) => {
     const d = document.createElement("div"); d.className = "best-item";
-    d.innerHTML = `<div class="bi-top"><span class="dot" style="background:${color}"></span><b></b><span class="pill"></span></div><p></p><button class="small">Add to review</button>`;
+    d.innerHTML = `<div class="bi-top"><span class="dot" style="background:${color}"></span><b></b><span class="pill"></span></div><p></p>
+      <div class="btns"><button class="small primary">Apply</button><button class="small">Add to review</button></div>`;
     d.querySelector("b").textContent = title; d.querySelector(".pill").textContent = pillText; d.querySelector("p").textContent = body;
-    d.querySelector("button").onclick = onAdd; return d;
+    const [ap, rv] = d.querySelectorAll("button");
+    ap.onclick = () => onAdd(true); rv.onclick = () => onAdd(false);
+    return d;
   };
-  const added = async (path, body) => {
-    try {
-      const r = await api.post(path, body); await applyEdit(r);
-      if (!r.new_ids.length) return toast("Nothing there was damaged enough to rebuild.");
-      st.filter = "all"; st.scope = null; select(r.new_ids[0]);
-      toast(`${r.new_ids.length} item${r.new_ids.length === 1 ? "" : "s"} added to Review. Listen with all tracks, then Apply.`);
-    } catch (e) { fail(e); }
-  };
+  const added = (path, body) => async accept => addFixes(path, body, accept);
   hl.innerHTML = (ov.best_hits || []).length ? "" : `<p class="help">No smeared drum hits found${ov.stems.some(k => ["drums", "kick", "snare", "toms", "cymbals"].includes(k)) ? "" : " (no drum track)"}.</p>`;
   for (const h of ov.best_hits || []) {
     hl.append(row(`${nice(h.stem)}: ${h.name}`, h.status ? statusText({ type: "hits", status: h.status }) : `${h.damaged} under vocals`,
-      `${h.count} hits in the song; cleanest at ${fmtP(h.best_time)}.`, () => added("/api/hits", { stem: h.stem, sound: h.sound }),
+      `${h.count} hits in the song; cleanest at ${fmtP(h.best_time)}.`, added("/api/hits", { stem: h.stem, sound: h.sound }),
       ov.colors[h.stem] || "#888"));
   }
   bl.innerHTML = (ov.best_bars || []).length ? "" : `<p class="help">No damaged repeats of a bar found.</p>`;
   for (const g of ov.best_bars || []) {
     bl.append(row(`${nice(g.stem)} bar from ${fmtP(g.best_time)}`, g.status ? statusText({ type: "bars", status: g.status }) : `${g.damaged.length} damaged`,
       `Played ${g.count} times; damaged at ${g.damaged_times.map(fmtP).join(", ")}.`,
-      () => added("/api/bars", { stem: g.stem, best: g.best, damaged: g.damaged }), ov.colors[g.stem] || "#888"));
+      added("/api/bars", { stem: g.stem, best: g.best, damaged: g.damaged }), ov.colors[g.stem] || "#888"));
   }
 }
 function renderGrid() {
   renderBest(); renderHitsBars();
+  const any = st.ov.stage === "detected" && ((st.ov.best_versions || []).some(x => !x.status) || (st.ov.best_hits || []).some(x => !x.status) || (st.ov.best_bars || []).some(x => !x.status));
+  $("#bulkBest").hidden = !any;
+  $$(".hdr-btn").forEach(b => (b.hidden = st.ov.stage !== "detected"));
   const ov = st.ov, w = $("#gridWrap");
   if (ov.stage !== "detected") { w.innerHTML = `<p class="help">This fills in after step 3, Find damage.</p>`; return; }
   const STATE = { clean: "No vocals", undamaged: "Undamaged", repaired: "Repaired", repairable: "Repairable", partial: "Partly", hard: "Hard to fix" };
@@ -1419,10 +1458,56 @@ $("#btnModelReinstall").onclick = () => {
 $("#modelPill").onclick = () => { if (!$("#welcome").hidden) { const c = $("#modelCard"); c.classList.add("attention"); setTimeout(() => c.classList.remove("attention"), 1500); return; }
   stopPreview(); player.pause(); showWelcome(true); };
 
+/* ------------------------------------------------------------------ troubleshooting */
+let stuckCount = 0, stuckDismissed = 0;
+function noteAlive() { stuckCount = 0; if (!$("#stuck").hidden) $("#stuck").hidden = true; }
+function noteStuck() {
+  stuckCount++;
+  if (stuckCount >= 2 && Date.now() - stuckDismissed > 60000) {
+    $("#stuck").hidden = false;
+    $("#stuckHint").textContent = native() ? "" : "If Restart doesn't work, close this window and start the app again.";
+  }
+}
+async function restartNow() {
+  if (native() && native().restart) { try { await native().restart(); return; } catch {} }
+  try { await api.post("/api/restart", { force: true }); showBusy(1, "Restarting…"); } catch (e) { fail(e); }
+}
+$("#btnStuckRestart").onclick = restartNow;
+$("#btnStuckWait").onclick = () => { $("#stuck").hidden = true; stuckDismissed = Date.now(); };
+$("#btnStop").onclick = async () => { try { await api.post("/api/stop"); $("#busyMsg").textContent = "Stopping…"; } catch (e) { fail(e); } };
+function openTrouble() { $("#resetLog").textContent = ""; $("#dlgReset").showModal(); }
+$("#btnBusyHelp").onclick = openTrouble;
+$("#btnTrouble").onclick = openTrouble;
+$$("[data-trouble]").forEach(b => (b.onclick = openTrouble));
+$("#resetClose").onclick = () => $("#dlgReset").close();
+$$("[data-reset]").forEach(b => b.onclick = async () => {
+  const what = b.dataset.reset, log = $("#resetLog");
+  try {
+    if (what === "stop") { const r = await api.post("/api/stop"); log.textContent = r.stopped ? `Stopped ${r.stopped} background task${r.stopped === 1 ? "" : "s"}.` : "Nothing was running."; return; }
+    if (what === "restart") { $("#dlgReset").close(); return restartNow(); }
+    if (what === "reinstall") {
+      if (!confirm("Download and set up the separation model again? This takes a few minutes.")) return;
+      await api.post("/api/stop"); await installModel(true); log.textContent = "Reinstalling. Watch the light on the start screen."; return;
+    }
+    if (what === "settings") { try { localStorage.clear(); } catch {} }
+    if (what === "project") { stopPreview(); player.pause(); }
+    const r = await api.post("/api/reset", { what });
+    log.textContent = r.message || "Done.";
+    if (what === "project") { $("#dlgReset").close(); showWelcome(true); }
+    refreshState().then(renderUpdate);
+  } catch (e) { log.textContent = e.message; }
+});
+
 /* ------------------------------------------------------------------ boot */
 (async function boot() {
   try {
-    const s = await refreshState();
+    let s;
+    for (let i = 0; ; i++) {
+      try { s = await refreshState(); break; }
+      catch (e) { if (i >= 2) throw e; await new Promise(r => setTimeout(r, 1500)); }
+    }
+    $("#safeBanner").hidden = !s.safe;
+    api.post("/api/booted").catch(() => {});      // tells the app this start finished fine
     renderUpdate(s); pollUpdate(60000);
     if (s.job.running) { watchJob(); return; }
     if (s.has_project) { await openWorkspace(); return; }

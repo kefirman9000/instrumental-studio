@@ -1078,6 +1078,27 @@ class Project:
             self.take_w[sid] = (a, W.astype(np.float16))
             return sid
 
+    # ------------------------------------------------------------------ all repeated parts in one go
+    def apply_best(self, kind="all", accept=True):
+        """Create every best-version / best-hit / repeated-bar fix at once and, if accept, apply them all
+        (one undo step). Returns the ids."""
+        ids = []
+        if kind in ("all", "versions"):
+            for x in self.best_versions():
+                if not x["status"]:
+                    ids.append(self.make_take(x["stem"], x["section"], x["best"]["section"]))
+        if kind in ("all", "hits"):
+            for h in self.best_hits():
+                if not h["status"]:
+                    ids += self.make_hits(h["stem"], h["sound"])
+        if kind in ("all", "bars"):
+            for g in self.best_bars():
+                if not g["status"]:
+                    ids.append(self.make_bars(g["stem"], g["best"], g["damaged"]))
+        if accept and ids:
+            self.set_status(ids, "accepted", f"Applied {len(ids)} repeated-part fix(es)")
+        return ids
+
     # ------------------------------------------------------------------ clean up one part in one go
     def clean_up(self, start, end):
         """Everything that can tidy [start, end): click/gap scan, smoothing under the vocals, rebuilt

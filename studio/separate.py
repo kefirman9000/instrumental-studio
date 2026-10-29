@@ -43,7 +43,7 @@ def _run_extra(args, progress, frac0, frac1, label):
     progress(frac0, label + " (the model downloads the first time)")
     p = proc.popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail = []
-    for chunk in iter(lambda: p.stdout.readline(), ""):
+    for chunk in proc.lines(p, what=label):
         for line in re.split(r"[\r\n]", chunk):
             if not line.strip():
                 continue
@@ -74,7 +74,7 @@ def device_info():
             "m=getattr(torch.backends,'mps',None) and torch.backends.mps.is_available();"
             "print('cuda|'+torch.cuda.get_device_name(0) if c else 'mps|Apple GPU' if m else 'cpu|CPU')")
     try:
-        r = proc.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+        r = proc.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=45)
         dev, name = r.stdout.strip().split("|", 1)
     except Exception:
         dev, name = "cpu", "CPU"
@@ -91,7 +91,7 @@ def _run_model(wav_path, model, outdir, progress, frac0, frac1):
     progress(frac0, f"Loading {model} (downloads once, about 80-300 MB)")
     p = proc.popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail, passes, done_passes, last = [], 1, 0, 0.0
-    for chunk in iter(lambda: p.stdout.readline(), ""):
+    for chunk in proc.lines(p, what=f"Splitting with {model}"):
         for line in re.split(r"[\r\n]", chunk):   # tqdm redraws with carriage returns
             if not line.strip():
                 continue

@@ -45,6 +45,13 @@ class JsApi:
     def choose_folder(self):
         return self._dialog("folder")
 
+    def restart(self):
+        """Works even if the app's server is stuck, because it runs in the window's own process."""
+        from studio import updater, proc
+        proc.kill_all()
+        updater.relaunch()
+        return True
+
 
 def find_chromium():
     cands = []
@@ -69,6 +76,7 @@ def main():
     ap.add_argument("--browser", action="store_true", help="open in your default browser instead of a window")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--after-update", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--safe", action="store_true", help="start without update checks or hardware probes")
     args = ap.parse_args()
 
     # Started without a console (pythonw / the .pyw launcher): send messages to a log file instead
@@ -79,7 +87,17 @@ def main():
         sys.stderr = sys.stderr or logf
 
     from studio.updater import RESTART
-    httpd, url = serve(args.port, just_updated=args.after_update)
+    # If the last start never reached the point where the window showed up, start in safe mode:
+    # no update check, no graphics-card probe. The window removes the marker once it has loaded.
+    marker = os.path.join(HOME, ".starting")
+    safe = args.safe or os.path.exists(marker)
+    try:
+        os.makedirs(HOME, exist_ok=True)
+        with open(marker, "w") as f:
+            f.write(str(time.time()))
+    except OSError:
+        pass
+    httpd, url = serve(args.port, just_updated=args.after_update, safe=safe)
     print(f"{TITLE} running at {url}  (projects in {HOME})")
 
     def on_restart(close):

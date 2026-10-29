@@ -117,13 +117,18 @@
       <div class="list" id="sugList"></div>
     </div>
     <div class="tab" id="tab-grid" hidden>
-      <h3 class="panel-h">Best versions</h3>
+      <div class="bulk-best" id="bulkBest">
+        <b>All repeated parts</b>
+        <span class="dim small">Rebuild everything listed below in one go: best versions, drum hits and repeated bars.</span>
+        <div class="row"><button class="primary small" data-kind="all" data-accept="1">Apply all</button><button class="small" data-kind="all" data-accept="0">Add all to Review</button></div>
+      </div>
+      <h3 class="panel-h">Best versions <button class="ghost small hdr-btn" data-kind="versions" data-accept="1">Apply all</button></h3>
       <p class="help">When an instrument plays the same part more than once, you can use its cleanest take every time, so the part sounds the same throughout. Each one is added to Review for you to listen to first.</p>
       <div id="bestList"></div>
-      <h3 class="panel-h" style="margin-top:14px">Best hits</h3>
+      <h3 class="panel-h" style="margin-top:14px">Best hits <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button></h3>
       <p class="help">Drum sounds repeat hundreds of times. Hits the vocals smeared are filled in from the cleanest identical hit.</p>
       <div id="hitList"></div>
-      <h3 class="panel-h" style="margin-top:14px">Repeated bars</h3>
+      <h3 class="panel-h" style="margin-top:14px">Repeated bars <button class="ghost small hdr-btn" data-kind="bars" data-accept="1">Apply all</button></h3>
       <p class="help">Riffs and patterns an instrument plays again and again. Damaged repeats are replaced by the cleanest one.</p>
       <div id="barList"></div>
       <hr>
@@ -157,6 +162,9 @@
       <hr>
       <p class="help" id="engineInfo"></p>
       <button class="ghost" id="btnModelReinstall">Reinstall separation model</button>
+      <hr>
+      <div class="setting"><label>Troubleshooting</label><span class="help">If the app hangs, a download seems stuck, or splitting keeps failing.</span></div>
+      <button class="ghost" id="btnTrouble">Troubleshooting and reset</button>
       <button class="ghost" id="btnReveal">Show projects folder</button>
       <hr>
       <div class="updates" id="updates">
@@ -214,11 +222,17 @@
     </div>
     <p class="drop-hint">You can also drag a song, or a full set of stems, straight into this window.</p>
     <div class="recent" id="recent"></div>
+    <div class="safe-banner" id="safeBanner" hidden>
+      <b>Started in safe mode</b>
+      <span>The last start didn't finish, so update checks and the graphics-card check were skipped this time. If it keeps happening, the troubleshooting options can help.</span>
+      <button class="small" data-trouble>Troubleshooting and reset</button>
+    </div>
     <div class="welcome-foot">
       <span class="dim" id="welcomeVer"></span>
       <button class="ghost small" id="btnWelcomeCheck">Check for updates</button>
       <span class="dim small" id="welcomeUpdStatus"></span>
       <button class="primary small" id="btnWelcomeInstall" hidden>Install update</button>
+      <button class="ghost small" data-trouble>Trouble? Reset options</button>
     </div>
     <input type="file" id="fileSong" accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg,.aiff,.aif,.opus" hidden>
     <input type="file" id="fileStems" accept="audio/*" multiple hidden>
@@ -229,7 +243,8 @@
   <div class="busy-card">
     <div class="busy-msg" id="busyMsg">Working</div>
     <div class="bar"><i id="busyBar"></i></div>
-    <div class="dim small" id="busyPct"></div>
+    <div class="busy-foot"><span class="dim small" id="busyPct"></span><span class="dim small" id="busyTime"></span></div>
+    <div class="busy-actions"><button class="small" id="btnStop">Stop</button><button class="ghost small" id="btnBusyHelp" hidden>Having trouble?</button></div>
   </div>
 </div>
 
@@ -255,6 +270,30 @@
 
 
 
+
+<dialog id="dlgReset">
+  <div class="reset-body">
+    <h2>Troubleshooting and reset</h2>
+    <p>Try these in order. None of them touch your songs, projects or exports.</p>
+    <div class="reset-item"><div><b>Stop what's running</b><span>Stops splitting, downloads and anything else in the background.</span></div><button class="small" data-reset="stop">Stop</button></div>
+    <div class="reset-item"><div><b>Restart the app</b><span>Closes and reopens the window.</span></div><button class="small" data-reset="restart">Restart</button></div>
+    <div class="reset-item"><div><b>Clear downloaded model files</b><span>Deletes the separation model files so they download fresh the next time you split. Fixes a download that got cut off.</span></div><button class="small" data-reset="models">Clear</button></div>
+    <div class="reset-item"><div><b>Reinstall the separation model</b><span>Downloads and sets up PyTorch and Demucs again (a few GB).</span></div><button class="small" data-reset="reinstall">Reinstall</button></div>
+    <div class="reset-item"><div><b>Reset app settings</b><span>Update and display preferences go back to their defaults.</span></div><button class="small" data-reset="settings">Reset</button></div>
+    <div class="reset-item"><div><b>Close the open song</b><span>Back to the start screen. The project stays saved in Songs.</span></div><button class="small" data-reset="project">Close</button></div>
+    <p class="dim small" id="resetLog"></p>
+    <div class="dlg-actions"><button class="ghost" id="resetClose">Done</button></div>
+  </div>
+</dialog>
+
+<div class="stuck" id="stuck" hidden>
+  <div class="busy-card">
+    <div class="busy-msg">The app isn't responding</div>
+    <p class="dim small">Something in the background is taking too long. Restarting usually fixes it; your work is saved.</p>
+    <div class="busy-actions"><button class="primary small" id="btnStuckRestart">Restart the app</button><button class="ghost small" id="btnStuckWait">Keep waiting</button></div>
+    <p class="dim small" id="stuckHint"></p>
+  </div>
+</div>
 
 <div class="drop-zone" id="dropZone" hidden>
   <div class="drop-card">

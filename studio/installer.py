@@ -79,7 +79,7 @@ def _pip(args, progress, lo, hi, label):
     cmd = base + args
     child = proc.popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail, cur = [], label
-    for line in child.stdout:
+    for line in proc.lines(child, stall=1200, what="The download"):
         tail = (tail + [line])[-30:]
         m = re.match(r"\s*Progress (\d+) of (\d+)", line)
         if m and int(m.group(2)) > 0:
