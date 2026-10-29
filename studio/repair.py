@@ -214,3 +214,47 @@ def bleed_window(stem, vocals, s0, s1, strength=1.0):
     patch = (out - orig) * w[None, :]
     return {"lo": lo, "patch": patch, "score": float(np.clip(excess * 2, 0, 1)),
             "removed_db": float(10 * np.log10((patch ** 2).sum() / ((orig ** 2).sum() + EPS) + 1e-12))}
+
+
+# ----------------------------------------------------------------------------- "watery" separation sound
+def _watery(S, w):
+    """How much a spectrogram twinkles: average jump of each cell away from its neighbourhood
+    median (log scale), weighted by w. Separation's 'musical noise' scores high; real notes don't."""
+    from scipy.ndimage import median_filter
+    L = np.log(S + 1e-6)
+    dev = np.abs(L - median_filter(L, size=(3, 5)))
+    return float((dev * w).sum() / (w.sum() + EPS))
+
+
+def artifact_score(stem, vocals, inst_sum, s0, s1, sr):
+    lo, hi = s0, s1
+    S = np.abs(stft(segment(stem, lo, hi).mean(0)))
+    V = np.abs(stft(segment(vocals, lo, hi).mean(0)))
+    I = np.abs(stft(segment(inst_sum, lo, hi).mean(0)))
+    r = V ** 2 / (V ** 2 + I ** 2 + EPS)
+    f = np.fft.rfftfreq(N_FFT, 1.0 / sr)[:, None]
+    band = (f > 300) & (f < 8000)
+    energy = S ** 2 / (S ** 2).max(initial=EPS)
+    w_cov = band * (r > 0.3) * np.sqrt(energy)
+    w_all = band * np.sqrt(energy)
+    return _watery(S, w_cov) if w_cov.sum() > 1 else 0.0, _watery(S, w_all), float((band * (r > 0.3)).mean())
+
+
+def smooth_window(stem, vocals, inst_sum, s0, s1, strength=1.0):
+    """Calm the twinkling under the vocals: blend each covered cell toward its neighbourhood median."""
+    from scipy.ndimage import median_filter
+    lo, hi = s0 - XFADE // 2 - MARGIN, s1 + XFADE // 2 + MARGIN
+    n = hi - lo
+    V = np.abs(stft(segment(vocals, lo, hi).mean(0)))
+    I = np.abs(stft(segment(inst_sum, lo, hi).mean(0)))
+    r = gaussian_filter(V ** 2 / (V ** 2 + I ** 2 + EPS), (2, 1))
+    alpha = np.clip(strength * np.sqrt(np.clip((r - 0.1) / 0.9, 0, 1)), 0, 1) * 0.85
+    out = np.zeros((stem.shape[0], n), np.float32)
+    for c in range(stem.shape[0]):
+        X = stft(segment(stem[c], lo, hi))
+        M = np.abs(X)
+        Mm = median_filter(M, size=(3, 5))
+        out[c] = istft((M * (1 - alpha) + Mm * alpha) * np.exp(1j * np.angle(X)), n)
+    orig = segment(stem, lo, hi)
+    w = _window_weight(n, s0 - lo, s1 - lo)
+    return {"lo": lo, "patch": ((out - orig) * w[None, :]).astype(np.float32)}

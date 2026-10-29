@@ -384,7 +384,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._audio(data)
             if path == "/api/preview":
                 p = self._proj()
-                y = p.preview(q["id"], q.get("mode", "after"), solo=q.get("solo", "1") == "1")
+                hear = q.get("hear") or ("solo" if q.get("solo", "0") == "1" else "mix")
+                y = p.preview(q["id"], q.get("mode", "after"), hear=hear if hear in ("solo", "mix", "song") else "mix")
                 return self._audio(wav_bytes(y, p.sr))
             if path == "/api/candidates":
                 return self._send(200, {"candidates": self._proj().donor_candidates(q["id"])})
@@ -485,6 +486,13 @@ class Handler(BaseHTTPRequestHandler):
                 p.undo()
             elif path == "/api/settings":
                 p.update_settings(d)
+            elif path == "/api/glitch_scan":
+                p.scan_glitches(d.get("start"), d.get("end"))
+            elif path == "/api/smooth":
+                ids = p.smooth_range(float(d["start"]), float(d["end"]), d.get("stems"))
+                res = self._edited()
+                res["new_ids"] = ids
+                return self._send(200, res)
             elif path == "/api/rename_section":
                 p.rename_section(d["index"], d["name"])
             elif path == "/api/export":

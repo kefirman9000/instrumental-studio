@@ -272,3 +272,16 @@ label.check input { margin-top: 3px; }
 .tip b { display: block; margin-bottom: 3px; }
 .tip p { margin: 0 0 7px; color: var(--muted); line-height: 1.45; font-size: 12px; }
 .pill.kept { color: #9fc4ff; border-color: #9fc4ff66; }
+
+.ab { flex-wrap: wrap; }
+.hear { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; }
+.hear > span { color: var(--muted); min-width: 64px; }
+
+.keep-pop .pop-h { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+.mute-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.mute-row button { flex: none; }
+.lvl .mbtn { padding: 0 6px; height: 20px; font-size: 11px; font-weight: 700; }
+.lvl .mbtn.on { background: var(--damage); color: #1a0710; border-color: transparent; }
+.lvl-row { display: flex; gap: 4px; align-items: center; }
+#levelsWrap { overflow-x: auto; }
+.lvl input { width: 42px; }
