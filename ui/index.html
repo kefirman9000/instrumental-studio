@@ -21,6 +21,7 @@
     </div>
   </div>
   <div class="spacer"></div>
+  <button class="model-pill" id="modelPill" title="Separation model status"><i class="light small off" id="modelPillLight"></i><span id="modelPillText">Model</span></button>
   <button class="update-pill" id="updPill" hidden></button>
   <button class="ghost" id="btnUndo" disabled title="Undo (Ctrl+Z)">Undo</button>
   <button class="primary" id="btnExport" disabled>Export</button>
@@ -118,18 +119,34 @@
   <div class="welcome-inner">
     <h1>Make an instrumental, then fix what the vocals took with them.</h1>
     <p class="lede">The song is split into drums, bass and the other instruments. Wherever the singing covered an instrument, the app finds the same instrument playing the same part elsewhere in the song and uses it to rebuild what was lost.</p>
+    <section class="model-card" id="modelCard" aria-live="polite">
+      <span class="light off" id="modelLight" aria-hidden="true"></span>
+      <div class="model-text">
+        <b id="modelTitle">Separation model</b>
+        <span id="modelDetail"></span>
+        <div class="bar small-bar" id="modelBarWrap" hidden><i id="modelBar"></i></div>
+      </div>
+      <button class="primary" id="btnModelGet" hidden>Download</button>
+      <button class="ghost" id="btnModelRetry" hidden>Try again</button>
+    </section>
+
+    <h2 class="start-h">Start a project</h2>
     <div class="actions">
-      <button class="big primary" id="btnOpenSong"><b>Open a song</b><span>Or drag it into this window</span></button>
-      <button class="big" id="btnOpenStems"><b>Use stems you already have</b><span>From UVR, Spleeter or another separator</span></button>
-      <button class="big" id="btnDemo"><b>Try the demo song</b><span>Works right away</span></button>
+      <button class="big" id="btnOpenSong">
+        <b>Split a song</b><span>Separates the vocals from the instruments, then finds the damage</span>
+        <em class="needs" id="needsModel"><i class="light small off"></i><span>Needs the separation model</span></em>
+      </button>
+      <button class="big" id="btnOpenStems">
+        <b>Import stems</b><span>Already split with UVR, Spleeter or another tool. Select all the files, including the vocals.</span>
+        <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
+      </button>
+      <button class="big" id="btnDemo">
+        <b>Try the demo song</b><span>A short song with known damage, to explore the app</span>
+        <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
+      </button>
     </div>
+    <p class="drop-hint">You can also drag a song, or a full set of stems, straight into this window.</p>
     <div class="recent" id="recent"></div>
-    <div class="model-strip" id="modelStrip" hidden>
-      <span id="modelMsg"></span>
-      <div class="bar small-bar" id="modelBarWrap"><i id="modelBar"></i></div>
-      <button class="ghost small" id="btnModelRetry" hidden>Try again</button>
-      <button class="small" id="btnModelGet" hidden>Download</button>
-    </div>
     <div class="welcome-foot">
       <span class="dim" id="welcomeVer"></span>
       <button class="ghost small" id="btnWelcomeCheck">Check for updates</button>
@@ -170,15 +187,7 @@
 
 
 
-<dialog id="dlgModel">
-  <form method="dialog">
-    <h2>Download the separation model?</h2>
-    <p>Splitting a song into instruments uses Demucs, a free model that runs on your own computer. It needs a one-time download of <b id="mdlSize"></b> and will be set up to run on <b id="mdlRunsOn"></b>.</p>
-    <p id="mdlNote" hidden></p>
-    <p>It downloads from the official Python package index and PyTorch, then the model files from Meta's servers. It takes a few minutes. You can keep using the app meanwhile.</p>
-    <div class="dlg-actions"><button value="cancel" class="ghost">Not now</button><button value="ok" class="primary" id="mdlOk">Download</button></div>
-  </form>
-</dialog>
+
 
 <div class="drop-zone" id="dropZone" hidden>
   <div class="drop-card">
