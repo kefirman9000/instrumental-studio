@@ -1,5 +1,13 @@
 # What's new
 
+## 1.4.0
+
+Faster everywhere:
+
+- Finding and repairing damage is about 3x faster (24 s down to 8 s for the demo song on a 2-core computer, and more on computers with more cores): repairs now run in parallel, use a faster FFT, and skip work that was being repeated for every bar.
+- Re-opening a song you've already split reuses the earlier split instead of splitting it again.
+- Without a graphics card, splitting uses several CPU cores at once, and new songs start on **Fast** separation (about 4x quicker than Best quality). Settings explains the speed of each option.
+
 ## 1.3.0
 
 - New **Separation model** panel on the start screen with a status light: red when it isn't installed, amber while downloading, green when ready. It shows the download size and a **Download** button. The same light sits in the top-right corner of the window.
