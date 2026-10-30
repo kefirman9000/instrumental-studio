@@ -1,5 +1,9 @@
 # What's new
 
+## 1.22.4
+
+- **Tidier steps bar.** The vinyl controls in step 1 are now one small **Vinyl crackle…** button that opens a small window with the strength and the actions (step 1 still says when crackle was removed). *Split and build* is now a smaller **Split + build** next to Split.
+
 ## 1.22.3
 
 - **Remove vinyl crackle after splitting.** Once a song is split, step 1 has **Remove from the instruments**: it cleans the clicks and crackle out of each instrument track directly, without splitting again, so repairs and decisions stay. The fixes go to Review under Clicks and smoothing to hear first, and Build the best instrumental applies them with the other click fixes. (*Remove and split again* still cleans the recording itself and re-splits, which is the most thorough.)
