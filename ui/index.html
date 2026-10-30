@@ -106,6 +106,10 @@
       <button data-tab="settings" role="tab">Settings</button>
     </nav>
     <div class="tab" id="tab-review">
+      <div class="auto-card" id="autoCard" hidden>
+        <div><b>Build the best instrumental</b><span>Works through every kind of fix in the best order, picks one where they overlap, checks everything against the original, and applies it all as one step you can undo.</span></div>
+        <button class="primary small" data-auto>Build it</button>
+      </div>
       <details class="tips" id="tipsBox" open>
         <summary>Make the fixed parts match the rest <span class="tip-count" id="tipCount"></span><span class="warm-chip" id="warmChip" hidden><span class="spin small"></span>Working out more suggestions</span></summary>
         <div id="tipsList"></div>
@@ -128,6 +132,7 @@
     <div class="tab" id="tab-grid" hidden>
       <div class="row" style="margin-bottom:10px"><button class="small" id="btnQuality" hidden>Score how clean each section is</button></div>
       <div class="bulk-best" id="bulkBest">
+        <div class="row" style="margin-bottom:8px"><button class="primary small" data-auto title="Every kind of fix, conflicts worked out, checked against the original, one undo step">Build the best instrumental</button><span class="dim small">Recommended instead of Apply all: it picks one fix where they overlap.</span></div>
         <b>All repeated parts</b>
         <span class="dim small">Rebuild everything listed below in one go: best versions, drum hits and repeated bars.</span>
         <div class="row"><button class="primary small" data-kind="all" data-accept="1">Apply all</button><button class="small" data-kind="all" data-accept="1" data-blend="1" title="Apply everything, rebuilding drum hits from a blend of their cleanest examples instead of the single cleanest one">Apply all, blend hits</button><button class="small" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples (switches any done the single-hit way)">Blend all hits</button><button class="small" data-kind="all" data-accept="0">Add all to Review</button></div>
@@ -301,6 +306,22 @@
 
 
 
+<dialog id="dlgAuto">
+  <form method="dialog">
+    <h2>Build the best instrumental</h2>
+    <p>Each step runs in this order. Where fixes overlap, one is chosen; anything that doesn't line up with the original is left out. It all becomes one step: Undo takes it back.</p>
+    <div id="autoSteps"></div>
+    <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button value="ok" class="primary">Build</button></div>
+  </form>
+</dialog>
+<dialog id="dlgAutoDone">
+  <form method="dialog">
+    <h2>Built</h2>
+    <ul id="autoReport"></ul>
+    <p class="dim small">Play it with Repaired selected. Undo (Ctrl+Z) takes the whole build back in one step.</p>
+    <div class="dlg-actions"><button value="ok" class="primary">OK</button></div>
+  </form>
+</dialog>
 <dialog id="dlgReset">
   <div class="reset-body">
     <h2>Troubleshooting and reset</h2>

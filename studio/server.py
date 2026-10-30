@@ -335,6 +335,14 @@ def _job_detect():
     S.project.detect(lambda f, m: _progress(None if f is None else f, m))
 
 
+def _job_build(steps):
+    p = S.project
+    res = p.build_best(steps, lambda f, m: _progress(f, m))
+    _progress(0.97, "Saving")
+    p.save()
+    S.job["result"] = {"report": res["report"]}
+
+
 def _file_hash(path):
     import hashlib
     h = hashlib.sha1()
@@ -746,6 +754,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._proj().instruments:
                     return self._send(400, {"error": "Split the song into instruments first."})
                 _start_job(_job_detect)
+                return self._send(200, {"ok": True})
+            if path == "/api/auto/plan":
+                return self._send(200, {"steps": self._proj().build_plan()})
+            if path == "/api/auto/build":
+                steps = [x for x in (d.get("steps") or []) if x in self._proj().AUTO_STEPS]
+                if not steps:
+                    return self._send(400, {"error": "Choose at least one step."})
+                _start_job(_job_build, steps)
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
                 folder = d["folder"]

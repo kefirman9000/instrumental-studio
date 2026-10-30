@@ -236,6 +236,7 @@ async function watchJob() {
     if (!j.running && s.has_project) {
       hideBusy(); await openWorkspace();
       const res = j.result;
+      if (res && res.report) { showAutoReport(res.report); return; }
       if (res && res.new_ids && res.new_ids.length) {      // another model was tried for one part
         st.filter = "takes"; st.scope = null; select(res.new_ids[0]);
         toast(`Added to Review: ${res.new_ids.length} track${res.new_ids.length === 1 ? "" : "s"} from the other model.`
@@ -991,6 +992,7 @@ $("#btnDetect").onclick = async () => {
 };
 
 function renderAll() {
+  $("#autoCard").hidden = st.ov.stage !== "detected";
   renderSteps(); renderTips(); renderKeepList(); renderSidesList(); renderMuteList();
   $("#btnUndo").disabled = !st.ov.can_undo;
   $("#btnUndo").title = st.ov.can_undo ? `Undo: ${st.ov.undo_label}` : "Nothing to undo";
@@ -1686,3 +1688,36 @@ async function exportLog() {
   } catch (e) { fail(e); }
 }
 $$("[data-export-log]").forEach(b => b.onclick = exportLog);
+
+/* ---------- Build the best instrumental */
+async function openAutoBuild() {
+  try {
+    const r = await api.post("/api/auto/plan", {});
+    const box = $("#autoSteps"); box.innerHTML = "";
+    for (const stp of r.steps) {
+      const row = document.createElement("label"); row.className = "auto-step" + (stp.on ? "" : " off");
+      row.innerHTML = `<input type="checkbox" name="${stp.key}"${stp.on ? " checked" : ""}><div><b></b><span></span></div>`;
+      row.querySelector("b").textContent = stp.title + (stp.count > 1 && !["mutes", "tone", "bestof"].includes(stp.key) ? ` (${stp.count})` : "");
+      row.querySelector("span").textContent = stp.detail;
+      box.append(row);
+    }
+    $("#dlgAuto").showModal();
+  } catch (e) { fail(e); }
+}
+$("#dlgAuto").addEventListener("close", async () => {
+  const dlg = $("#dlgAuto"); if (dlg.returnValue !== "ok") return;
+  const steps = $$("#autoSteps input").filter(i => i.checked).map(i => i.name);
+  if (!steps.length) return toast("Nothing chosen.");
+  try {
+    stopPreview(); player.pause();
+    await api.post("/api/auto/build", { steps });
+    showBusy(0.02, "Building the best instrumental");
+    watchJob();
+  } catch (e) { fail(e); }
+});
+function showAutoReport(lines) {
+  const ul = $("#autoReport"); ul.innerHTML = "";
+  for (const l of (lines.length ? lines : ["Nothing needed changing."])) { const li = document.createElement("li"); li.textContent = l; ul.append(li); }
+  $("#dlgAutoDone").showModal();
+}
+$$("[data-auto]").forEach(b => b.onclick = openAutoBuild);
