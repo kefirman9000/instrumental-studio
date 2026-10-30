@@ -1,6 +1,8 @@
 """Local HTTP server: JSON API + audio streaming + the UI files. Standard library only."""
+import hmac
 import json
 import os
+import secrets
 import platform
 import re
 import shutil
@@ -26,6 +28,36 @@ HOME = os.environ.get("INSTRUMENTAL_STUDIO_HOME", os.path.join(os.path.expanduse
 PROJECTS = os.path.join(HOME, "projects")
 EXPORTS = os.path.join(HOME, "exports")
 UPLOADS = os.path.join(HOME, "uploads")
+
+# ----------------------------------------------------------------------------- lockdown
+# The server only listens on this computer, but any web page open in a browser on this computer can
+# still send requests to it. So:
+#  - every POST must carry this session's secret token, which only the app's own page knows (it's
+#    written into index.html when served; other sites can't read that page or send custom headers
+#    to it without the browser asking first, which this server never allows),
+#  - requests must name 127.0.0.1/localhost and this port as the Host (stops DNS-rebinding tricks),
+#  - requests from other sites are turned away using the browser's Origin / Sec-Fetch-Site headers,
+#  - the app's pages can't be framed by other sites, and its audio can't be embedded by them,
+#  - "Show folder" only opens folders inside the app's own folder, and never runs files.
+TOKEN = secrets.token_urlsafe(32)
+LOCAL_NAMES = ("127.0.0.1", "localhost")
+MAX_JSON = 16 << 20            # 16 MB: far more than any real request needs
+SEC_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cross-Origin-Opener-Policy": "same-origin",
+}
+
+
+def _inside(path, folder):
+    try:
+        path, folder = os.path.realpath(path), os.path.realpath(folder)
+        return os.path.commonpath([path, folder]) == folder
+    except (ValueError, OSError):
+        return False
 AUDIO_EXT = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".aiff", ".aif", ".opus", ".wma")
 
 
@@ -370,9 +402,22 @@ def list_projects():
 
 
 def reveal(path):
+    """Open a folder in the file manager. Only folders inside the app's own folder: on Windows,
+    opening a file would run it, so files are shown selected in their folder instead."""
+    path = os.path.realpath(path or HOME)
+    if not _inside(path, HOME) or not os.path.exists(path):
+        log(f"reveal refused: {path}")
+        return
     try:
-        if platform.system() == "Windows":
-            os.startfile(path)  # noqa
+        if os.path.isfile(path):
+            if platform.system() == "Windows":
+                subprocess.Popen(["explorer", "/select,", path])
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        elif platform.system() == "Windows":
+            os.startfile(path)  # noqa  (a folder: opens Explorer)
         elif platform.system() == "Darwin":
             subprocess.Popen(["open", path])
         else:
@@ -403,6 +448,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in SEC_HEADERS.items():
+            self.send_header(k, v)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -424,6 +471,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Range", f"bytes {a}-{b}/{total}")
             self.send_header("Content-Length", str(len(chunk)))
             self.send_header("Accept-Ranges", "bytes")
+            for k, v in SEC_HEADERS.items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(chunk)
         else:
@@ -431,7 +480,34 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
+        if n > MAX_JSON:
+            raise ValueError("Request too large.")
         return self.rfile.read(n) if n else b""
+
+    # --------------------------------------------------------------- lockdown checks
+    def _host_ok(self):
+        port = self.server.server_address[1]
+        return (self.headers.get("Host") or "").strip().lower() in {f"{h}:{port}" for h in LOCAL_NAMES}
+
+    def _from_other_site(self):
+        """True when the browser says this request came from another web page."""
+        port = self.server.server_address[1]
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.rstrip("/").lower() not in {f"http://{h}:{port}" for h in LOCAL_NAMES}:
+            return True                       # includes "null" (sandboxed frames, file:// pages)
+        return (self.headers.get("Sec-Fetch-Site") or "").lower() in ("cross-site", "same-site")
+
+    def _token_ok(self):
+        return hmac.compare_digest(self.headers.get("X-Studio-Token") or "", TOKEN)
+
+    def _refuse(self, why):
+        log(f"refused {self.command} {self.path}: {why}")
+        self.close_connection = True
+        return self._send(403, {"error": "Not allowed."})
+
+    def do_OPTIONS(self):
+        # never approve cross-site requests (CORS preflights)
+        return self._refuse("preflight")
 
     def _json(self):
         b = self._body()
@@ -458,15 +534,23 @@ class Handler(BaseHTTPRequestHandler):
             u = urllib.parse.urlparse(self.path)
             q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
             path = u.path
+            if not self._host_ok():
+                return self._refuse("host")
+            if path.startswith("/api/") and self._from_other_site():
+                return self._refuse("other site")
             if path == "/" or not path.startswith("/api/"):
                 f = "index.html" if path == "/" else path.lstrip("/")
                 fp = os.path.normpath(os.path.join(UI_DIR, f))
-                if not fp.startswith(UI_DIR) or not os.path.isfile(fp):
+                if not _inside(fp, UI_DIR) or not os.path.isfile(fp):
                     return self._send(404, "not found", "text/plain")
                 ctype = {".html": "text/html", ".js": "text/javascript", ".css": "text/css",
                          ".svg": "image/svg+xml", ".png": "image/png"}.get(os.path.splitext(fp)[1], "application/octet-stream")
                 with open(fp, "rb") as fh:
-                    return self._send(200, fh.read(), ctype + ("; charset=utf-8" if ctype.startswith("text") else ""))
+                    data = fh.read()
+                if fp.endswith(".html"):          # hand this session's token to the app's own page
+                    data = data.replace(b'<meta charset="utf-8">',
+                                        b'<meta charset="utf-8">\n<meta name="studio-token" content="' + TOKEN.encode() + b'">', 1)
+                return self._send(200, data, ctype + ("; charset=utf-8" if ctype.startswith("text") else ""))
             if path == "/api/state":
                 S.model["installed"] = S.model["installed"] or SEP.demucs_available()
                 devname = S.model["device"]
@@ -515,6 +599,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             path = urllib.parse.urlparse(self.path).path
+            if not self._host_ok():
+                return self._refuse("host")
+            if self._from_other_site():
+                return self._refuse("other site")
+            if not self._token_ok():
+                return self._refuse("token")
             if path == "/api/upload":
                 # raw body upload; X-Filename header; X-Batch groups several files (stem import)
                 name = os.path.basename(urllib.parse.unquote(self.headers.get("X-Filename", "song.wav")))
@@ -578,12 +668,15 @@ class Handler(BaseHTTPRequestHandler):
                 _start_job(_job_demo)
                 return self._send(200, {"ok": True})
             if path == "/api/load":
-                S.project = Project.load(os.path.join(PROJECTS, d["id"]))
+                S.project = Project.load(os.path.join(PROJECTS, os.path.basename(str(d["id"]))))
                 S.rev += 1
                 S.audio_cache.clear()
                 return self._send(200, {"ok": True})
             if path == "/api/delete_project":
-                shutil.rmtree(os.path.join(PROJECTS, os.path.basename(d["id"])), ignore_errors=True)
+                pid = os.path.basename(str(d.get("id") or ""))
+                if pid in ("", ".", ".."):
+                    raise ValueError("No project given.")
+                shutil.rmtree(os.path.join(PROJECTS, pid), ignore_errors=True)
                 return self._send(200, {"ok": True})
             if path == "/api/extra/install":
                 start_extra_install(d["key"])
@@ -654,13 +747,13 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/glitch_scan":
                 p.scan_glitches(d.get("start"), d.get("end"))
             elif path == "/api/apply_best":
-                ids = p.apply_best(d.get("kind", "all"), bool(d.get("accept", True)))
+                ids = p.apply_best(d.get("kind", "all"), bool(d.get("accept", True)), bool(d.get("blend", False)))
                 res = self._edited()
                 res["new_ids"] = ids
                 return self._send(200, res)
             elif path in ("/api/hits", "/api/bars", "/api/cleanup"):
                 if path == "/api/hits":
-                    ids = p.make_hits(d["stem"], int(d["sound"]))
+                    ids = p.make_hits(d["stem"], int(d["sound"]), blend=bool(d.get("blend", False)))
                 elif path == "/api/bars":
                     ids = [p.make_bars(d["stem"], int(d["best"]), [int(v) for v in d["damaged"]])]
                 else:
@@ -689,7 +782,11 @@ class Handler(BaseHTTPRequestHandler):
                 p.rename_section(d["index"], d["name"])
             elif path == "/api/export":
                 folder = os.path.join(EXPORTS, re.sub(r"[^\w\- ()]", "", p.meta.get("name", "song")) or "song")
-                files = p.export(folder, d.get("format", "wav"), tuple(d.get("what", ["mix", "stems", "vocals", "report"])))
+                fmt = d.get("format", "wav")
+                if fmt not in ("wav", "flac", "mp3"):
+                    raise ValueError("Unknown format.")
+                files = p.export(folder, fmt, tuple(d.get("what", ["mix", "stems", "vocals", "report"])),
+                                 match_level=bool(d.get("match_level", False)))
                 if d.get("reveal", True):
                     reveal(folder)
                 return self._send(200, {"ok": True, "folder": folder, "files": files})
