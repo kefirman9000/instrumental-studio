@@ -128,6 +128,8 @@ def start_model_install(force=False, gpu=False):
     with _model_lock:
         if S.model["installing"] or (S.model["installed"] and not force):
             return
+        if not S.job.get("running"):
+            PR.CANCEL.clear()          # an old Stop must not stop a download started afterwards
         S.model.update(installing=True, error=None, progress=0.0, message="Starting")
 
     def prog(f, m):
@@ -141,10 +143,16 @@ def start_model_install(force=False, gpu=False):
             S.model.update(installed=True, note=res.get("note"))
             SEP._DEVICE = None
             _probe_device()
+        except PR.Stopped:
+            S.model["error"] = "Stopped. Click Try again to start the download again."
         except Exception as e:
             traceback.print_exc()
             S.model["error"] = str(e)
         finally:
+            try:
+                S.model["installed"] = INST.installed(fresh=True)     # a stopped switch may have left it half done
+            except Exception:
+                pass
             S.model["installing"] = False
 
     threading.Thread(target=run, daemon=True).start()
@@ -219,6 +227,8 @@ def start_extra_install(key):
     if st["installing"] or st.get("installed"):
         return
     st.update(installing=True, error=None, progress=0.0, message="Starting")
+    if not S.job.get("running"):
+        PR.CANCEL.clear()
 
     def prog(f, m):
         if f is not None:
@@ -677,7 +687,9 @@ def reveal(path):
     """Open a folder in the file manager. Only folders inside the app's own folder: on Windows,
     opening a file would run it, so files are shown selected in their folder instead."""
     path = os.path.realpath(path or HOME)
-    if not (_inside(path, HOME) or _inside(path, DG.log_dir())) or not os.path.exists(path):
+    bh = UP.backup_home()
+    if not (_inside(path, HOME) or _inside(path, DG.log_dir()) or (bh and os.path.realpath(bh) == path)) \
+            or not os.path.exists(path):
         log(f"reveal refused: {path}")
         return
     try:
@@ -871,6 +883,7 @@ class Handler(BaseHTTPRequestHandler):
                     "demucs": have, "device": devname,
                     "models": {k: v[0] for k, v in SEP.MODELS.items()}, "home": HOME,
                     "projects": list_projects(), "model": S.model, "extras": extras_state(), "version": __version__, "repo": UP.REPO,
+                    "backup_home": UP.backup_home(), "app_dir": UP.APP_DIR,
                     "update": S.update, "update_prefs": UP.load_prefs(HOME), "just_updated": S.just_updated,
                     "safe": getattr(S, "safe", False)})
             if path == "/api/overview":
@@ -1059,6 +1072,9 @@ class Handler(BaseHTTPRequestHandler):
                 prefs.update({k: bool(v) for k, v in d.items() if k in ("check_on_start", "auto_install", "roformer_passes")})
                 UP.save_prefs(HOME, prefs)
                 return self._send(200, {"ok": True, "prefs": prefs})
+            if path == "/api/move_home":
+                home = UP.move_home()
+                return self._send(200, {"ok": True, "home": home})
             if path == "/api/stop":
                 n = stop_everything()
                 return self._send(200, {"ok": True, "stopped": n})
