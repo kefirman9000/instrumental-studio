@@ -16,7 +16,11 @@ import time
 import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from studio import diag  # noqa: E402
+diag.setup()             # the log, crash and freeze recording start before anything else loads
+diag.mark("loading the app")
 from studio.server import serve, HOME  # noqa: E402
+diag.mark("app loaded")
 
 TITLE = "Instrumental Studio"
 
@@ -79,12 +83,7 @@ def main():
     ap.add_argument("--safe", action="store_true", help="start without update checks or hardware probes")
     args = ap.parse_args()
 
-    # Started without a console (pythonw / the .pyw launcher): send messages to a log file instead
-    if sys.stdout is None or sys.stderr is None:
-        os.makedirs(HOME, exist_ok=True)
-        logf = open(os.path.join(HOME, "app.log"), "a", buffering=1, encoding="utf-8")
-        sys.stdout = sys.stdout or logf
-        sys.stderr = sys.stderr or logf
+    # messages always go to app.log too (set up by diag at the top of this file)
 
     from studio.updater import RESTART
     # If the last start never reached the point where the window showed up, start in safe mode:
@@ -97,7 +96,9 @@ def main():
             f.write(str(time.time()))
     except OSError:
         pass
+    diag.mark("starting the server" + (" (safe mode)" if safe else ""))
     httpd, url = serve(args.port, just_updated=args.after_update, safe=safe)
+    diag.mark(f"server ready at {url}")
     print(f"{TITLE} running at {url}  (projects in {HOME})")
 
     def on_restart(close):
@@ -116,12 +117,14 @@ def main():
             win = webview.create_window(TITLE, url, width=1480, height=920, min_size=(1100, 700), js_api=api,
                                         background_color="#111318")
             api.window = win
+            diag.mark("opening the window (pywebview " + getattr(webview, "__version__", "?") + ")")
             threading.Thread(target=on_restart, args=(win.destroy,), daemon=True).start()
             webview.start()
             httpd.shutdown()
             return
         except ImportError:
             pass
+        diag.mark("pywebview not installed: using a browser window")
         browser = find_chromium()
         if browser:
             profile = os.path.join(tempfile.gettempdir(), "instrumental-studio-window")

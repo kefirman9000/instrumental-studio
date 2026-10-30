@@ -21,6 +21,7 @@ from . import installer as INST
 from . import __version__
 from .audio import load_audio, wav_bytes, log
 from . import proc as PR
+from . import diag as DG
 
 
 def _Project():
@@ -499,6 +500,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def handle_one_request(self):
+        t0 = time.time()
+        super().handle_one_request()
+        dt = time.time() - t0
+        if dt > 1.0 and getattr(self, "path", None):
+            DG.line(f"slow request: {getattr(self, 'command', '?')} {self.path.split('?')[0]} took {dt:.1f} s")
+
     def handle(self):
         try:
             super().handle()
@@ -770,7 +778,19 @@ class Handler(BaseHTTPRequestHandler):
                     os.remove(MARKER)
                 except OSError:
                     pass
+                DG.mark(f"window ready (page took {d.get('ms', '?')} ms)")
                 return self._send(200, {"ok": True})
+            if path == "/api/clientlog":
+                DG.line(f"window: {str(d.get('msg', ''))[:2000]}")
+                return self._send(200, {"ok": True})
+            if path == "/api/log/export":
+                extra = {"App version": __version__, "Model": {k: v for k, v in S.model.items() if k != "plan"},
+                         "Song open": S.project.meta.get("name") if S.project else None,
+                         "Songs saved": len(list_projects()), "Safe mode": getattr(S, "safe", False)}
+                path_ = DG.export_bundle(os.path.join(HOME, "logs"), extra)
+                if d.get("reveal", True):
+                    reveal(path_)
+                return self._send(200, {"ok": True, "path": path_})
             if path == "/api/reset":
                 what = d.get("what")
                 if what == "models":

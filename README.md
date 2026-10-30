@@ -241,7 +241,7 @@ Updates never touch your songs, projects or exports. The previous version is kep
 
 **"Not allowed" errors.** The app only accepts commands from the window it opened, and it makes a new secret each time it starts. A window or tab left open from before a restart gets turned away: close it, or reload it.
 
-**Something went wrong and there's no console to read.** The app writes its messages to *app.log* in the InstrumentalStudio folder in your home folder.
+**Something went wrong, froze or crashed.** Click **Export log** (start screen, or Troubleshooting and reset). It saves one file with the app's log, including a snapshot of anything that froze for more than 3 seconds, to attach when asking for help. The live log is *app.log* in the InstrumentalStudio folder in your home folder.
 
 **The app opens in my web browser instead of its own window.** Run `pip install pywebview`, then start the app again.
 
