@@ -52,14 +52,49 @@ def installed(fresh=False):
     return all(_has(m, fresh) for m in ("torch", "torchaudio", "demucs", "openunmix", "dora"))
 
 
+_gpu_names = None
+
+
+def gpu_names():
+    """Names of the graphics cards in this computer, e.g. ["NVIDIA GeForce RTX 3060"] (asked once)."""
+    global _gpu_names
+    if _gpu_names is not None:
+        return _gpu_names
+    names = []
+    try:
+        if sys.platform.startswith("win"):
+            r = proc.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                          "Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }"],
+                         capture_output=True, text=True, timeout=30)
+            names = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        elif sys.platform == "darwin":
+            r = proc.run(["system_profiler", "SPDisplaysDataType"], capture_output=True, text=True, timeout=30)
+            names = [l.split(":", 1)[1].strip() for l in r.stdout.splitlines() if "Chipset Model" in l]
+        elif shutil.which("lspci"):
+            r = proc.run(["lspci"], capture_output=True, text=True, timeout=30)
+            names = [l.split(": ", 1)[-1] for l in r.stdout.splitlines() if "VGA" in l or "3D controller" in l]
+    except Exception:
+        pass
+    names = [n for n in names if "basic display" not in n.lower() and "remote" not in n.lower()]
+    _gpu_names = names
+    return names
+
+
+def _nvidia_smi():
+    exe = shutil.which("nvidia-smi")
+    if exe or not sys.platform.startswith("win"):
+        return exe
+    import glob
+    cands = [r"C:\Windows\System32\nvidia-smi.exe", r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"]
+    # newer (DCH) drivers sometimes keep it only in the driver store
+    cands += sorted(glob.glob(r"C:\Windows\System32\DriverStore\FileRepository\nv*\nvidia-smi.exe"),
+                    key=lambda p: -os.path.getmtime(p))
+    return next((p for p in cands if os.path.exists(p)), None)
+
+
 def nvidia_cuda():
     """CUDA version supported by the NVIDIA driver, e.g. (12, 8), or None."""
-    exe = shutil.which("nvidia-smi")
-    if not exe and sys.platform.startswith("win"):
-        for p in (r"C:\Windows\System32\nvidia-smi.exe", r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"):
-            if os.path.exists(p):
-                exe = p
-                break
+    exe = _nvidia_smi()
     if not exe:
         return None
     try:
@@ -163,9 +198,16 @@ def gpu_ready():
                 else "This Mac has no supported GPU; splitting runs on the processor.")
     cuda = nvidia_cuda()
     if not cuda:
-        return False, ("No NVIDIA graphics card (or its driver) was found. The separation model can use NVIDIA cards "
-                       "on Windows and Linux; other cards (AMD, Intel) run on the processor. If you have an NVIDIA "
-                       "card, install its latest driver from nvidia.com and try again.")
+        names = gpu_names()
+        found = ", ".join(names) if names else "no graphics card details"
+        if any("nvidia" in n.lower() for n in names):
+            return False, (f"This computer has {found}, but its NVIDIA driver isn't working (nvidia-smi didn't answer). "
+                           f"Install the latest driver from nvidia.com (GeForce Game Ready or Studio), restart, "
+                           f"then try again.")
+        return False, (f"This computer has {found}. The separation model (Demucs on PyTorch) can only use NVIDIA "
+                       f"graphics cards on Windows; AMD and Intel graphics aren't supported by it, so splitting runs "
+                       f"on the processor. To speed it up: pick a faster model in step 2 (the ones marked fast), and "
+                       f"leave Roformer off.")
     if not _plan()["gpu"]:
         return False, (f"Your NVIDIA driver supports CUDA {cuda[0]}.{cuda[1]}, which is too old for current PyTorch "
                        f"(needs 12.6 or newer). Update the driver from nvidia.com, then try again.")
