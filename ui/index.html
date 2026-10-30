@@ -116,6 +116,7 @@
         <button data-f="applied">Applied</button>
         <button data-f="bleed">Vocal leftovers</button>
         <button data-f="hard">No good match</button>
+        <button data-f="misfit" title="Fixes that add sound the original doesn't have at that spot, or land off its beat">Doesn't fit</button>
         <button data-f="cleanup">Clicks and smoothing</button>
         <button data-f="takes">Other takes</button>
         <button data-f="all">All</button>
@@ -125,6 +126,7 @@
       <div class="list" id="sugList"></div>
     </div>
     <div class="tab" id="tab-grid" hidden>
+      <div class="row" style="margin-bottom:10px"><button class="small" id="btnQuality" hidden>Score how clean each section is</button></div>
       <div class="bulk-best" id="bulkBest">
         <b>All repeated parts</b>
         <span class="dim small">Rebuild everything listed below in one go: best versions, drum hits and repeated bars.</span>
@@ -133,7 +135,7 @@
       <h3 class="panel-h">Best versions <button class="ghost small hdr-btn" data-kind="versions" data-accept="1">Apply all</button></h3>
       <p class="help">When an instrument plays the same part more than once, you can use its cleanest take every time, so the part sounds the same throughout. Each one is added to Review for you to listen to first.</p>
       <div id="bestList"></div>
-      <h3 class="panel-h" style="margin-top:14px">Best hits <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples">Blend all</button></h3>
+      <h3 class="panel-h" style="margin-top:14px">Best hits and note starts <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples">Blend all</button></h3>
       <p class="help">Drum sounds repeat hundreds of times. Hits the vocals smeared are filled in from the cleanest identical hit.</p>
       <div id="hitList"></div>
       <h3 class="panel-h" style="margin-top:14px">Repeated bars <button class="ghost small hdr-btn" data-kind="bars" data-accept="1">Apply all</button></h3>

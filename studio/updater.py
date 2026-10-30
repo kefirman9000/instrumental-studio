@@ -59,7 +59,15 @@ def check():
             raise RuntimeError("GitHub is limiting update checks right now. Try again in an hour.") from e
         raise RuntimeError(f"GitHub answered {e.code} while checking for updates.") from e
     latest = rel.get("tag_name", "").lstrip("vV")
+    assets = rel.get("assets", []) or []
+    zip_asset = next((a for a in assets if a.get("name", "").endswith(".zip")), None)
+    sums = next((a for a in assets if a.get("name", "") in ("SHA256SUMS", "SHA256SUMS.txt")), None)
+    digest = (zip_asset or {}).get("digest") or ""          # GitHub's own sha256 of the uploaded file
     return {
+        "zip_name": (zip_asset or {}).get("name"),
+        "sha256": digest.split(":", 1)[1].lower() if digest.lower().startswith("sha256:") else None,
+        "sha256_url": (sums or {}).get("browser_download_url"),
+        "verify": zip_asset is not None,      # a release download must match its published checksum
         "current": __version__, "latest": latest, "available": _ver(latest) > _ver(__version__),
         "name": rel.get("name") or f"Version {latest}", "notes": (rel.get("body") or "").strip(),
         "published": rel.get("published_at"), "url": rel.get("html_url"),
@@ -94,6 +102,38 @@ def _check_branch(branch="main"):
     }
 
 
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify(zpath, info):
+    """Refuse a release download whose checksum doesn't match the one published with the release
+    (SHA256SUMS next to the zip, and GitHub's own record of the file). Nothing is changed on refusal."""
+    expected = set()
+    if info.get("sha256"):
+        expected.add(info["sha256"])
+    if info.get("sha256_url"):
+        with _open(info["sha256_url"], timeout=30) as r:
+            for line in r.read().decode("utf-8", "replace").splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[-1].lstrip("*") == info.get("zip_name"):
+                    expected.add(parts[0].lower())
+    if not expected:
+        raise RuntimeError("This update has no published checksum, so it can't be verified; nothing was changed. "
+                           "Download it by hand from the releases page if you trust it.")
+    if len(expected) > 1:
+        raise RuntimeError("The update's published checksums disagree; nothing was changed.")
+    got = _sha256(zpath)
+    if got != next(iter(expected)):
+        raise RuntimeError("The download doesn't match its published checksum (it may have been damaged or "
+                           "tampered with); nothing was changed. Try again later.")
+
+
 def _is_git():
     return os.path.isdir(os.path.join(APP_DIR, ".git")) and shutil.which("git")
 
@@ -114,6 +154,9 @@ def install(info, progress=lambda f, m: None):
             zpath = os.path.join(td, "update.zip")
             with _open(info["zip"], timeout=120) as r, open(zpath, "wb") as f:
                 shutil.copyfileobj(r, f)
+            if info.get("verify"):
+                progress(0.4, "Checking the download")
+                _verify(zpath, info)
             progress(0.5, "Unpacking")
             with zipfile.ZipFile(zpath) as z:
                 for m in z.namelist():   # refuse paths that try to escape the folder
