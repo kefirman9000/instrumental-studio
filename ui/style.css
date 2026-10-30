@@ -318,11 +318,15 @@ label.check input { margin-top: 3px; }
 .stuck { position: fixed; inset: 0; background: #0d1016e6; display: grid; place-items: center; z-index: 60; }
 
 /* loading visuals: never a blank or frozen-looking window */
-.boot { position: fixed; inset: 0; background: var(--bg, #111318); display: grid; place-items: center; z-index: 40; }
+/* a small notice, not a cover: the start screen can be used while the app finishes starting */
+.boot { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 40; pointer-events: none;
+  background: var(--bg2, #181c24); border: 1px solid var(--line, #2a2f3a); border-radius: 999px; padding: 8px 16px;
+  box-shadow: 0 6px 24px #0006; max-width: calc(100vw - 32px); }
 .boot[hidden] { display: none; }
-.boot-card { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.boot-card { display: flex; align-items: center; gap: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spin { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--line, #2a2f3a); border-top-color: var(--repair, #e0a050); animation: spin .9s linear infinite; display: inline-block; }
 .spin.small { width: 11px; height: 11px; border-width: 2px; vertical-align: -1px; margin-right: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .warm-chip { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--muted, #8a93a6); }
 .warm-chip[hidden] { display: none; }
+.play.loading { animation: pulse 1s ease-in-out infinite; }

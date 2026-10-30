@@ -9,9 +9,8 @@ import tempfile
 from math import gcd
 
 import numpy as np
-from scipy import signal
-from scipy import fft as sfft
-from scipy.io import wavfile
+# SciPy is imported inside the functions that need it: it's large, and loading it before the window
+# opens made startup slow (especially on Windows, where antivirus checks every file it loads).
 
 EPS = 1e-10
 N_FFT = 2048
@@ -38,6 +37,8 @@ def load_audio(path, sr=44100):
     WAV is read natively; everything else (mp3, flac, m4a, ogg...) goes through ffmpeg.
     Mono files are duplicated to stereo so every stem has the same shape.
     """
+    from scipy import signal
+    from scipy.io import wavfile
     data, rate = None, None
     if path.lower().endswith(".wav"):
         try:
@@ -69,6 +70,7 @@ def load_audio(path, sr=44100):
 
 def save_audio(path, audio, sr, bits=32):
     """Write (channels, samples) audio. .wav natively; other extensions through ffmpeg."""
+    from scipy.io import wavfile
     audio = np.asarray(audio, dtype=np.float32)
     ext = os.path.splitext(path)[1].lower()
     if bits == 16:
@@ -92,6 +94,7 @@ def save_audio(path, audio, sr, bits=32):
 
 def wav_bytes(audio, sr):
     """16-bit WAV bytes for streaming previews to the UI."""
+    from scipy.io import wavfile
     import io
     buf = io.BytesIO()
     pcm = (np.clip(np.asarray(audio, np.float32), -1, 1) * 32767).astype(np.int16)
@@ -102,6 +105,7 @@ def wav_bytes(audio, sr):
 # ----------------------------------------------------------------------------- STFT
 def stft(x):
     """Centered STFT of a 1-D signal -> complex64 (bins, frames). Frame t is centred on sample t*HOP."""
+    from scipy import fft as sfft
     x = np.asarray(x, dtype=np.float32)
     pad = N_FFT // 2
     xp = np.pad(x, (pad, pad + HOP))
@@ -117,6 +121,7 @@ def stft(x):
 
 def istft(X, length):
     """Inverse of stft() (weighted overlap-add)."""
+    from scipy import fft as sfft
     n_frames = X.shape[1]
     total = (n_frames - 1) * HOP + N_FFT
     out = np.zeros(total, dtype=np.float64)
