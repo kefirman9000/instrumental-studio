@@ -1670,7 +1670,8 @@ function renderModel(s) {
   $("#engineInfo").textContent = text[0] + ". " + text[1];
   const kind = m.device_kind || "", gs = $("#gpuState");
   if (gs) gs.textContent = kind === "cuda" ? "Splitting uses your graphics card." : kind === "mps" ? "Splitting uses the Mac's graphics." :
-    m.nvidia ? "An NVIDIA card was found but isn't used yet." : kind === "cpu" ? "Splitting runs on the processor." : "";
+    m.nvidia ? "An NVIDIA card was found but isn't used yet." :
+    kind === "cpu" ? `Splitting runs on the processor${(m.gpus || []).length ? ` (graphics: ${m.gpus.join(", ")})` : ""}.` : "";
   const gb = $("#btnGpu"); if (gb) gb.hidden = kind === "cuda" || kind === "mps";
   const gb2 = $("#btnGpu2"); if (gb2) gb2.hidden = !(m.nvidia && state === "ok" && kind === "cpu");
   $("#btnModelReinstall").disabled = state === "busy";
