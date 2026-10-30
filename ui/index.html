@@ -123,6 +123,8 @@
         <button class="small" data-act="eq">Lower</button>
       </div>
       <label class="check small" data-split-only title="Only where someone is singing (measured continuously), so the gaps between lines keep their full sound"><input type="checkbox" id="eqOnlyVocals" checked><span>Only while someone sings</span></label>
+      <label class="check small" data-split-only title="Reverb keeps ringing for up to a second after each line; include it"><input type="checkbox" id="eqTails" checked><span>Include the reverb after each line</span></label>
+      <label class="check small" data-split-only title="The lead vocal sits in the middle of the mix; cut only the middle, so the instrument's stereo sides stay untouched"><input type="checkbox" id="eqCentre" checked><span>Only the centre of the mix (where the lead vocal sits)</span></label>
       <span class="pop-h" data-split-only>Mute</span>
       <div class="mute-row" id="muteRow" data-split-only></div>
       <button class="ghost small" data-mode="">Cancel</button>
@@ -202,6 +204,9 @@
       <div id="levelsWrap"></div>
     </div>
     <div class="tab" id="tab-settings" hidden>
+      <div class="setting">
+        <label class="check"><input type="checkbox" id="showLeftover" checked><span>Show where leftover singing remains: pink marks along the top of each instrument's lane</span></label>
+      </div>
       <div class="setting">
         <label for="autoConf">Mark repairs as recommended at or above <b id="autoConfVal"></b> match. Nothing is applied until you choose.</label>
         <input type="range" id="autoConf" min="0.3" max="1" step="0.05">
@@ -331,6 +336,10 @@
     <fieldset><legend>Samples</legend>
       <label title="Every repeated drum hit, note and loop, as its cleanest single copy from the split"><input type="checkbox" name="samples_raw"> Cleanest hits, notes and loops (as they are)</label>
       <label title="The cleanest few copies of each blended into one, so noise in any one copy drops out"><input type="checkbox" name="samples_merged"> Merged from their cleanest copies</label>
+    </fieldset>
+    <fieldset><legend>For music software</legend>
+      <label title="A MIDI tempo map that follows the song beat by beat, with the sections as markers; Audacity section labels; and the tempo in a text file. Place everything at the start of the project and it lines up."><input type="checkbox" name="tempo"> Tempo map and section markers</label>
+      <label title="Every drum hit as General MIDI drum notes on the song's tempo map, including the hits the drum pattern restores under the singing"><input type="checkbox" name="drum_midi"> Drum pattern as MIDI</label>
     </fieldset>
     <fieldset><legend>Vinyl rips</legend>
       <label title="Finds clicks and crackle in each exported file and rebuilds them from the sound around them. Better still: Remove vinyl crackle in step 1, before splitting."><input type="checkbox" name="declick"> Remove clicks and crackle from the files</label>

@@ -97,6 +97,10 @@ Click **Split and build** next to Split (or **Import stems and build** on the st
 
 In step 1, **Remove vinyl crackle** (Light, Normal or Strong) takes out clicks and crackle before splitting, so they never end up in the instruments. The untouched recording is kept, and **Undo crackle removal** brings it back. Export can also remove crackle from the exported files.
 
+### For music software
+
+Export can add a **tempo map and section markers** (a MIDI tempo map that follows the song beat by beat, Audacity labels and a text summary) and the **drum pattern as MIDI**. Place the stems and MIDI files at the start of a project and they line up.
+
 ### Export samples
 
 **Export** (or **Export samples** in the Repairability tab) can also save every repeated drum hit, note and loop: its cleanest copy as it is, and a merge of its cleanest copies. Handy for remakes and beat-making.
