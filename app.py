@@ -19,7 +19,40 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from studio import diag  # noqa: E402
 diag.setup()             # the log, crash and freeze recording start before anything else loads
 diag.mark("loading the app")
-from studio.server import serve, HOME  # noqa: E402
+
+
+def _open_setup_check(why):
+    """Something the app needs is missing or broken: open the setup checker in its own window (it
+    explains and offers to install), instead of failing silently with no console."""
+    diag.line(f"can't start: {why}. Opening the setup check.")
+    here = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(here, "check_setup.py")
+    try:
+        if sys.platform.startswith("win"):
+            import subprocess as sp
+            exe = sys.executable
+            if os.path.basename(exe).lower() == "pythonw.exe":
+                exe = os.path.join(os.path.dirname(exe), "python.exe")
+            sp.Popen([exe, script, "--from-app"], creationflags=getattr(sp, "CREATE_NEW_CONSOLE", 0), cwd=here)
+        elif sys.platform == "darwin":
+            import subprocess as sp
+            sp.Popen(["open", "-a", "Terminal", os.path.join(here, "Check and fix setup (Mac).command")])
+        else:
+            print(f"Instrumental Studio can't start: {why}\nRun: python3 {script}", file=sys.stderr)
+    except Exception as e:
+        diag.line(f"couldn't open the setup check: {e}")
+    sys.exit(1)
+
+
+for _mod in ("numpy", "scipy"):
+    try:
+        __import__(_mod)
+    except Exception as e:      # missing, or installed but broken
+        _open_setup_check(f"{_mod} isn't available ({e})")
+try:
+    from studio.server import serve, HOME  # noqa: E402
+except ImportError as e:
+    _open_setup_check(f"a part of the app couldn't load ({e})")
 diag.mark("app loaded")
 
 TITLE = "Instrumental Studio"
