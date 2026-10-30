@@ -1,5 +1,11 @@
 # What's new
 
+## 1.15.1
+
+- **Fix: nothing appeared when starting on Windows (1.15.0).** The window waited for the engine before showing anything, and on Windows the engine didn't come up. Now the window opens straight away with a "Starting Instrumental Studio" page and the app loads into it once the engine answers.
+- **If the engine can't start, the window says so** instead of staying blank: it shows what happened and the end of the log, with **Export log**, **Check and fix setup**, **Show the log file** and **Try again**. All of these work without the engine.
+- The engine now keeps an eye on the window program directly (it used a pipe that behaves differently on Windows), and its output goes only to app.log.
+
 ## 1.15.0
 
 - **The window can't freeze any more.** The app now runs as two programs: one that only draws the window (and opens file pickers), and an engine that does everything else (opening and decoding songs, splitting, repairs, saving). Before, both shared one Python, which can only do one thing at a time, so while a song opened, the window couldn't even redraw or take a click and Windows treated it as frozen. Now opening a song, or anything else the engine does, leaves the window responsive.
