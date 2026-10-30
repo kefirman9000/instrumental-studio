@@ -18,13 +18,13 @@ MODELS = {
     "ensemble": ("4 tracks · Fewest gaps (two models combined, slowest)", ["htdemucs_ft", "htdemucs"],
                  ["drums", "bass", "other", "vocals"]),
     # Roformer takes the vocals out first (cleanest vocal removal), then Demucs splits what's left
-    "hybrid": ("4 tracks · Cleanest vocal removal (Roformer first)", ["htdemucs_ft"],
+    "hybrid": ("4 tracks · Cleanest vocal removal (Roformer first, slow)", ["htdemucs_ft"],
                ["drums", "bass", "other", "vocals"]),
     "6stem_best": ("6 tracks · Best quality", ["htdemucs_6s", "htdemucs_ft"],
                    ["drums", "bass", "guitar", "piano", "other", "vocals"]),
     "6stem": ("6 tracks · Quick (piano track less clean)", ["htdemucs_6s"],
               ["drums", "bass", "guitar", "piano", "other", "vocals"]),
-    "hybrid6": ("6 tracks · Cleanest vocal removal (Roformer first)", ["htdemucs_6s"],
+    "hybrid6": ("6 tracks · Cleanest vocal removal (Roformer first, slow)", ["htdemucs_6s"],
                 ["drums", "bass", "guitar", "piano", "other", "vocals"]),
 }
 NEEDS_EXTRA = {"hybrid": "roformer", "hybrid6": "roformer"}
@@ -57,16 +57,17 @@ def _run_extra(args, progress, frac0, frac1, label):
         raise RuntimeError(label + " failed:\n" + "\n".join(tail[-12:]))
 
 
-def vocals_in(audio, sr, workdir, progress=lambda f, m: None, frac0=0.0, frac1=1.0, label="Looking for leftover singing"):
+def vocals_in(audio, sr, workdir, progress=lambda f, m: None, frac0=0.0, frac1=1.0, label="Looking for leftover singing",
+              roformer=False):
     """Run a vocal-removal model on any (2, n) audio and return the vocals it finds there (2, n).
-    Roformer when it's installed (the cleanest), otherwise Demucs."""
+    Demucs by default (fast); Roformer (cleanest, much slower) when asked for and installed."""
     from scipy.io import wavfile
     from .installer import extra_installed
     os.makedirs(workdir, exist_ok=True)
     wav = os.path.join(workdir, "in.wav")
     wavfile.write(wav, sr, np.asarray(audio, np.float32).T)
     out = os.path.join(workdir, "out")
-    if extra_installed("roformer"):
+    if roformer and extra_installed("roformer"):
         _run_extra(["roformer", BS_ROFORMER, wav, out, models_dir()], progress, frac0, frac1, label)
         f = os.path.join(out, "vocals.wav")
     else:

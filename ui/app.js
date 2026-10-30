@@ -1559,6 +1559,7 @@ function renderUpdate(s) {
   wi.textContent = u.installed ? "Restart to update" : u.installing ? (u.message || "Installing…") : `Install ${info?.latest || "update"}`;
   $("#updRepo").textContent = `github.com/${s.repo}`;
   $("#updOnStart").checked = !!prefs.check_on_start; $("#updAuto").checked = !!prefs.auto_install;
+  $("#prefRoformer").checked = !!prefs.roformer_passes;
   let status = "";
   if (u.checking) status = "Checking…";
   else if (u.error) status = u.error;
@@ -1632,7 +1633,8 @@ async function restartApp(auto) {
   } catch (e) { fail(e); }
 }
 async function savePrefs() {
-  try { await api.post("/api/update/prefs", { check_on_start: $("#updOnStart").checked, auto_install: $("#updAuto").checked }); }
+  try { await api.post("/api/update/prefs", { check_on_start: $("#updOnStart").checked, auto_install: $("#updAuto").checked,
+                                             roformer_passes: $("#prefRoformer").checked }); }
   catch (e) { fail(e); }
 }
 $("#updOnStart").onchange = savePrefs;
@@ -1901,3 +1903,5 @@ $("#btnVinylStems").onclick = async () => {
     showBusy(0.02, "Removing crackle from the instruments"); watchJob();
   } catch (e) { fail(e); }
 };
+
+$("#prefRoformer").onchange = savePrefs;

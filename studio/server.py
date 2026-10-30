@@ -342,6 +342,7 @@ def _deep_clean(p, f0=0.0, f1=1.0):
         raise RuntimeError("The second pass needs the separation model. Install it from the start screen.")
     from .project import NOT_REPAIRED
     targets = [k for k in p.instruments if k not in NOT_REPAIRED and k not in p.PERCUSSIVE]
+    use_rof = bool(UP.load_prefs(HOME).get("roformer_passes"))       # off by default: Roformer is much slower
     ids = []
     for i, k in enumerate(targets):
         a = f0 + (f1 - f0) * i / max(1, len(targets))
@@ -349,7 +350,7 @@ def _deep_clean(p, f0=0.0, f1=1.0):
         work = os.path.join(p.root, "work_deep", k)
         try:
             found = SEP.vocals_in(p.stems[k], p.sr, work, lambda f, m: _progress(None if f is None else f, m), a, b,
-                                  f"Second pass on the {k}")
+                                  f"Second pass on the {k}", roformer=use_rof)
             ids += p.add_deep_leftovers(k, found)
         finally:
             shutil.rmtree(work, ignore_errors=True)
@@ -971,7 +972,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if path == "/api/update/prefs":
                 prefs = UP.load_prefs(HOME)
-                prefs.update({k: bool(v) for k, v in d.items() if k in ("check_on_start", "auto_install")})
+                prefs.update({k: bool(v) for k, v in d.items() if k in ("check_on_start", "auto_install", "roformer_passes")})
                 UP.save_prefs(HOME, prefs)
                 return self._send(200, {"ok": True, "prefs": prefs})
             if path == "/api/stop":
