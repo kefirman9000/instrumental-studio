@@ -39,7 +39,10 @@ jobs:
 
       - name: Build the download
         if: steps.chk.outputs.exists == 'false'
-        run: git archive --format=zip --prefix=InstrumentalStudio/ -o "InstrumentalStudio-${{ steps.v.outputs.version }}.zip" HEAD
+        run: |
+          git archive --format=zip --prefix=InstrumentalStudio/ -o "InstrumentalStudio-${{ steps.v.outputs.version }}.zip" HEAD
+          # the app checks every update against this before installing it
+          sha256sum "InstrumentalStudio-${{ steps.v.outputs.version }}.zip" > SHA256SUMS
 
       - name: Release notes from CHANGELOG.md
         if: steps.chk.outputs.exists == 'false'
@@ -60,4 +63,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           V="${{ steps.v.outputs.version }}"
-          gh release create "v$V" "InstrumentalStudio-$V.zip" --title "Instrumental Studio $V" --notes-file notes.md --target "$GITHUB_SHA"
+          gh release create "v$V" "InstrumentalStudio-$V.zip" SHA256SUMS --title "Instrumental Studio $V" --notes-file notes.md --target "$GITHUB_SHA"
