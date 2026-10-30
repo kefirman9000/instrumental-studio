@@ -1,5 +1,11 @@
 # What's new
 
+## 1.15.0
+
+- **The window can't freeze any more.** The app now runs as two programs: one that only draws the window (and opens file pickers), and an engine that does everything else (opening and decoding songs, splitting, repairs, saving). Before, both shared one Python, which can only do one thing at a time, so while a song opened, the window couldn't even redraw or take a click and Windows treated it as frozen. Now opening a song, or anything else the engine does, leaves the window responsive.
+- The engine stops by itself whenever the window closes (or crashes), so nothing is left running in the background. Restart (Troubleshooting, or after an update) starts a fresh copy of both.
+- If the engine can't start (something missing or broken), the setup check opens and the reason is in app.log. Lines in app.log now say which part wrote them (window or engine).
+
 ## 1.14.6
 
 - **Clear stems.** Double-click **Clear stems (Windows).bat** or **(Mac).command** (Linux: `./clear_stems.sh`) in the app folder to free disk space. It lists how much each song's split uses, then lets you clear either other models' splits only (your songs stay exactly as they are) or songs' whole splits (each song stays in your Songs list with its original recording and goes back to step 1, ready to split again). It asks before deleting, and never touches original recordings or exports. Close the app first.

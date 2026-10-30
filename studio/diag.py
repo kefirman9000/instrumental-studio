@@ -20,7 +20,7 @@ import zipfile
 
 FREEZE_S = 3.0
 START = time.time()
-_state = {"file": None, "home": None}
+_state = {"file": None, "home": None, "tag": ""}
 
 
 def home_dir():
@@ -64,8 +64,11 @@ class _Tee:
         return self.f.fileno()
 
 
-def setup(home=None):
-    """Call first thing at startup. Safe to call more than once."""
+def setup(home=None, tag=None):
+    """Call first thing at startup. Safe to call more than once. tag labels this process's lines
+    ("window" or "engine"), since both write to the same log."""
+    if tag:
+        _state["tag"] = tag
     if _state["file"] is not None:
         return _state["file"]
     home = home or home_dir()
@@ -117,7 +120,8 @@ def line(msg):
     """One timestamped line in the log."""
     ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     try:
-        print(f"[{ts} +{time.time() - START:7.2f}s] {msg}", file=sys.stderr, flush=True)
+        tag = f" {_state['tag']}" if _state["tag"] else ""
+        print(f"[{ts} +{time.time() - START:7.2f}s{tag}] {msg}", file=sys.stderr, flush=True)
     except Exception:
         pass
 
