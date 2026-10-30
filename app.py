@@ -4,39 +4,48 @@
     python app.py              open the app window
     python app.py --browser    use your normal browser instead of a window
     python app.py --port 8765  fixed port (default: any free port)
+
+Two processes: this one only draws the window (and opens file pickers); the engine (studio/engine_main.py)
+does everything else. Python runs one thing at a time per process, so with the heavy work elsewhere,
+opening or processing a song can never freeze the window.
 """
 import argparse
+import importlib.util
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import urllib.request
 import webbrowser
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, APP_DIR)
 from studio import diag  # noqa: E402
-diag.setup()             # the log, crash and freeze recording start before anything else loads
-diag.mark("loading the app")
+diag.setup(tag="window")   # the log, crash and freeze recording start before anything else loads
+diag.mark("starting")
+
+TITLE = "Instrumental Studio"
+HOME = diag.home_dir()
 
 
 def _open_setup_check(why):
     """Something the app needs is missing or broken: open the setup checker in its own window (it
     explains and offers to install), instead of failing silently with no console."""
     diag.line(f"can't start: {why}. Opening the setup check.")
-    here = os.path.dirname(os.path.abspath(__file__))
-    script = os.path.join(here, "check_setup.py")
+    script = os.path.join(APP_DIR, "check_setup.py")
     try:
         if sys.platform.startswith("win"):
-            import subprocess as sp
             exe = sys.executable
             if os.path.basename(exe).lower() == "pythonw.exe":
                 exe = os.path.join(os.path.dirname(exe), "python.exe")
-            sp.Popen([exe, script, "--from-app"], creationflags=getattr(sp, "CREATE_NEW_CONSOLE", 0), cwd=here)
+            subprocess.Popen([exe, script, "--from-app"], creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                             cwd=APP_DIR)
         elif sys.platform == "darwin":
-            import subprocess as sp
-            sp.Popen(["open", "-a", "Terminal", os.path.join(here, "Check and fix setup (Mac).command")])
+            subprocess.Popen(["open", "-a", "Terminal", os.path.join(APP_DIR, "Check and fix setup (Mac).command")])
         else:
             print(f"Instrumental Studio can't start: {why}\nRun: python3 {script}", file=sys.stderr)
     except Exception as e:
@@ -44,22 +53,9 @@ def _open_setup_check(why):
     sys.exit(1)
 
 
-for _mod in ("numpy", "scipy"):
-    try:
-        __import__(_mod)
-    except Exception as e:      # missing, or installed but broken
-        _open_setup_check(f"{_mod} isn't available ({e})")
-try:
-    from studio.server import serve, HOME  # noqa: E402
-except ImportError as e:
-    _open_setup_check(f"a part of the app couldn't load ({e})")
-diag.mark("app loaded")
-
-TITLE = "Instrumental Studio"
-
-
 class JsApi:
-    """Native file pickers exposed to the page when running inside pywebview."""
+    """Native file pickers exposed to the page when running inside pywebview. These run in this (window)
+    process, which is never busy, so they always respond."""
 
     def __init__(self):
         self.window = None
@@ -83,10 +79,10 @@ class JsApi:
         return self._dialog("folder")
 
     def restart(self):
-        """Works even if the app's server is stuck, because it runs in the window's own process."""
+        """Works even if the engine is stuck: it runs here, stops the engine and starts the app again."""
         from studio import updater, proc
+        updater.relaunch()       # start the new copy first: stopping the engine closes this window
         proc.kill_all()
-        updater.relaunch()
         return True
 
 
@@ -108,6 +104,43 @@ def find_chromium():
     return next((c for c in cands if c and os.path.exists(c)), None)
 
 
+def free_port():
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+def start_engine(port, args, safe):
+    from studio import proc
+    cmd = [proc.gui_python(), "-m", "studio.engine_main", "--port", str(port), "--watch-parent"]
+    cmd += ["--after-update"] if args.after_update else []
+    cmd += ["--safe"] if safe else []
+    cmd += ["--browser"] if args.browser else []
+    # stdin stays open as a lifeline: when this process ends, the engine sees it close and stops too.
+    # proc.popen tracks it, so Restart (proc.kill_all) stops it as well.
+    return proc.popen(cmd, cwd=APP_DIR, stdin=subprocess.PIPE)
+
+
+def wait_for_engine(url, engine, timeout=90):
+    """True once the engine answers; False if it exited first. Ignores any system proxy settings."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if engine.poll() is not None:
+            return False
+        try:
+            with opener.open(url, timeout=2) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.1)
+    return True        # still starting: open the window anyway; it shows that it's waiting
+
+
 def main():
     ap = argparse.ArgumentParser(description=TITLE)
     ap.add_argument("--browser", action="store_true", help="open in your default browser instead of a window")
@@ -116,9 +149,13 @@ def main():
     ap.add_argument("--safe", action="store_true", help="start without update checks or hardware probes")
     args = ap.parse_args()
 
-    # messages always go to app.log too (set up by diag at the top of this file)
+    # Quick look (nothing is loaded) for the parts the engine can't run without
+    for mod in ("numpy", "scipy"):
+        if importlib.util.find_spec(mod) is None:
+            _open_setup_check(f"{mod} isn't installed")
 
     from studio.updater import RESTART
+    from studio import proc
     # If the last start never reached the point where the window showed up, start in safe mode:
     # no update check, no graphics-card probe. The window removes the marker once it has loaded.
     marker = os.path.join(HOME, ".starting")
@@ -129,58 +166,88 @@ def main():
             f.write(str(time.time()))
     except OSError:
         pass
-    diag.mark("starting the server" + (" (safe mode)" if safe else ""))
-    httpd, url = serve(args.port, just_updated=args.after_update, safe=safe)
-    diag.mark(f"server ready at {url}")
+
+    port = args.port or free_port()
+    url = f"http://127.0.0.1:{port}/"
+    diag.mark("starting the engine" + (" (safe mode)" if safe else ""))
+    engine = start_engine(port, args, safe)
+    if not wait_for_engine(url, engine):
+        code = engine.poll()
+        _open_setup_check(f"the engine stopped while starting (exit code {code}); details are in app.log")
+    diag.mark(f"engine answering at {url}")
     print(f"{TITLE} running at {url}  (projects in {HOME})")
 
-    def on_restart(close):
-        RESTART.wait()
-        time.sleep(0.5)
+    def stop_engine():
         try:
-            close()
-        finally:
-            httpd.shutdown()
-            os._exit(0)
+            engine.stdin.close()
+        except Exception:
+            pass
+        proc.kill(engine)
+
+    def follow(close):
+        """Close the window when the engine ends (a restart from inside the app, or a crash), or when a
+        restart is asked for from this window."""
+        def on_engine_exit():
+            code = engine.wait()
+            if not RESTART.is_set():
+                diag.line(f"the engine ended (exit code {code}); closing the window")
+            try:
+                close()
+            finally:
+                time.sleep(0.3)
+                os._exit(0)
+
+        def on_restart():
+            RESTART.wait()
+            time.sleep(0.5)
+            try:
+                close()
+            finally:
+                stop_engine()
+                os._exit(0)
+        threading.Thread(target=on_engine_exit, daemon=True).start()
+        threading.Thread(target=on_restart, daemon=True).start()
 
     if not args.browser:
         try:
             import webview  # pip install pywebview
+        except ImportError:
+            webview = None
+        if webview is not None:
             api = JsApi()
             win = webview.create_window(TITLE, url, width=1480, height=920, min_size=(1100, 700), js_api=api,
                                         background_color="#111318")
             api.window = win
             diag.mark("opening the window (pywebview " + getattr(webview, "__version__", "?") + ")")
-            threading.Thread(target=on_restart, args=(win.destroy,), daemon=True).start()
+            follow(win.destroy)
             webview.start()
-            httpd.shutdown()
+            diag.line("window closed")
+            stop_engine()
             return
-        except ImportError:
-            pass
         diag.mark("pywebview not installed: using a browser window")
         browser = find_chromium()
         if browser:
             profile = os.path.join(tempfile.gettempdir(), "instrumental-studio-window")
-            proc = subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={profile}",
-                                     "--window-size=1480,920", "--autoplay-policy=no-user-gesture-required"])
-            threading.Thread(target=on_restart, args=(proc.terminate,), daemon=True).start()
+            bproc = subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={profile}",
+                                      "--window-size=1480,920", "--autoplay-policy=no-user-gesture-required"])
+            follow(bproc.terminate)
             try:
-                proc.wait()   # dedicated profile, so this returns when the app window is closed
+                bproc.wait()   # dedicated profile, so this returns when the app window is closed
             except KeyboardInterrupt:
                 pass
             if not RESTART.is_set():
-                httpd.shutdown()
+                stop_engine()
             else:
                 time.sleep(2)
             return
     webbrowser.open(url)
-    threading.Thread(target=on_restart, args=(lambda: None,), daemon=True).start()
+    follow(lambda: None)
     print("Press Ctrl+C to quit.")
     try:
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
-        httpd.shutdown()
+        stop_engine()
 
 
 if __name__ == "__main__":
