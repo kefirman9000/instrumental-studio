@@ -1672,6 +1672,7 @@ function renderModel(s) {
   if (gs) gs.textContent = kind === "cuda" ? "Splitting uses your graphics card." : kind === "mps" ? "Splitting uses the Mac's graphics." :
     m.nvidia ? "An NVIDIA card was found but isn't used yet." : kind === "cpu" ? "Splitting runs on the processor." : "";
   const gb = $("#btnGpu"); if (gb) gb.hidden = kind === "cuda" || kind === "mps";
+  const gb2 = $("#btnGpu2"); if (gb2) gb2.hidden = !(m.nvidia && state === "ok" && kind === "cpu");
   $("#btnModelReinstall").disabled = state === "busy";
   $("#btnModelReinstall").textContent = state === "ok" ? "Reinstall separation model" : `Download separation model (${size.replace(/^about /, "")})`;
   if (state === "busy" && !modelTimer) {
@@ -1933,7 +1934,9 @@ $("#btnVinylStems").onclick = async () => {
 
 $("#prefRoformer").onchange = savePrefs;
 
-$("#btnGpu").onclick = async () => {
+const useGpu = async () => {
   try { const r = await api.post("/api/gpu", {}); toast(r.message || "Done.", { ms: 9000 }); refreshState(); }
   catch (e) { fail(e); }
 };
+$("#btnGpu").onclick = useGpu;
+$("#btnGpu2").onclick = useGpu;

@@ -4,6 +4,7 @@
     python check_setup.py          check, then offer to fix each problem (asks first)
     python check_setup.py --yes    fix everything without asking (except the big model download)
     python check_setup.py --check  only report, change nothing
+    python check_setup.py --gpu    switch splitting to your NVIDIA graphics card
 
 Uses only Python's own library until the app's packages are confirmed, so it works on a fresh install.
 Also writes what it found to app.log.
@@ -22,6 +23,7 @@ ARGS = set(sys.argv[1:])
 ONLY_CHECK = "--check" in ARGS
 YES = "--yes" in ARGS
 FROM_APP = "--from-app" in ARGS
+GPU = "--gpu" in ARGS          # switch splitting to the NVIDIA graphics card without asking
 WIN = sys.platform.startswith("win")
 MAC = sys.platform == "darwin"
 
@@ -170,8 +172,18 @@ def check_model():
                                capture_output=True, text=True, timeout=90)
             on_gpu = r.stdout.strip().endswith("True")
             if cuda and not on_gpu:
+                ok, why = INST.gpu_ready()
                 say(WARN, "Your NVIDIA graphics card isn't used for splitting",
-                    "Splitting could be 5 to 10 times faster. In the app: Settings, Use my graphics card.")
+                    "Splitting could be 5 to 10 times faster." if ok else why)
+                if ok and not ONLY_CHECK and (GPU or (not YES and ask(
+                        "Switch to the graphics-card version now (downloads about 3 GB)?", default=True))):
+                    def prog(f, m):
+                        print(f"         {int(round((f or 0) * 100)):3d}%  {m}" if f is not None else f"         {m}")
+                    try:
+                        INST.install(prog, gpu=True)
+                        say(OK, "Splitting now uses your NVIDIA graphics card")
+                    except Exception as e:
+                        say(BAD, f"Couldn't switch to the graphics card: {e}")
             elif on_gpu:
                 say(OK, "Splitting uses your NVIDIA graphics card")
         except Exception:

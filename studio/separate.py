@@ -138,7 +138,12 @@ def _run_model(wav_path, model, outdir, progress, frac0, frac1):
             if line.startswith("PASSES"):
                 passes = max(1, int(line.split()[1]))
                 continue
+            if line.startswith("DEVICE"):
+                log("splitting on: " + line[7:])
+                progress(None, f"Separating with {model} on the {'graphics card' if ' cuda ' in line + ' ' else line.split(' ', 2)[-1]}")
+                continue
             if line.startswith("FALLBACK"):
+                log("graphics card failed, using the processor: " + line)
                 progress(None, "The GPU couldn't run this model; continuing on the CPU")
                 continue
             m = re.search(r"(\d+)%\|", line)

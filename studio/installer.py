@@ -145,13 +145,49 @@ def _pip(args, progress, lo, hi, label):
     raise RuntimeError(f"Installing failed while {label.lower()}:\n" + text[-800:])
 
 
-def install(progress=lambda f, m: None):
-    """Install everything. progress(fraction or None, message)."""
+def torch_device():
+    """'cuda', 'mps', 'cpu', or None when PyTorch isn't installed (checked in a subprocess)."""
+    try:
+        r = proc.run([sys.executable, "-c", "import torch;print('cuda' if torch.cuda.is_available() else 'mps' if "
+                      "getattr(torch.backends,'mps',None) and torch.backends.mps.is_available() else 'cpu')"],
+                     capture_output=True, text=True, timeout=120)
+        return r.stdout.strip().splitlines()[-1] if r.returncode == 0 and r.stdout.strip() else None
+    except Exception:
+        return None
+
+
+def gpu_ready():
+    """(can the graphics card be used, reason in words). For the Settings button and the setup check."""
+    if sys.platform == "darwin":
+        return (_apple_silicon(), "Apple Silicon Macs use their GPU automatically." if _apple_silicon()
+                else "This Mac has no supported GPU; splitting runs on the processor.")
+    cuda = nvidia_cuda()
+    if not cuda:
+        return False, ("No NVIDIA graphics card (or its driver) was found. The separation model can use NVIDIA cards "
+                       "on Windows and Linux; other cards (AMD, Intel) run on the processor. If you have an NVIDIA "
+                       "card, install its latest driver from nvidia.com and try again.")
+    if not _plan()["gpu"]:
+        return False, (f"Your NVIDIA driver supports CUDA {cuda[0]}.{cuda[1]}, which is too old for current PyTorch "
+                       f"(needs 12.6 or newer). Update the driver from nvidia.com, then try again.")
+    return True, f"NVIDIA card found (driver supports CUDA {cuda[0]}.{cuda[1]})."
+
+
+def install(progress=lambda f, m: None, gpu=False):
+    """Install everything. progress(fraction or None, message).
+    gpu=True: switch an existing processor-only PyTorch to the graphics-card build. pip won't swap builds of the
+    same version by itself (it calls the old one "already satisfied"), so the old build is removed first."""
     p = plan()
     where = p["gpu"] or "your CPU"
     torch_args = ["torch", "torchaudio"] + (["--index-url", p["index"]] if p["index"] else [])
     progress(0.01, f"Setting up for {where}")
-    _pip(torch_args, progress, 0.02, 0.80, "Installing PyTorch")
+    if p["gpu"] and p["index"] and torch_device() == "cpu":
+        progress(0.015, "Removing the processor-only PyTorch so the graphics-card version can go in")
+        proc.run([sys.executable, "-m", "pip", "uninstall", "-y", "torch", "torchaudio"], capture_output=True, text=True)
+        forget_checks()
+        torch_args += ["--no-cache-dir"]       # a cached processor-only wheel must not come back
+    elif gpu and not p["gpu"]:
+        raise RuntimeError(gpu_ready()[1])
+    _pip(torch_args, progress, 0.02, 0.80, "Installing PyTorch" + (" for your graphics card (about 3 GB)" if p["gpu"] else ""))
     _pip(DEMUCS_DEPS, progress, 0.80, 0.92, "Installing helpers")
     _pip(["--no-deps", "demucs"], progress, 0.92, 0.97, "Installing Demucs")
     progress(0.98, "Checking the installation")
@@ -165,6 +201,9 @@ def install(progress=lambda f, m: None):
     importlib.invalidate_caches()
     dev = r.stdout.strip()
     forget_checks()
+    if p["gpu"] and dev == "cpu" and sys.platform != "darwin":
+        raise RuntimeError("PyTorch installed, but it still can't see your NVIDIA card. Restart the computer (a new "
+                           "driver needs it), update the driver from nvidia.com, then use Use my graphics card again.")
     progress(1.0, "Separation model installed")
     return {"device": dev, "note": p.get("note")}
 

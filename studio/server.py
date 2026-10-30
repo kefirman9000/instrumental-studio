@@ -7,6 +7,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -122,7 +123,7 @@ def _probe_device():
                                                           S.model.get("device_kind") == "cpu" else ""))
 
 
-def start_model_install(force=False):
+def start_model_install(force=False, gpu=False):
     """Install Demucs + PyTorch in the background (once). Safe to call repeatedly."""
     with _model_lock:
         if S.model["installing"] or (S.model["installed"] and not force):
@@ -136,7 +137,7 @@ def start_model_install(force=False):
 
     def run():
         try:
-            res = INST.install(prog)
+            res = INST.install(prog, gpu=gpu)
             S.model.update(installed=True, note=res.get("note"))
             SEP._DEVICE = None
             _probe_device()
@@ -978,16 +979,14 @@ class Handler(BaseHTTPRequestHandler):
                 _start_job(_job_vinyl, st_)
                 return self._send(200, {"ok": True})
             if path == "/api/gpu":
+                ok, why = INST.gpu_ready()
+                if not ok or sys.platform == "darwin":
+                    return self._send(400 if not ok else 200, {"error": why} if not ok else {"ok": True, "message": why})
                 cuda = INST.nvidia_cuda()
-                if not cuda:
-                    return self._send(400, {"error": "No NVIDIA graphics card (or its driver) was found. The separation model "
-                                                     "can use NVIDIA cards on Windows and Linux, and Apple Silicon Macs; "
-                                                     "other cards run on the processor. If you have an NVIDIA card, update "
-                                                     "its driver from nvidia.com and try again."})
                 if S.model.get("device_kind") == "cuda":
                     return self._send(200, {"ok": True, "message": f"Already using your graphics card: {S.model.get('device')}."})
                 SEP._DEVICE = None
-                start_model_install(force=True)          # the plan picks the graphics-card build for this driver
+                start_model_install(force=True, gpu=True)   # swaps in the graphics-card build for this driver
                 return self._send(200, {"ok": True, "message": f"Setting up the separation model for your NVIDIA card "
                                                              f"(CUDA {cuda[0]}.{cuda[1]}). It downloads once; watch the "
                                                              f"model light."})
