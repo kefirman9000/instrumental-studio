@@ -241,7 +241,7 @@ async function watchJob() {
     if (!j.running && s.has_project) {
       hideBusy(); await openWorkspace();
       const res = j.result;
-      if (res && res.report) { showAutoReport(res.report); return; }
+      if (res && res.report) { showAutoReport(res.report, res.title); return; }
       if (res && res.new_ids && res.new_ids.length) {      // another model was tried for one part
         st.filter = "takes"; st.scope = null; select(res.new_ids[0]);
         toast(`Added to Review: ${res.new_ids.length} track${res.new_ids.length === 1 ? "" : "s"} from the other model.`
@@ -905,6 +905,13 @@ function renderSteps() {
   mark("detect", at >= 2, at === 1, at < 1);
   mark("review", false, at === 2, at < 2);
 
+  const fromFile = !demo && ov.meta.separation !== "Imported stems" && !!ov.meta.source;
+  $("#vinylBox").hidden = !fromFile;
+  const vy = ov.meta.vinyl;
+  $("#btnVinylUndo").hidden = !vy;
+  $("#importSub").textContent = vy ? `Song loaded. Vinyl crackle removed (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks).`
+                                   : "Song loaded, ready to play";
+  $("#btnVinyl").textContent = vy ? "Remove again" : "Remove vinyl crackle";
   const split = $("#btnSplit"), sel = $("#sepMode"), modelOk = m.installed || demo;
   const auto = $("#btnSplitAuto");
   auto.hidden = !(at < 1 && (modelOk || m.installing));
@@ -1436,7 +1443,8 @@ $("#dlgExport").addEventListener("close", async () => {
   const format = f.elements.fmt.value;
   showBusy(0.3, "Writing files");
   try {
-    const r = await api.post("/api/export", { what, format, reveal: true, match_level: f.elements.match_level.checked });
+    const r = await api.post("/api/export", { what, format, reveal: true, match_level: f.elements.match_level.checked,
+                                               declick: f.elements.declick.checked });
     hideBusy(); toast(`Saved ${r.files.length} file(s) to ${r.folder}`, { ms: 9000, action: ["Show folder", () => api.post("/api/reveal", { path: r.folder })] });
   } catch (e) { hideBusy(); fail(e); }
 });
@@ -1742,7 +1750,8 @@ $("#dlgAuto").addEventListener("close", async () => {
     watchJob();
   } catch (e) { fail(e); }
 });
-function showAutoReport(lines) {
+function showAutoReport(lines, title) {
+  $("#autoDoneTitle").textContent = title || "Built";
   const ul = $("#autoReport"); ul.innerHTML = "";
   for (const l of (lines.length ? lines : ["Nothing needed changing."])) { const li = document.createElement("li"); li.textContent = l; ul.append(li); }
   $("#dlgAutoDone").showModal();
@@ -1756,3 +1765,24 @@ $$("[data-export-samples]").forEach(b => b.onclick = async () => {
     hideBusy(); toast(`Saved ${r.files.length} sample file(s) to ${r.folder}`, { ms: 9000 });
   } catch (e) { hideBusy(); fail(e); }
 });
+
+/* ---------- vinyl crackle */
+$("#btnVinyl").onclick = async () => {
+  const ov = st.ov;
+  if (ov.stage !== "imported" && !confirm("This cleans the recording, then splits it again with the same settings (the split was made " +
+      "from the crackly recording). Repairs and decisions will need doing again. Continue?")) return;
+  try {
+    stopPreview(); player.pause();
+    await api.post("/api/vinyl", { strength: $("#vinylStrength").value });
+    showBusy(0.02, "Removing vinyl crackle"); watchJob();
+  } catch (e) { fail(e); }
+};
+$("#btnVinylUndo").onclick = async () => {
+  const ov = st.ov;
+  if (!confirm("Go back to the untouched recording?" + (ov.stage !== "imported" ? " It will be split again with the same settings, and repairs will need doing again." : ""))) return;
+  try {
+    stopPreview(); player.pause();
+    await api.post("/api/vinyl/undo", {});
+    showBusy(0.02, "Restoring the untouched recording"); watchJob();
+  } catch (e) { fail(e); }
+};

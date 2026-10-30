@@ -30,7 +30,13 @@
 <main class="workspace" id="workspace" hidden>
   <section class="timeline" id="timeline">
     <ol class="steps" id="steps" aria-label="Steps">
-      <li class="step" data-step="import"><span class="num">1</span><div class="step-text"><b>Import</b><span>Song loaded, ready to play</span></div></li>
+      <li class="step" data-step="import"><span class="num">1</span><div class="step-text"><b>Import</b><span id="importSub">Song loaded, ready to play</span></div>
+        <div class="step-actions" id="vinylBox" hidden>
+          <select id="vinylStrength" aria-label="How much crackle to remove" title="Light: only obvious clicks. Normal: clicks and crackle. Strong: also fainter crackle (check that nothing musical was touched).">
+            <option value="light">Light</option><option value="normal" selected>Normal</option><option value="strong">Strong</option></select>
+          <button class="small" id="btnVinyl" title="For vinyl rips: find the clicks and crackle and rebuild each from the sound around it. Best done before splitting. The untouched recording is kept.">Remove vinyl crackle</button>
+          <button class="ghost small" id="btnVinylUndo" hidden>Undo crackle removal</button>
+        </div></li>
       <li class="step" data-step="split"><span class="num">2</span>
         <div class="step-text"><b>Split into instruments</b><span id="splitSub"></span></div>
         <div class="step-actions">
@@ -298,6 +304,9 @@
       <label title="Every repeated drum hit, note and loop, as its cleanest single copy from the split"><input type="checkbox" name="samples_raw"> Cleanest hits, notes and loops (as they are)</label>
       <label title="The cleanest few copies of each blended into one, so noise in any one copy drops out"><input type="checkbox" name="samples_merged"> Merged from their cleanest copies</label>
     </fieldset>
+    <fieldset><legend>Vinyl rips</legend>
+      <label title="Finds clicks and crackle in each exported file and rebuilds them from the sound around them. Better still: Remove vinyl crackle in step 1, before splitting."><input type="checkbox" name="declick"> Remove clicks and crackle from the files</label>
+    </fieldset>
     <fieldset><legend>Level</legend>
       <label title="Measured only where nobody sings, where the instrumental and the original should sound the same. Every file gets the same change, and nothing is pushed into clipping."><input type="checkbox" name="match_level"> Match the original song's loudness</label>
     </fieldset>
@@ -324,7 +333,7 @@
 </dialog>
 <dialog id="dlgAutoDone">
   <form method="dialog">
-    <h2>Built</h2>
+    <h2 id="autoDoneTitle">Built</h2>
     <ul id="autoReport"></ul>
     <p class="dim small">Play it with Repaired selected. Undo (Ctrl+Z) takes the whole build back in one step.</p>
     <div class="dlg-actions"><button value="ok" class="primary">OK</button></div>
