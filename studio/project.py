@@ -1760,6 +1760,11 @@ class Project:
             with open(tmp, "w") as f:
                 f.write(state)
             os.replace(tmp, os.path.join(self.root, "project.json"))
+            # a tiny summary for the Songs list, so listing songs never reads the big project file
+            summary = json.dumps({"name": self.meta.get("name"), "duration": self.meta.get("duration")})
+            with open(os.path.join(self.root, "summary.json.tmp"), "w") as f:
+                f.write(summary)
+            os.replace(os.path.join(self.root, "summary.json.tmp"), os.path.join(self.root, "summary.json"))
             for name, d in parts.items():
                 if d is None:
                     continue
