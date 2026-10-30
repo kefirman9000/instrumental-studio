@@ -1,5 +1,9 @@
 # What's new
 
+## 1.22.1
+
+- **Support the app.** Instrumental Studio is free and open source; if it's useful to you, you can now support it on GitHub Sponsors from the start screen or Settings (it opens in your browser). The repository page has a Sponsor button too.
+
 ## 1.22.0
 
 Cleaner instrumentals:

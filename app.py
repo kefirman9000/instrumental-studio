@@ -29,6 +29,7 @@ diag.setup(tag="window")   # the log, crash and freeze recording start before an
 diag.mark("starting")
 
 TITLE = "Instrumental Studio"
+SPONSORS_URL = "https://github.com/sponsors/kefirman9000"
 HOME = diag.home_dir()
 
 
@@ -82,6 +83,11 @@ class JsApi:
         return self._dialog("open", allow_multiple=False,
                             file_types=("Audio files (*.wav;*.mp3;*.flac;*.m4a;*.aac;*.ogg;*.aiff;*.aif;*.opus)",
                                         "All files (*.*)"))
+
+    def open_sponsors(self):
+        """Open the GitHub Sponsors page in the normal browser. Only this one address can be opened."""
+        webbrowser.open(SPONSORS_URL)
+        return True
 
     def choose_folder(self):
         return self._dialog("folder")
