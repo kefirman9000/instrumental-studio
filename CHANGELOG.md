@@ -1,5 +1,22 @@
 # What's new
 
+## 1.16.0
+
+- **Build the best instrumental.** One button (top of the Review tab, and in the Repairability tab) that works through every kind of fix in the right order and applies the result as **one step you can undo**. It first shows its plan, with each step on a checkbox:
+  1. Use the original recording where nobody sings
+  2. Build each instrument from the cleanest model, bar by bar (if you have other models' splits)
+  3. Use the cleanest take of parts that repeat (close matches only)
+  4. Rebuild repeated riffs, where no best version covers them
+  5. Rebuild drum hits and note starts from a blend of their cleanest copies
+  6. Apply the repairs with a close match
+  7. Remove leftover singing and "s" sounds; 8. fix clicks
+  9. Mute bars that are only leftover singing or noise (measured on the result)
+  10. Fill in what's still thin and clear the mud under the vocals (measured on the result)
+
+  **Where fixes overlap, it picks one** instead of stacking them: on drums, blended hits replace ordinary repairs on the same hits (they used to be filled in twice, which sounds thick and muddy); repairs inside a part already replaced by a best version are skipped (they'd be thrown away anyway); fixes inside parts that use the original recording are skipped. **Every fix is checked against the original first**, and anything that adds sound the original doesn't have, or lands off its beat, is left out (or taken out, if it was applied). A short report says what it did.
+- Replacing edits now always stack the same way where they overlap: another model's split, then a repeated bar, then a best version on top.
+- Undo can now also remove fixes a step created.
+
 ## 1.15.2
 
 From a log you sent (thank you):
