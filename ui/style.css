@@ -233,7 +233,7 @@ label.check input { margin-top: 3px; }
 .drop-card span { color: var(--muted); }
 
 /* ---------- step bar (a real sequence, so it's numbered) */
-.steps { list-style: none; margin: 0; padding: 10px 12px; display: grid; grid-template-columns: 1fr 1.6fr 1.2fr 1fr; gap: 8px; border-bottom: 1px solid var(--line); background: var(--bg2); }
+.steps { list-style: none; margin: 0; padding: 10px 12px; display: grid; grid-template-columns: .9fr 1.6fr 1.2fr 1fr; gap: 8px; border-bottom: 1px solid var(--line); background: var(--bg2); }
 .step { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-m); min-width: 0; background: var(--bg); }
 .step .num { width: 24px; height: 24px; flex: none; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 12px; border: 1.5px solid var(--muted); color: var(--muted); }
 .step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
@@ -345,7 +345,7 @@ label.check input { margin-top: 3px; }
 #autoReport { padding-left: 18px; line-height: 1.6; }
 .start-extra { display: flex; justify-content: flex-end; margin-top: 8px; }
 .sponsor-link { color: #e86aa6; }
-/* step 1 holds the vinyl crackle controls on their own line, so they're never squeezed out of view */
-.step[data-step="import"] { flex-wrap: wrap; row-gap: 6px; }
-.step[data-step="import"] .step-actions { flex-basis: 100%; padding-left: 34px; flex-wrap: wrap; }
-.step[data-step="import"] .step-actions[hidden] { display: none; }
+#dlgVinyl { width: 460px; }
+.vinyl-strength { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; }
+.vinyl-actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+#btnSplitAuto { font-size: 12px; }

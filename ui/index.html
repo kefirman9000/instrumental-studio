@@ -32,18 +32,14 @@
     <ol class="steps" id="steps" aria-label="Steps">
       <li class="step" data-step="import"><span class="num">1</span><div class="step-text"><b>Import</b><span id="importSub">Song loaded, ready to play</span></div>
         <div class="step-actions" id="vinylBox" hidden>
-          <select id="vinylStrength" aria-label="How much crackle to remove" title="Light: only obvious clicks. Normal: clicks and crackle. Strong: also fainter crackle (check that nothing musical was touched).">
-            <option value="light">Light</option><option value="normal" selected>Normal</option><option value="strong">Strong</option></select>
-          <button class="small" id="btnVinyl" title="For vinyl rips: find the clicks and crackle and rebuild each from the sound around it. Best done before splitting. The untouched recording is kept.">Remove vinyl crackle</button>
-          <button class="small" id="btnVinylStems" hidden title="Already split? Remove the clicks and crackle from each instrument track directly, without splitting again, so your repairs stay. They go to Review (Clicks and smoothing) first.">Remove from the instruments</button>
-          <button class="ghost small" id="btnVinylUndo" hidden>Undo crackle removal</button>
+          <button class="ghost small" id="btnVinylOpen" title="For vinyl rips: remove clicks and crackle">Vinyl crackle…</button>
         </div></li>
       <li class="step" data-step="split"><span class="num">2</span>
         <div class="step-text"><b>Split into instruments</b><span id="splitSub"></span></div>
         <div class="step-actions">
           <select id="sepMode" aria-label="How to split"></select>
           <button id="btnSplit">Split</button>
-          <button id="btnSplitAuto" hidden title="Split, find the damage and build the best instrumental in one go. You get the finished result to review; Undo takes the build back in one step.">Split and build</button>
+          <button id="btnSplitAuto" hidden title="Split, find the damage and build the best instrumental in one go. You get the finished result to review; Undo takes the build back in one step.">Split + build</button>
         </div>
       </li>
       <li class="step" data-step="detect"><span class="num">3</span>
@@ -365,6 +361,21 @@
 
 
 
+<dialog id="dlgVinyl">
+  <form method="dialog">
+    <h2>Vinyl crackle</h2>
+    <p id="vinylState">For vinyl rips: finds the clicks and crackle and rebuilds each from the sound around it. Drum hits and other real sharp sounds are left alone.</p>
+    <label class="vinyl-strength">How much
+      <select id="vinylStrength" aria-label="How much crackle to remove">
+        <option value="light">Light: only obvious clicks</option><option value="normal" selected>Normal: clicks and crackle</option><option value="strong">Strong: fainter crackle too</option></select></label>
+    <div class="vinyl-actions">
+      <button type="button" class="primary" id="btnVinyl" title="Cleans the recording itself (best before splitting; if it's split, it's split again with the same settings). The untouched recording is kept.">Remove vinyl crackle</button>
+      <button type="button" id="btnVinylStems" hidden title="Cleans each instrument track directly, without splitting again, so your repairs stay. Goes to Review (Clicks and smoothing) first.">Remove from the instruments (keeps your repairs)</button>
+      <button type="button" class="ghost" id="btnVinylUndo" hidden>Undo crackle removal</button>
+    </div>
+    <div class="dlg-actions"><button value="cancel" class="ghost">Close</button></div>
+  </form>
+</dialog>
 <dialog id="dlgAuto">
   <form method="dialog">
     <h2>Build the best instrumental</h2>
