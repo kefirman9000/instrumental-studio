@@ -354,17 +354,20 @@ def _reuse_stems(digest, mode, exclude=None):
             continue
         pj = os.path.join(PROJECTS, d, "project.json")
         try:
-            with open(pj) as f:
-                meta = json.load(f)["meta"]
-        except (OSError, ValueError, KeyError):
+            with open(pj, "r", encoding="utf-8", errors="replace") as f:
+                head = f.read(65536)        # meta comes first; never parse the whole (large) file
+        except OSError:
             continue
-        if meta.get("source_hash") == digest and meta.get("sep_mode") == mode:
-            sd = os.path.join(PROJECTS, d, "stems")
-            try:
-                return {f[:-4]: np.load(os.path.join(sd, f)) for f in os.listdir(sd)
-                        if f.endswith(".npy") and not f.startswith("_")}
-            except OSError:
-                continue
+        if f'"source_hash": "{digest}"' not in head or f'"sep_mode": "{mode}"' not in head:
+            continue
+        sd = os.path.join(PROJECTS, d, "stems")
+        try:
+            stems = {f[:-4]: np.load(os.path.join(sd, f)) for f in os.listdir(sd)
+                     if f.endswith(".npy") and not f.startswith("_")}
+        except OSError:
+            continue
+        if stems and "vocals" in stems:     # a song whose split was cleared has none left to reuse
+            return stems
     return None
 
 
@@ -780,6 +783,9 @@ class Handler(BaseHTTPRequestHandler):
                     pass
                 DG.mark(f"window ready (page took {d.get('ms', '?')} ms)")
                 return self._send(200, {"ok": True})
+            if path == "/api/reveal":           # works with no song open (Settings, start screen)
+                reveal(d.get("path") or HOME)
+                return self._send(200, {"ok": True})
             if path == "/api/clientlog":
                 DG.line(f"window: {str(d.get('msg', ''))[:2000]}")
                 return self._send(200, {"ok": True})
@@ -893,9 +899,6 @@ class Handler(BaseHTTPRequestHandler):
                 if d.get("reveal", True):
                     reveal(folder)
                 return self._send(200, {"ok": True, "folder": folder, "files": files})
-            elif path == "/api/reveal":
-                reveal(d.get("path") or HOME)
-                return self._send(200, {"ok": True})
             else:
                 return self._send(404, {"error": "unknown endpoint"})
             return self._send(200, self._edited())
