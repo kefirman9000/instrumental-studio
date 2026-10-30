@@ -36,6 +36,8 @@
         <div class="step-actions">
           <select id="sepMode" aria-label="How to split"></select>
           <button id="btnSplit">Split</button>
+          <label class="auto-opt" title="After splitting, runs Find damage and every step of Build the best instrumental. Undo takes the build back in one step.">
+            <input type="checkbox" id="optAutoSplit"> Then find damage and build automatically</label>
         </div>
       </li>
       <li class="step" data-step="detect"><span class="num">3</span>
@@ -140,7 +142,7 @@
       <h3 class="panel-h">Best versions <button class="ghost small hdr-btn" data-kind="versions" data-accept="1">Apply all</button></h3>
       <p class="help">When an instrument plays the same part more than once, you can use its cleanest take every time, so the part sounds the same throughout. Each one is added to Review for you to listen to first.</p>
       <div id="bestList"></div>
-      <h3 class="panel-h" style="margin-top:14px">Best hits and note starts <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples">Blend all</button></h3>
+      <h3 class="panel-h" style="margin-top:14px">Best hits and note starts <button class="ghost small" data-export-samples title="Save every repeated hit, note and loop as WAV files: the cleanest copy and a merge of the cleanest copies">Export samples</button> <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples">Blend all</button></h3>
       <p class="help">Drum sounds repeat hundreds of times. Hits the vocals smeared are filled in from the cleanest identical hit.</p>
       <div id="hitList"></div>
       <h3 class="panel-h" style="margin-top:14px">Repeated bars <button class="ghost small hdr-btn" data-kind="bars" data-accept="1">Apply all</button></h3>
@@ -243,6 +245,9 @@
         <b>Import stems</b><span>Already split with UVR, Spleeter or another tool. Select all the files, including the vocals.</span>
         <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
       </button>
+      <label class="auto-opt" title="Runs Find damage and then every step of Build the best instrumental, so you get the finished result to review">
+        <input type="checkbox" id="optAutoStems"> After importing stems, find the damage and build the best instrumental automatically
+      </label>
       <button class="big" id="btnDemo">
         <b>Try the demo song</b><span>A short song to walk through every step, including splitting</span>
         <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
@@ -289,6 +294,10 @@
       <label><input type="checkbox" name="raw"> Raw instrumental, for comparison</label>
       <label><input type="checkbox" name="vocals"> Vocals</label>
       <label><input type="checkbox" name="report" checked> Repair report</label>
+    </fieldset>
+    <fieldset><legend>Samples</legend>
+      <label title="Every repeated drum hit, note and loop, as its cleanest single copy from the split"><input type="checkbox" name="samples_raw"> Cleanest hits, notes and loops (as they are)</label>
+      <label title="The cleanest few copies of each blended into one, so noise in any one copy drops out"><input type="checkbox" name="samples_merged"> Merged from their cleanest copies</label>
     </fieldset>
     <fieldset><legend>Level</legend>
       <label title="Measured only where nobody sings, where the instrumental and the original should sound the same. Every file gets the same change, and nothing is pushed into clipping."><input type="checkbox" name="match_level"> Match the original song's loudness</label>
