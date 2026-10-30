@@ -967,8 +967,13 @@ function renderSteps() {
   $("#vinylBox").hidden = !fromFile;
   const vy = ov.meta.vinyl;
   $("#btnVinylUndo").hidden = !vy;
-  $("#importSub").textContent = vy ? `Song loaded. Vinyl crackle removed (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks).`
+  $("#importSub").textContent = vy ? `Vinyl crackle removed (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks)`
                                    : "Song loaded, ready to play";
+  $("#btnVinylOpen").textContent = vy ? "Vinyl ✓…" : "Vinyl crackle…";
+  $("#vinylState").textContent = vy
+    ? `Crackle removed from the recording (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks). Choose another strength to redo it from the untouched recording, or undo it.`
+    : "For vinyl rips: finds the clicks and crackle and rebuilds each from the sound around it. Drum hits and other real sharp sounds are left alone." +
+      (at >= 1 ? " The song is already split: removing it from the recording splits it again; removing it from the instruments keeps your repairs." : " Best done now, before splitting.");
   $("#btnVinyl").textContent = vy ? "Remove again" : (at >= 1 ? "Remove and split again" : "Remove vinyl crackle");
   $("#btnVinylStems").hidden = at < 1 || ov.stems.length === 0;
   const split = $("#btnSplit"), sel = $("#sepMode"), modelOk = m.installed || demo;
@@ -1841,8 +1846,10 @@ $$("[data-export-samples]").forEach(b => b.onclick = async () => {
 });
 
 /* ---------- vinyl crackle */
+$("#btnVinylOpen").onclick = () => $("#dlgVinyl").showModal();
 $("#btnVinyl").onclick = async () => {
   const ov = st.ov;
+  $("#dlgVinyl").close();
   if (ov.stage !== "imported" && !confirm("This cleans the recording, then splits it again with the same settings (the split was made " +
       "from the crackly recording). Repairs and decisions will need doing again. Continue?")) return;
   try {
@@ -1853,6 +1860,7 @@ $("#btnVinyl").onclick = async () => {
 };
 $("#btnVinylUndo").onclick = async () => {
   const ov = st.ov;
+  $("#dlgVinyl").close();
   if (!confirm("Go back to the untouched recording?" + (ov.stage !== "imported" ? " It will be split again with the same settings, and repairs will need doing again." : ""))) return;
   try {
     stopPreview(); player.pause();
@@ -1886,6 +1894,7 @@ $$("[data-sponsor]").forEach(b => b.onclick = async () => {
 });
 
 $("#btnVinylStems").onclick = async () => {
+  $("#dlgVinyl").close();
   try {
     stopPreview(); player.pause();
     await api.post("/api/vinyl/stems", { strength: $("#vinylStrength").value });
