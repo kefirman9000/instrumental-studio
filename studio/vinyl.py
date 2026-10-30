@@ -106,7 +106,8 @@ def declick(x, sr, strength="normal", progress=lambda f: None):
     """x: (channels, n). Returns (cleaned copy, number of clicks repaired)."""
     if strength not in STRENGTHS:
         strength = "normal"
-    _, _, order = STRENGTHS[strength]
+    _, max_len, order = STRENGTHS[strength]
+    longest_gap = int(2 * max_len * sr)          # never rebuild more than a few ms in one go
     y = np.array(x, dtype=np.float32, copy=True)
     ctx = max(4 * order, int(0.012 * sr))
     total = 0
@@ -116,7 +117,7 @@ def declick(x, sr, strength="normal", progress=lambda f: None):
         # merge runs whose context windows would overlap, so each fill sees clean surroundings
         merged = []
         for s, e in runs:
-            if merged and s - merged[-1][1] < order:
+            if merged and s - merged[-1][1] < order and e - merged[-1][0] <= longest_gap:
                 merged[-1] = (merged[-1][0], e)
             else:
                 merged.append((s, e))
@@ -128,8 +129,14 @@ def declick(x, sr, strength="normal", progress=lambda f: None):
             if a < 0 or b > y.shape[1]:
                 continue
             seg = y[c, a:b].astype(np.float64)
-            fill = _ar_fill(seg, mask[a:b].copy(), order)
-            if fill is None:
+            miss = mask[a:b].copy()
+            fill = _ar_fill(seg, miss, order)
+            if fill is None or not np.all(np.isfinite(fill)):
+                continue
+            # A repair may never be louder than the music around it: an unstable fill would otherwise add a
+            # huge spike (heard as a click, and it makes anything that levels by the peak turn everything down).
+            ctx_peak = float(np.abs(seg[~miss]).max()) if (~miss).any() else 0.0
+            if float(np.abs(fill[miss]).max()) > 1.2 * ctx_peak + 1e-6:
                 continue
             y[c, a:b] = fill.astype(np.float32)
             total += 1
