@@ -1,5 +1,12 @@
 # What's new
 
+## 1.21.0
+
+Two stronger ways to remove leftover singing:
+
+- **Second vocal-removal pass on the instruments.** Runs the vocal model (Roformer when installed, otherwise Demucs) again on each instrument track (not the drums) and offers to take out what it finds, but only in bars where someone is singing and what it found moves like the actual singing, so a melody line the model mistakes for a voice is left alone. Each part lands in Review under Vocal leftovers. From the suggestions (*Run it*), and as a step in Build the best instrumental (on by default; it takes a few minutes).
+- **Notch the singer's notes.** The app tracks the pitch of the singing moment by moment (checked here: within about 1.5% on low, high and vibrato voices) and makes narrow cuts on exactly those notes and their overtones in the instruments, only while singing, nothing in between. A new mode in *Lower frequencies here* (now the default there), a one-click suggestion for every instrument at -9 dB, and a Build step (off by default, since it can thin an instrument that plays the same notes as the singer).
+
 ## 1.20.0
 
 - **Lower frequencies here.** Drag across part of the song and choose an instrument (or all), what to lower (leftover singing 300 Hz-3.5 kHz, "s" and breath sounds 5-10 kHz, harshness 2-5 kHz, mud 150-500 Hz, boom 60-150 Hz, or a custom range), how (**Follow the singer** lowers only the frequencies the vocal is using at each moment, which takes out a ghost vocal and leaves the rest of the instrument alone; **Fixed cut** lowers the whole band), and by how much (-3 to -18 dB). By default it only acts while someone sings. Each one is listed in the Levels tab with Remove, and Undo works.
