@@ -1792,6 +1792,12 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
     }
     msg(s.has_project ? `Opening ${s.project || "your song"}` : "Ready");
     $("#safeBanner").hidden = !s.safe;
+    if (s.backup_home) {
+      $("#backupText").textContent = `It's running from ${s.app_dir}, a copy an update kept in case it had to go back. ` +
+        `Fix it copies this version into ${s.backup_home}; from then on start the app with the Start file there ` +
+        `(update any shortcut you use). Your songs and settings stay as they are.`;
+      $("#backupBanner").hidden = false;
+    }
     api.post("/api/booted", { ms: Math.round(performance.now()) }).catch(() => {});      // tells the app this start finished fine
     renderUpdate(s); pollUpdate(60000);
     if (s.job.running) { $("#boot").hidden = true; watchJob(); return; }
@@ -1852,6 +1858,16 @@ $$("[data-export-samples]").forEach(b => b.onclick = async () => {
     hideBusy(); toast(`Saved ${r.files.length} sample file(s) to ${r.folder}`, { ms: 9000 });
   } catch (e) { hideBusy(); fail(e); }
 });
+
+$("#btnMoveHome").onclick = async () => {
+  try {
+    const r = await api.post("/api/move_home", {});
+    $("#backupText").textContent = `Done. Close the app and start it from ${r.home} (Start Instrumental Studio). ` +
+      `If you start it from a shortcut, point the shortcut there.`;
+    $("#btnMoveHome").hidden = true;
+    api.post("/api/reveal", { path: r.home }).catch(() => {});
+  } catch (e) { fail(e); }
+};
 
 /* ---------- your own clean tracks and samples */
 $("#btnRefOpen").onclick = () => {

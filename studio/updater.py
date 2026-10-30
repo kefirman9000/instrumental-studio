@@ -194,6 +194,26 @@ def install(info, progress=lambda f, m: None):
     return info["latest"]
 
 
+def backup_home():
+    """When the app is running from inside a .backup folder (an old copy kept by an update), the real app
+    folder it belongs to; else None."""
+    parts = os.path.normpath(APP_DIR).split(os.sep)
+    if ".backup" in parts:
+        i = len(parts) - 1 - parts[::-1].index(".backup")
+        return os.sep.join(parts[:i]) or os.sep
+    return None
+
+
+def move_home():
+    """Copy the version that's running now into the real app folder (songs and settings aren't in either
+    folder, so nothing else changes). Returns the real folder."""
+    home = backup_home()
+    if not home or not os.path.isfile(os.path.join(home, "app.py")):
+        raise RuntimeError("Couldn't find the main app folder.")
+    _copy_over(APP_DIR, home)
+    return home
+
+
 def _copy_over(src, dst):
     for root, dirs, files in os.walk(src):
         dirs[:] = [d for d in dirs if d not in KEEP]

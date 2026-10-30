@@ -1,5 +1,10 @@
 # What's new
 
+## 1.23.2
+
+- **Fix: Use my graphics card stopped right away ("Stopped.").** Pressing Stop at any earlier point left a flag set, and the next model download obeyed it as soon as it started. Downloads now start fresh. If the switch was stopped partway, the model shows as not installed; click **Use my graphics card** (or Download) again and it finishes.
+- **Running an old backup copy?** If the app is started from inside its *.backup* folder (a copy an update keeps in case it has to go back), the start screen now says so, and **Fix it** copies the current version into the real app folder. Then start the app from there and point any shortcut at it.
+
 ## 1.23.1
 
 - **Fix: Use my graphics card didn't switch anything.** When the processor-only PyTorch was already installed, the installer called it "already satisfied" and kept it. It now removes it first and installs the version for your NVIDIA card, then checks the card really works (and says what to do if it doesn't, like updating the driver or restarting).
