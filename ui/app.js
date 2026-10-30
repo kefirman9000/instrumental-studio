@@ -533,12 +533,19 @@ function setVersion(v, force) {
 function reloadAudio() {
   const t = player.currentTime || 0, wasPlaying = !player.paused;
   player.src = `/api/audio?version=${st.version}&rev=${st.rev}`;
-  player.addEventListener("loadedmetadata", () => { player.currentTime = Math.min(t, player.duration || t); if (wasPlaying) player.play(); }, { once: true });
+  // Nothing is fetched until it plays (preload="none"): the app used to render the whole mix when a song
+  // opened and after every edit, even if you never pressed play. The position is kept for when you do.
+  try { player.currentTime = t; } catch {}
+  if (wasPlaying) player.play().catch(() => {});
 }
 $$("#versionSeg button").forEach(b => b.onclick = () => setVersion(b.dataset.v));
 $("#btnPlay").onclick = togglePlay;
 function togglePlay() { stopPreview(); if (player.paused) player.play().catch(fail); else player.pause(); }
 player.onplay = () => $("#playIcon").setAttribute("d", "M6 5h4v14H6zM14 5h4v14h-4z");
+// the mix is only rendered when you first press play after opening or editing: show that it's coming
+player.addEventListener("waiting", () => $("#btnPlay").classList.add("loading"));
+player.addEventListener("loadstart", () => { if (!player.paused) $("#btnPlay").classList.add("loading"); });
+for (const ev of ["playing", "pause", "error", "canplay"]) player.addEventListener(ev, () => $("#btnPlay").classList.remove("loading"));
 player.onpause = () => $("#playIcon").setAttribute("d", "M7 5v14l12-7z");
 function seek(t) { player.currentTime = clamp(t, 0, st.ov.meta.duration); movePlayhead(); }
 function movePlayhead() {
@@ -1629,6 +1636,7 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
 /* ------------------------------------------------------------------ boot */
 (async function boot() {
   const msg = t => { const m = $("#bootMsg"); if (m) m.textContent = t; };
+  $("#welcome").hidden = false;          // usable right away; its lists fill in as soon as the app answers
   try {
     let s;
     for (let i = 0; ; i++) {
