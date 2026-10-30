@@ -1,5 +1,23 @@
 # What's new
 
+## 1.22.0
+
+Cleaner instrumentals:
+- **Reverb tails.** Leftover singing often rings on as reverb for up to a second after each line. The cuts (Lower frequencies here, notches) and the second vocal-removal pass now follow it; the notches hold the last note sung while it fades.
+- **Centre only.** The lead vocal sits in the middle of the mix, most instruments are spread out. Cuts can now act on the middle only, leaving each instrument's stereo sides untouched (on by default for new cuts).
+- **Where leftover singing remains.** Pink marks along the top of each instrument's lane show where it still moves like the singer, as it sounds now (Settings to hide them).
+- **Bass pattern.** Learn the drum pattern now learns the bass too, and restores bass notes the vocals took, under the same strict rules.
+- **Weakest bars.** Score how clean each section is now also lists the weakest single bars, each with Listen, Rebuild and Notch here.
+
+Build the best instrumental includes all of it:
+- **Notching is now targeted and on by default:** after everything else, it notches the singer's notes (centre only, with reverb tails) just in the stretches where the leftover map still shows singing, instead of the whole song.
+- **Improve weak sections** also tries rebuilding the weakest single bars and keeps a rebuild only if it's clearly cleaner and still fits the original.
+- The pattern step covers drums and bass.
+
+For music software (Export):
+- **Tempo map and section markers:** a MIDI tempo map that follows the song beat by beat (so it lines up even where the tempo drifts), the sections as markers, Audacity section labels, and the tempo in a text file.
+- **Drum pattern as MIDI:** every drum hit as General MIDI drum notes on the song's own tempo map, with loudness as velocity, including the hits the drum pattern restores under the singing.
+
 ## 1.21.0
 
 Two stronger ways to remove leftover singing:
