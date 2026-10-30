@@ -225,7 +225,8 @@ async function watchJob() {
 
 /* ------------------------------------------------------------------ workspace */
 async function openWorkspace() {
-  const r = await api.get("/api/overview");
+  // the first look at a big song (many tracks) can take a while; don't call the app stuck for it
+  const r = await api.get("/api/overview", 120000);
   st.rev = r.rev; st.ov = r.overview; st.sel = null; st.scope = null; st.specs = {};
   showWelcome(false);
   $("#workspace").hidden = false; $("#transport").hidden = false; $("#btnExport").disabled = false;
@@ -785,6 +786,18 @@ function renderTips() {
     list.append(d);
   }
 }
+// long one-off jobs: show the busy screen while they run
+async function runChecked(msg, fn) {
+  showBusy(0.5, msg);
+  try { await fn(); } catch (e) { fail(e); } finally { hideBusy(); }
+}
+async function scoreSections() {
+  return runChecked("Scoring how clean each section is", async () => {
+    await applyEdit(await api.post("/api/quality", {}));
+    activateTab("grid");
+    toast("Clean scores are in the Repairability table: before repairs, then now.");
+  });
+}
 async function runTip(a) {
   if (a.kind === "keep") return setKeep([...(st.ov.mixer.keep || []), ...a.ranges]);
   if (a.kind === "bulk") return edit("/api/bulk", { action: a.action, types: ["repair"] });
@@ -795,6 +808,20 @@ async function runTip(a) {
   if (a.kind === "alt") return tryAlt(a.mode, a.start, a.end, null);
   if (a.kind === "mute") return setMutes([...(st.ov.mixer.mute_ranges || []), { start: a.start, end: a.end, stem: a.stem }]);
   if (a.kind === "mutes") return setMutes([...(st.ov.mixer.mute_ranges || []), ...a.ranges]);
+  if (a.kind === "mud") return edit("/api/mixer", { mud_cut: { ...(st.ov.mixer.mud_cut || {}), [a.stem]: a.db } });
+  if (a.kind === "status") return edit("/api/status", { ids: a.ids, status: a.status });
+  if (a.kind === "verify") return runChecked("Double-checking every fix against the original", async () => {
+    const r = await api.post("/api/verify", {}); await applyEdit(r);
+    const n = r.flagged.length;
+    if (!n) return toast("Everything lines up with the original.");
+    toast(`${n} fix${n === 1 ? "" : "es"} don't line up with the original.`, { ms: 9000, action: ["Show them", () => { st.filter = "misfit"; st.scope = null; activateTab("review"); renderReview(); }] });
+  });
+  if (a.kind === "best_of") return runChecked("Scoring every bar of every split", async () => {
+    const r = await api.post("/api/best_of", {}); await applyEdit(r);
+    const n = r.new_ids.length;
+    if (!n) return toast("The current split is already the cleanest everywhere.");
+    toast(`${n} instrument${n === 1 ? "" : "s"} built from the cleanest split, waiting in Review.`, { ms: 9000, action: ["Show them", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
+  });
   if (a.kind === "scan") {
     await edit("/api/glitch_scan", {});
     const n = st.ov.suggestions.filter(x => x.type === "glitch" && x.status === "pending").length;
@@ -933,6 +960,7 @@ const FILTERS = {
   cleanup: s => s.type === "glitch" || s.type === "smooth",
   takes: s => ["take", "alt", "hits", "bars", "rebuild"].includes(s.type),
   hard: s => s.status === "low" || s.status === "nodonor",
+  misfit: s => !!(s.check && s.check.flag) && s.status !== "rejected",
   all: () => true,
 };
 $$("#filters button").forEach(b => b.onclick = () => { st.filter = b.dataset.f; renderReview(); });
@@ -971,7 +999,7 @@ function renderReview() {
   const bulk = $("#bulkBar"); bulk.innerHTML = "";
   if (list.some(s => s.status !== "nodonor")) {
     const scopeArgs = { stem: st.scope?.stem ?? null, section: st.scope?.section ?? null };
-    const types = st.filter === "bleed" ? ["bleed", "ess"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "takes" ? ["take", "alt", "hits", "bars", "rebuild"] : st.filter === "review" ? ["repair", "bleed", "ess", "glitch", "smooth", "take", "alt", "hits", "bars", "rebuild"] : ["repair"];
+    const types = st.filter === "bleed" ? ["bleed", "ess"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "takes" ? ["take", "alt", "hits", "bars", "rebuild"] : st.filter === "misfit" ? ["repair", "take", "alt", "hits", "bars", "rebuild"] : st.filter === "review" ? ["repair", "bleed", "ess", "glitch", "smooth", "take", "alt", "hits", "bars", "rebuild"] : ["repair"];
     const mk = (label, action, cls) => { const b = document.createElement("button"); b.className = "small " + (cls || "ghost"); b.textContent = label; b.onclick = () => edit("/api/bulk", { action, ...scopeArgs, types }); bulk.append(b); };
     const what = st.filter === "bleed" || st.filter === "cleanup" || st.filter === "takes" ? "fixes" : "repairs";
     const rec = list.filter(x => x.recommended && x.status === "pending").length;
@@ -1031,6 +1059,7 @@ function sugItem(s) {
     facts.push(["Leftover vocal", `${pct(s.conf)} certain; the part removed sits ${Math.abs(s.removed_db ?? 0).toFixed(0)} dB below the ${s.stem}`]);
   }
   if (s.note && !s.manual_donor && s.type === "repair") facts.push(["Note", esc(s.note)]);
+  if (s.check && s.check.flag) facts.push(["Doesn't fit", esc(s.check.flag)]);
   if (["glitch", "smooth", "take", "alt", "hits", "bars", "ess", "rebuild"].includes(s.type)) facts.push(["What", esc(s.note || "")]);
   if (s.type === "rebuild" && s.donors?.length) facts.push(["Borrowed from", s.donors.map(x => `${esc(sec[x.section].name)} at ${fmtP(x.start)}`).join(", ")]);
   if (s.type === "take") facts.push(["How alike", `${pct(s.conf)}, level matched by ${(s.gain_db || 0) >= 0 ? "+" : ""}${(s.gain_db || 0).toFixed(1)} dB`]);
@@ -1158,13 +1187,16 @@ function renderBest() {
 async function addFixes(path, body, accept) {
   try {
     const r = await api.post(path, body);
-    if (accept && r.new_ids.length) {
-      await applyEdit(await api.post("/api/status", { ids: r.new_ids, status: "accepted" }));
+    const bad = new Set(r.overview.suggestions.filter(x => r.new_ids.includes(x.id) && x.check && x.check.flag).map(x => x.id));
+    const good = r.new_ids.filter(id => !bad.has(id));
+    if (accept && good.length) {
+      await applyEdit(await api.post("/api/status", { ids: good, status: "accepted" }));
     } else await applyEdit(r);
     const n = r.new_ids.length;
     if (!n) return toast("Nothing there was damaged enough to rebuild.");
-    toast(accept ? `Applied ${n} fix${n === 1 ? "" : "es"}. Undo takes ${n === 1 ? "it" : "them"} back.`
-                 : `Added ${n} item${n === 1 ? "" : "s"} to Review.`,
+    const held = bad.size ? ` ${bad.size} didn't line up with the original, so ${bad.size === 1 ? "it waits" : "they wait"} in Review under Doesn't fit.` : "";
+    toast(accept ? (good.length ? `Applied ${good.length} fix${good.length === 1 ? "" : "es"}. Undo takes ${good.length === 1 ? "it" : "them"} back.` : "Nothing applied.") + held
+                 : `Added ${n} item${n === 1 ? "" : "s"} to Review.` + held,
       { action: ["Show in Review", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
   } catch (e) { fail(e); }
 }
@@ -1174,7 +1206,9 @@ async function applyBest(kind, accept, blend = false) {
     await applyEdit(r);
     const n = r.new_ids.length;
     if (!n) return toast("Nothing left to rebuild there.");
-    toast(accept ? `Applied ${n} repeated-part fix${n === 1 ? "" : "es"}. Undo takes them all back in one step.`
+    const bad = r.overview.suggestions.filter(x => r.new_ids.includes(x.id) && x.check && x.check.flag).length;
+    const held = bad ? ` ${bad} didn't line up with the original and wait${bad === 1 ? "s" : ""} in Review under Doesn't fit.` : "";
+    toast(accept ? `Applied ${n - bad} repeated-part fix${n - bad === 1 ? "" : "es"}. Undo takes them all back in one step.${held}`
                  : `Added ${n} item${n === 1 ? "" : "s"} to Review.`,
       { ms: 8000, action: ["Show in Review", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
   } catch (e) { fail(e); }
@@ -1223,10 +1257,15 @@ function renderGrid() {
   const ov = st.ov, w = $("#gridWrap");
   if (ov.stage !== "detected") { w.innerHTML = `<p class="help">This fills in after step 3, Find damage.</p>`; return; }
   const STATE = { clean: "No vocals", undamaged: "Undamaged", repaired: "Repaired", repairable: "Repairable", partial: "Partly", hard: "Hard to fix" };
-  let html = `<table class="grid"><thead><tr><th></th>${ov.stems.map(k => `<th><span class="dot" style="display:inline-block;background:${ov.colors[k]}"></span> ${esc(k)}</th>`).join("")}</tr></thead><tbody>`;
+  const Q = ov.meta.quality, stale = Q && Q.applied !== ov.applied_count;
+  const qcell = i => { if (!Q) return ""; const b = Q.before[String(i)], n = Q.now[String(i)];
+    if (n == null) return `<td class="q dim">-</td>`;
+    const up = b != null && n > b, col = n >= 85 ? "var(--ok)" : n >= 70 ? "#e3c46f" : "var(--damage)";
+    return `<td class="q" title="Clean score, 0 to 100: higher means less sound the original doesn't have and less leftover singing.${stale ? " Changed since scored: score again." : ""}"><b style="color:${col}">${n}</b>${b != null ? `<span class="dim small">${up ? "up from" : "was"} ${b}</span>` : ""}</td>`; };
+  let html = `<table class="grid"><thead><tr><th></th>${ov.stems.map(k => `<th><span class="dot" style="display:inline-block;background:${ov.colors[k]}"></span> ${esc(k)}</th>`).join("")}${Q ? `<th>Clean score${stale ? " *" : ""}</th>` : ""}</tr></thead><tbody>`;
   html += `<tr><th class="sec">Whole song</th>${ov.stems.map(k => { const s = ov.stem_summary[k];
     const state = !s.count ? "undamaged" : s.repairability >= 0.55 ? "repairable" : s.repairability >= 0.3 ? "partial" : "hard";
-    return `<td class="st-${state}" data-stem="${k}"><b>${s.count ? pct(Math.min(1, s.damage)) + " hit" : "Clean"}</b>${s.count ? pct(s.repairability) + " fixable" : ""}</td>`; }).join("")}</tr>`;
+    return `<td class="st-${state}" data-stem="${k}"><b>${s.count ? pct(Math.min(1, s.damage)) + " hit" : "Clean"}</b>${s.count ? pct(s.repairability) + " fixable" : ""}</td>`; }).join("")}${Q ? "<td></td>" : ""}</tr>`;
   ov.sections.forEach((sec, i) => {
     html += `<tr><th class="sec" title="Double-click to rename" data-sec="${i}"><span class="dot" style="display:inline-block;background:${sec.color}"></span> ${esc(sec.name)}</th>`;
     for (const k of ov.stems) {
@@ -1234,11 +1273,12 @@ function renderGrid() {
       const body = g.count ? `<b>${pct(Math.min(1, g.damage))} hit</b>${pct(g.repairability)} fixable` : `<b>${STATE[g.state]}</b>`;
       html += `<td class="st-${g.state}" data-sec="${i}" data-stem="${k}" title="${STATE[g.state]}: ${g.count} spot(s), ${pct(g.fixed || 0)} repaired">${body}</td>`;
     }
-    html += `</tr>`;
+    html += `${qcell(i)}</tr>`;
   });
   html += `</tbody></table><div class="grid-key"><span style="color:var(--ok)">Good source found</span><span style="color:#e3c46f">Partial match</span><span style="color:var(--damage)">No good source</span><span style="color:var(--repair)">Repaired</span></div>`;
   w.innerHTML = html;
-  w.querySelectorAll("td").forEach(td => td.onclick = () => {
+  const qb = $("#btnQuality"); if (qb) { qb.hidden = ov.stage !== "detected"; qb.textContent = Q ? "Score again" : "Score how clean each section is"; }
+  w.querySelectorAll("td:not(.q)").forEach(td => td.onclick = () => {
     const sec = td.dataset.sec != null ? +td.dataset.sec : null; st.filter = "all"; setScope({ section: sec, stem: td.dataset.stem });
   });
   w.querySelectorAll("th[data-sec]").forEach(th => th.ondblclick = async () => {
@@ -1573,3 +1613,5 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
     showWelcome(true);
   } catch (e) { fail(e); }
 })();
+
+$("#btnQuality").onclick = () => scoreSections();
