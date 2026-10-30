@@ -38,7 +38,7 @@ You do this once. It takes about 10 minutes, most of it waiting for downloads.
    - Mac: `brew install ffmpeg` (needs [Homebrew](https://brew.sh))
    - Linux: `sudo apt install ffmpeg`
 
-4. **Install the app's parts.** In the terminal, go into the unzipped folder and run:
+4. **Install the app's parts.** Double-click **Check and fix setup (Windows).bat** (Mac: **Check and fix setup (Mac).command**) in the unzipped folder: it checks everything and installs what's missing. Or, in the terminal, go into the unzipped folder and run:
    ```
    pip install -r requirements.txt
    ```
@@ -230,6 +230,8 @@ Updates never touch your songs, projects or exports. The previous version is kep
 ## Troubleshooting
 
 **The model light is red after a download.** The panel says what went wrong. Click **Try again**, or Settings → **Reinstall separation model**. The message says what went wrong; most often it's the internet connection or not enough disk space (it needs about 3 GB). If it says your Python isn't supported, install Python 3.12 or 3.13 from python.org.
+
+**Not sure everything is installed?** Double-click **Check and fix setup** in the app folder. It checks everything the app needs and offers to install what's missing. The app also opens it by itself if something it needs is missing.
 
 **MP3 files won't open.** ffmpeg is missing. Install it (step 3 above) and restart the app, or convert the song to WAV.
 
