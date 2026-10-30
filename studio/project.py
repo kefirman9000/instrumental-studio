@@ -3757,7 +3757,9 @@ class Project:
             if worst:
                 from .installer import extra_installed
                 base = (self.meta.get("sep_mode") or "4stem").split("+")[0]
-                rof = extra_installed("roformer")
+                from .updater import load_prefs
+                from .diag import home_dir
+                rof = extra_installed("roformer") and bool(load_prefs(home_dir()).get("roformer_passes"))
                 alt = {"4stem_fast": "4stem", "4stem": "hybrid" if rof else "ensemble", "ensemble": "hybrid" if rof else None,
                        "6stem": "hybrid6" if rof else "6stem_best", "6stem_best": "hybrid6" if rof else None,
                        "hybrid": "ensemble", "hybrid6": "6stem_best"}.get(base)
