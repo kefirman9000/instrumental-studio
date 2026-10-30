@@ -991,9 +991,10 @@ class Project:
                 centroid = F[clean].mean(0)
                 med = np.median(lv[clean])
                 score = [float(((F[i] - centroid) ** 2).mean() + 0.05 * abs(lv[i] - med)) for i in clean]
-                best = clean[int(np.argmin(score))]
+                ranked = [int(clean[j]) for j in np.argsort(score)]      # cleanest, most typical first
                 sounds.append({"id": ci, "name": HT.name_sound(F[c].mean(0), centers), "count": len(c),
-                               "clean": len(clean), "damaged": [int(i) for i in damaged], "best": int(best)})
+                               "clean": len(clean), "damaged": [int(i) for i in damaged], "best": ranked[0],
+                               "ranked": ranked})
             cache[k] = {"pos": pos, "next": np.r_[pos[1:], x.shape[0]] if len(pos) else pos, "F": F, "lv": lv,
                         "sounds": sounds}
         return cache[k]
@@ -1011,26 +1012,48 @@ class Project:
                 secs = sorted({self._section_of(sd["pos"][i] / self.sr) for i in snd["damaged"]})
                 existing = [x for x in self.suggestions.values() if x["type"] == "hits" and x["stem"] == k
                             and x.get("sound") == snd["id"]]
+                # show the version that's in use (applied, else waiting, else rejected)
+                rank = {"accepted": 0, "pending": 1}
+                existing.sort(key=lambda x: rank.get(x["status"], 2))
                 out.append({"stem": k, "sound": snd["id"], "name": snd["name"], "count": snd["count"],
                             "damaged": len(snd["damaged"]), "best_time": t_best, "sections": secs,
-                            "status": existing[0]["status"] if existing else None})
+                            "clean": snd["clean"], "blend_n": min(self.BLEND_HITS, len(snd.get("ranked", [snd["best"]]))),
+                            "status": existing[0]["status"] if existing else None,
+                            "blended": bool(existing and existing[0].get("blend"))})
         return out
 
-    def make_hits(self, k, sound_id, start=None, end=None):
-        """Offer to rebuild every vocal-damaged hit of one repeated sound from its cleanest example,
-        one review item per section. Nothing is applied until the person applies it."""
+    BLEND_HITS = 5      # how many of the cleanest hits a blend combines
+
+    def make_hits(self, k, sound_id, start=None, end=None, blend=False):
+        """Offer to rebuild every vocal-damaged hit of one repeated sound, one review item per section.
+        Nothing is applied until the person applies it.
+
+        blend=False: fill in from the single cleanest example.
+        blend=True:  fill in from the BLEND_HITS cleanest examples together. Each is lined up to the
+                     damaged hit, level-matched, and the repair engine takes the per-frequency median of
+                     them (a mean when there are only two), so a wash or a bit of bleed that's in only one
+                     of them drops out. The phase comes from the cleanest hit, so the attack stays sharp
+                     instead of smearing the way averaging the raw waveforms would."""
         with self.lock:
             sd = self._sounds(k)
             snd = next(x for x in sd["sounds"] if x["id"] == sound_id)
             raw = self.stems[k]
             n = raw.shape[1]
             pos, nxt = sd["pos"], sd["next"]
-            bp = int(pos[snd["best"]])
-            best_len = int(min(nxt[snd["best"]] - bp, 0.35 * self.sr))
             pre = int(0.003 * self.sr)
-            best = raw[:, max(0, bp - pre):bp + best_len]
-            Fb = sd["F"][snd["best"]]
-            B, _ = HT._bands(self.sr)
+            min_len = int(0.03 * self.sr)
+            ranked = snd.get("ranked") or [snd["best"]]
+            src = []       # (start sample, usable length) of each clean hit used, cleanest first
+            for j in (ranked[:self.BLEND_HITS] if blend else ranked[:1]):
+                p = int(pos[j])
+                ln = int(min(nxt[j] - p, 0.35 * self.sr))
+                if p - pre >= 0 and ln >= min_len:
+                    src.append((p, ln))
+            if not src:
+                return []
+            bp = src[0][0]
+            best_len = min(ln for _, ln in src)
+            srcs = [raw[:, p - pre:p + best_len].mean(0) for p, _ in src]
             by_sec = {}
             for i in snd["damaged"]:
                 t_i = pos[i] / self.sr
@@ -1051,9 +1074,15 @@ class Project:
                     # line the clean hit up with this one, sample-accurately, then fill in only what the
                     # vocals took (same engine as repairs, with the clean hit as the source)
                     tgt = raw[:, p0 - pre:p0 + L].mean(0)
-                    sh = HT.align(best.mean(0)[:pre + L], tgt, int(0.002 * self.sr))
-                    lag = (bp - p0) - sh
-                    res = repair_window(raw, self.stems["vocals"], self.inst_sum, p0 - pre, p0 + L, [lag], 1.0, 1.0,
+                    lags = []
+                    for (sp, _), s in zip(src, srcs):
+                        if abs(sp - p0) < L + pre:
+                            continue                  # never borrow a hit from on top of itself
+                        sh = HT.align(s[:pre + L], tgt, int(0.002 * self.sr))
+                        lags.append((sp - p0) - sh)
+                    if not lags:
+                        continue
+                    res = repair_window(raw, self.stems["vocals"], self.inst_sum, p0 - pre, p0 + L, lags, 1.0, 1.0,
                                         self.B, self.centers, self.sr, self._level_floor(k))
                     if res["severity"] < 0.02:
                         continue                      # this hit wasn't really damaged
@@ -1064,16 +1093,25 @@ class Project:
                     used += 1
                 if not used:
                     continue
-                hits_i = hits_i[:used] if used < len(hits_i) else hits_i
-                sid = f"h_{k}_{sound_id}_{si}" + ("" if start is None else f"_{int(start * 100)}")
+                base = f"h_{k}_{sound_id}_{si}"
+                tail = "" if start is None else f"_{int(start * 100)}"
+                sid, other = (base + "_blend" + tail, base + tail) if blend else (base + tail, base + "_blend" + tail)
+                # blend and single-hit versions of the same part are alternatives: switching to one
+                # takes the other out (Undo brings it back)
+                if self.suggestions.get(other, {}).get("status") in ("accepted", "pending"):
+                    self.set_status([other], "rejected", f"Switched {snd['name']} hits to "
+                                                         f"{'a blend' if blend else 'the cleanest hit'}")
+                hs = "s" if used != 1 else ""
+                how = (f"from a blend of the {len(src)} cleanest ones" if len(src) > 1
+                       else f"from the cleanest one at {bp / self.sr:.1f}s")
                 self.suggestions[sid] = {
-                    "id": sid, "type": "hits", "stem": k, "sound": sound_id, "status": "pending",
+                    "id": sid, "type": "hits", "stem": k, "sound": sound_id, "status": "pending", "blend": bool(blend),
                     "start": sec["start"], "end": sec["end"], "section": si, "conf": 1.0, "severity": 0.0,
-                    "strength": 1.0, "donors": [{"beat": 0, "start": bp / self.sr, "end": (bp + best_len) / self.sr,
-                                                 "section": self._section_of(bp / self.sr), "match": 1.0, "vocal_overlap": 0.0}],
-                    "note": f"Rebuilds {len(hits_i)} {snd['name']} hit{'s' if used != 1 else ''} the vocals smeared, "
-                            f"filling in what's missing from the cleanest one at {bp / self.sr:.1f}s"}
-                self.suggestions[sid]["note"] = self.suggestions[sid]["note"].replace(f"Rebuilds {len(hits_i)}", f"Rebuilds {used}")
+                    "strength": 1.0,
+                    "donors": [{"beat": 0, "start": p / self.sr, "end": (p + best_len) / self.sr,
+                                "section": self._section_of(p / self.sr), "match": 1.0, "vocal_overlap": 0.0}
+                               for p, _ in src],
+                    "note": f"Rebuilds {used} {snd['name']} hit{hs} the vocals smeared, filling in what's missing {how}"}
                 self.patches[sid] = (a, patch.astype(np.float16))
                 ids.append(sid)
             return ids
@@ -1225,9 +1263,9 @@ class Project:
         return ids
 
     # ------------------------------------------------------------------ all repeated parts in one go
-    def apply_best(self, kind="all", accept=True):
+    def apply_best(self, kind="all", accept=True, blend=False):
         """Create every best-version / best-hit / repeated-bar fix at once and, if accept, apply them all
-        (one undo step). Returns the ids."""
+        (one undo step). blend: rebuild drum hits from a blend of their cleanest examples. Returns the ids."""
         ids = []
         if kind in ("all", "versions"):
             for x in self.best_versions():
@@ -1235,8 +1273,9 @@ class Project:
                     ids.append(self.make_take(x["stem"], x["section"], x["best"]["section"]))
         if kind in ("all", "hits"):
             for h in self.best_hits():
-                if not h["status"]:
-                    ids += self.make_hits(h["stem"], h["sound"])
+                # with blend, also switch hits already done the single-hit way
+                if not h["status"] or (blend and not h["blended"] and h["status"] != "rejected"):
+                    ids += self.make_hits(h["stem"], h["sound"], blend=blend)
         if kind in ("all", "bars"):
             for g in self.best_bars():
                 if not g["status"]:
@@ -1491,30 +1530,50 @@ class Project:
         self.set_status(ids, status, f"{action} {len(ids)} edit(s)")
 
     # ------------------------------------------------------------------ export
-    def export(self, folder, fmt="wav", what=("mix", "stems", "raw", "vocals", "report"), bits=24):
+    def _match_gain(self, mix):
+        """Gain that brings the instrumental to the original song's level, measured only where nobody
+        sings (there the two should sound the same). 1.0 when there's too little of that to measure."""
+        n = min(mix.shape[1], self.original.shape[1])
+        free = self._vocal_curve(0, n) < 0.02
+        if free.sum() < 5 * self.sr:
+            return 1.0
+        o = float((self.original[:, :n][:, free].astype(np.float64) ** 2).mean())
+        m = float((mix[:, :n][:, free].astype(np.float64) ** 2).mean())
+        return float(np.clip(np.sqrt(o / (m + EPS)), 0.5, 4.0)) if m > 0 else 1.0
+
+    def export(self, folder, fmt="wav", what=("mix", "stems", "raw", "vocals", "report"), bits=24, match_level=False):
+        """Write the chosen files. Every audio file gets the SAME gain, so the exported instruments still
+        add up to the exported mix and keep the balance you heard (they used to be turned down one by one
+        when they came near clipping). match_level: bring everything to the original song's level."""
         os.makedirs(folder, exist_ok=True)
         name = os.path.splitext(self.meta.get("name") or "song")[0]
         ext = "." + fmt
         b = 16 if (fmt == "wav" and bits == 16) else 32
         written = []
 
-        def put(fname, audio):
-            peak = float(np.abs(audio).max()) + EPS
-            if peak > 0.999:
-                audio = audio * (0.999 / peak)
-            p = os.path.join(folder, fname + ext)
-            save_audio(p, audio, self.sr, bits=b)
-            written.append(p)
-
+        jobs = []          # (file name, function that renders the audio): rendered twice, so nothing big is held
         if "mix" in what:
-            put(f"{name} - instrumental (repaired)", self.mix("repaired"))
+            jobs.append((f"{name} - instrumental (repaired)", lambda: self.mix("repaired")))
         if "raw" in what:
-            put(f"{name} - instrumental (raw)", self.mix("raw", use_mixer=False))
+            jobs.append((f"{name} - instrumental (raw)", lambda: self.mix("raw", use_mixer=False)))
         if "stems" in what:
             for k in self.instruments:
-                put(f"{name} - {k} (repaired)", self.shaped_stem(k) * self._gain_curve(k, 0, self.stems[k].shape[1]))
+                jobs.append((f"{name} - {k} (repaired)",
+                             lambda k=k: self.shaped_stem(k) * self._gain_curve(k, 0, self.stems[k].shape[1])))
         if "vocals" in what:
-            put(f"{name} - vocals", self.stems["vocals"])
+            jobs.append((f"{name} - vocals", lambda: self.stems["vocals"]))
+
+        g = 1.0
+        if match_level and self.original is not None:
+            g = self._match_gain(self.mix("repaired"))
+        peak = max([float(np.abs(f()).max()) for _, f in jobs] or [0.0]) * g
+        if peak > 0.999:
+            g *= 0.999 / peak                     # one shared trim keeps every file in step
+        for fname, f in jobs:
+            p = os.path.join(folder, fname + ext)
+            save_audio(p, (f() * g).astype(np.float32), self.sr, bits=b)
+            written.append(p)
+        self.meta["last_export_gain_db"] = float(20 * np.log10(g + EPS))
         if "report" in what:
             p = os.path.join(folder, f"{name} - repair report.json")
             with open(p, "w") as f:
@@ -1663,6 +1722,68 @@ class Project:
         lens = np.maximum(np.diff(idx), 1)
         return 10 * np.log10(sums / lens + 1e-12)
 
+    def ghost_runs(self, k):
+        """Stretches of bars where instrument k is best muted: under the singing it is quiet next to how
+        it plays where nobody sings, and what's left either rises and falls with the singer (leftover
+        vocal), was flagged as leftover vocal, or is so quiet it's only separation noise.
+        Returns [{start, end, bars, why}], skipping parts already muted."""
+        if self.stage != "detected" or k not in self.stems or k in NOT_REPAIRED:
+            return []
+        lv = self._beat_levels(self.render_stem(k))
+        vl = self._beat_levels(self.stems["vocals"])
+        va = np.asarray(self.VA)
+        nb = min(len(lv), len(vl), len(va), len(self.beat_times) - 1)
+        if nb < 8:
+            return []
+        lv, vl, va = lv[:nb], vl[:nb], va[:nb]
+        free = (va < 0.04) & (lv > lv.max() - 60)          # nobody singing, and not digital silence
+        if free.sum() < 4:
+            return []
+        ref = float(np.percentile(lv[free], 75))            # how loud it plays when it plays on its own
+        bleed_bars = {x.get("window") for x in self.suggestions.values()
+                      if x["type"] in ("bleed", "ess") and x["stem"] == k and x["status"] != "rejected"}
+        mutes = self.mixer.get("mute_ranges", [])
+        flags = []
+        for wi, (s0, L) in enumerate(self.windows):
+            e = min(s0 + L, nb)
+            if e - s0 < 2 or float(va[s0:e].mean()) < 0.3:
+                flags.append(None)
+                continue
+            level = float(np.median(lv[s0:e]))
+            # correlation over the bar and its neighbours: one bar of beats is too few to judge
+            c0, c1 = max(0, s0 - L), min(nb, e + L)
+            a_, b_ = lv[c0:c1], vl[c0:c1]
+            follows = bool(a_.std() > 0.5 and b_.std() > 0.5 and np.corrcoef(a_, b_)[0, 1] > 0.6)
+            if level < ref - 24:
+                flags.append("noise")
+            elif level < ref - 12 and (follows or wi in bleed_bars):
+                flags.append("ghost")
+            else:
+                flags.append(None)
+        runs, cur = [], None
+        for wi, f in enumerate(flags + [None]):
+            if f and cur:
+                cur["end_w"] = wi
+                cur["why"].add(f)
+            elif f:
+                cur = {"start_w": wi, "end_w": wi, "why": {f}}
+            elif cur:
+                runs.append(cur)
+                cur = None
+        out = []
+        for r in runs:
+            s0 = self.windows[r["start_w"]][0]
+            e0, eL = self.windows[r["end_w"]]
+            t0, t1 = float(self.beat_times[s0]), float(self.beat_times[min(e0 + eL, nb)])
+            bars = r["end_w"] - r["start_w"] + 1
+            if bars < 2 and "ghost" not in r["why"]:
+                continue                                      # a single quiet bar isn't worth a mute
+            if any(m.get("stem") in (None, k) and m["start"] <= t0 + 0.05 and m["end"] >= t1 - 0.05 for m in mutes):
+                continue
+            out.append({"start": t0, "end": t1, "bars": bars,
+                        "why": "ghost" if "ghost" in r["why"] else "noise"})
+        return out
+
     def tips(self):
         """Suggestions for keeping the fixed parts high quality and consistent with the rest of the song.
         Each tip carries an action the app can perform in one click (and undo)."""
@@ -1744,6 +1865,30 @@ class Project:
                     out.append({"id": f"mute_{k}_{si}", "title": f"Mute the {k} in {sec['name']}",
                                 "detail": f"There the {k} is quiet and mostly leftover singing, so muting it removes the ghost vocal without losing much.",
                                 "button": "Mute it there", "action": {"kind": "mute", "start": sec["start"], "end": sec["end"], "stem": k}})
+
+        # bar by bar: stretches where an instrument is only the singer's ghost or separation noise
+        done = {t["action"]["stem"] for t in out if t["id"].startswith("mute_")}
+        for k in self.instruments:
+            if k in done:
+                continue
+            try:
+                runs = self.ghost_runs(k)
+            except Exception as e:
+                log(f"ghost check skipped for {k}: {e}")
+                continue
+            if not runs:
+                continue
+            secs = sum(r["end"] - r["start"] for r in runs)
+            ghost = any(r["why"] == "ghost" for r in runs)
+            where = ", ".join(f"{r['start'] // 60:.0f}:{r['start'] % 60:04.1f}" for r in runs[:4]) + ("..." if len(runs) > 4 else "")
+            out.append({"id": f"ghost_{k}", "title": f"Mute the {k} where it's only {'leftover singing' if ghost else 'separation noise'} "
+                                                     f"({len(runs)} part{'s' if len(runs) != 1 else ''}, {secs:.0f} s)",
+                        "detail": f"Under the vocals at {where} the {k} is far quieter than it plays on its own, and what's left "
+                                  f"{'moves with the singer' if ghost else 'is mostly noise from the split'}. Muting just those bars "
+                                  f"cleans up the instrumental without losing anything you'd hear. Each part is listed in the "
+                                  f"Levels tab, and Undo takes them all back.",
+                        "button": "Mute those parts",
+                        "action": {"kind": "mutes", "ranges": [{"start": r["start"], "end": r["end"], "stem": k} for r in runs]}})
 
         bv = [x for x in self.best_versions() if not x["status"]]
         if bv:

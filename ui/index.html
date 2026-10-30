@@ -128,12 +128,12 @@
       <div class="bulk-best" id="bulkBest">
         <b>All repeated parts</b>
         <span class="dim small">Rebuild everything listed below in one go: best versions, drum hits and repeated bars.</span>
-        <div class="row"><button class="primary small" data-kind="all" data-accept="1">Apply all</button><button class="small" data-kind="all" data-accept="0">Add all to Review</button></div>
+        <div class="row"><button class="primary small" data-kind="all" data-accept="1">Apply all</button><button class="small" data-kind="all" data-accept="1" data-blend="1" title="Apply everything, rebuilding drum hits from a blend of their cleanest examples instead of the single cleanest one">Apply all, blend hits</button><button class="small" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples (switches any done the single-hit way)">Blend all hits</button><button class="small" data-kind="all" data-accept="0">Add all to Review</button></div>
       </div>
       <h3 class="panel-h">Best versions <button class="ghost small hdr-btn" data-kind="versions" data-accept="1">Apply all</button></h3>
       <p class="help">When an instrument plays the same part more than once, you can use its cleanest take every time, so the part sounds the same throughout. Each one is added to Review for you to listen to first.</p>
       <div id="bestList"></div>
-      <h3 class="panel-h" style="margin-top:14px">Best hits <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button></h3>
+      <h3 class="panel-h" style="margin-top:14px">Best hits <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples">Blend all</button></h3>
       <p class="help">Drum sounds repeat hundreds of times. Hits the vocals smeared are filled in from the cleanest identical hit.</p>
       <div id="hitList"></div>
       <h3 class="panel-h" style="margin-top:14px">Repeated bars <button class="ghost small hdr-btn" data-kind="bars" data-accept="1">Apply all</button></h3>
@@ -277,6 +277,9 @@
       <label><input type="checkbox" name="raw"> Raw instrumental, for comparison</label>
       <label><input type="checkbox" name="vocals"> Vocals</label>
       <label><input type="checkbox" name="report" checked> Repair report</label>
+    </fieldset>
+    <fieldset><legend>Level</legend>
+      <label title="Measured only where nobody sings, where the instrumental and the original should sound the same. Every file gets the same change, and nothing is pushed into clipping."><input type="checkbox" name="match_level"> Match the original song's loudness</label>
     </fieldset>
     <fieldset><legend>Format</legend>
       <label><input type="radio" name="fmt" value="wav" checked> WAV</label>
