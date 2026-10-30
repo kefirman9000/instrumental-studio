@@ -27,13 +27,15 @@ def onsets(x, sr, hop=256, min_gap=0.06):
     n = (len(x) - 2048) // hop
     if n < 10:
         return np.zeros(0, int)
-    idx = np.arange(n)[:, None] * hop + np.arange(2048)[None, :]
+    # frames are built a block at a time: an index table for the whole song would need ~700 MB
     win = np.hanning(2048).astype(np.float32)
+    cols = np.arange(2048)[None, :]
     out = []
-    step = 4096
+    step = 1024
     for i in range(0, n, step):
-        S = np.abs(np.fft.rfft(x[idx[i:i + step]] * win, axis=1))
-        out.append(np.log1p(100 * S))
+        idx = np.arange(i, min(n, i + step))[:, None] * hop + cols
+        S = np.abs(np.fft.rfft(x[idx] * win, axis=1))
+        out.append(np.log1p(100 * S).astype(np.float32))
     L = np.vstack(out)
     flux = np.maximum(0, np.diff(L, axis=0)).sum(1)
     flux = np.r_[0, flux]

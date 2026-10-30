@@ -107,7 +107,7 @@
     </nav>
     <div class="tab" id="tab-review">
       <details class="tips" id="tipsBox" open>
-        <summary>Make the fixed parts match the rest <span class="tip-count" id="tipCount"></span></summary>
+        <summary>Make the fixed parts match the rest <span class="tip-count" id="tipCount"></span><span class="warm-chip" id="warmChip" hidden><span class="spin small"></span>Working out more suggestions</span></summary>
         <div id="tipsList"></div>
       </details>
       <div class="summary" id="reviewSummary"></div>
@@ -261,6 +261,9 @@
   </div>
 </div>
 
+<div class="boot" id="boot" role="status" aria-live="polite">
+  <div class="boot-card"><span class="spin"></span><b>Starting Instrumental Studio</b><span class="dim small" id="bootMsg">Getting ready</span></div>
+</div>
 <div class="busy" id="busy" hidden>
   <div class="busy-card">
     <div class="busy-msg" id="busyMsg">Working</div>

@@ -45,6 +45,8 @@ class Project:
     def __init__(self, root):
         self.root = root
         self.lock = threading.RLock()
+        self._save_lock = threading.Lock()     # one save at a time
+        self._saved = {}                       # what's on disk already: part -> signature
         self.meta = {"name": os.path.basename(root), "settings": dict(DEFAULTS), "created": time.time()}
         self.stems, self.sr = {}, 44100
         self.original = None
@@ -269,6 +271,13 @@ class Project:
             self.check_ids([i for i, x in self.suggestions.items() if x["type"] == "repair"])
         except Exception as e:
             log(f"check against the original skipped: {e}")
+        progress(0.955, "Finding repeated hits and notes")
+        for k in self.instruments:
+            if k in self.PERCUSSIVE or self._tonal(k):
+                try:
+                    self._sounds(k)
+                except Exception as e:
+                    log(f"repeated hits skipped for {k}: {e}")
         progress(0.96, "Listening for clicks and dropouts")
         self.scan_glitches()
         progress(0.98, "Listening for leftover \"s\" sounds")
@@ -407,18 +416,47 @@ class Project:
         gen[k] = gen.get(k, 0) + 1
         return out
 
-    def _stem_cached(self, name, k, extra, fn):
+    def _stem_cached(self, name, k, extra, fn, lazy=False):
         """Per-instrument measurements are slow (whole-song analysis), and the suggestions list is rebuilt
-        after every edit. Keep each result until that instrument is re-rendered or `extra` changes."""
+        after every edit. Keep each result until that instrument is re-rendered or `extra` changes.
+        lazy: don't make the caller wait; work it out in the background and return None for now."""
         self.render_stem(k)                                   # brings the render (and its generation) up to date
         key = (self.__dict__.get("_render_gen", {}).get(k, 0), extra)
         cache = self.__dict__.setdefault("_metric_cache", {})
         hit = cache.get((name, k))
         if hit is not None and hit[0] == key:
             return hit[1]
+        if lazy:
+            self._warm((name, k), lambda: cache.__setitem__((name, k), (key, fn())))
+            return None
         v = fn()
         cache[(name, k)] = (key, v)
         return v
+
+    def _warm(self, tag, job):
+        """Run a slow measurement on the background worker (one at a time, so it never competes with
+        itself), unless it's already queued. The window asks again while `warming` is true."""
+        q = self.__dict__.setdefault("_warm_q", set())
+        if tag in q:
+            return
+        pool = self.__dict__.get("_warm_pool")
+        if pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            pool = self.__dict__["_warm_pool"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="warm")
+        q.add(tag)
+
+        def run():
+            try:
+                job()
+            except Exception as e:
+                log(f"background measurement {tag} failed: {e}")
+            finally:
+                q.discard(tag)
+        pool.submit(run)
+
+    @property
+    def warming(self):
+        return bool(self.__dict__.get("_warm_q"))
 
     # ------------------------------------------------------------------ kept parts
     def keep_ranges(self, mode=None):
@@ -610,13 +648,13 @@ class Project:
             out = out + band * ((10 ** (db / 20) - 1) * vc)[None, :]
         return out
 
-    def mud_excess(self, k):
+    def mud_excess(self, k, lazy=False):
         """dB of extra low-mid (150-500 Hz) the instrument has under the vocals, next to the same part
         where nobody sings (its matched sources), so arrangement changes cancel out. Positive = muddy."""
         if self.stage != "detected" or k not in self.stem_feats:
             return 0.0
         extra = (self.mixer.get("vocal_lift", {}).get(k), self.mixer.get("mud_cut", {}).get(k), len(self.suggestions))
-        return self._stem_cached("mud", k, extra, lambda: self._mud_excess(k))
+        return self._stem_cached("mud", k, extra, lambda: self._mud_excess(k), lazy)
 
     def _mud_excess(self, k):
         y = self.shaped_stem(k)
@@ -641,13 +679,13 @@ class Project:
             wts.append(covm.sum())
         return float(np.average(vals, weights=wts)) if vals else 0.0
 
-    def remaining_loss(self, k):
+    def remaining_loss(self, k, lazy=False):
         """Estimated dB the instrument is still missing under the vocals, measured against its matched
         sources (same part, vocal-free) so arrangement changes cancel out."""
         if self.stage != "detected" or k not in self.stem_feats:
             return 0.0
         extra = (self.mixer.get("vocal_lift", {}).get(k), self.mixer.get("mud_cut", {}).get(k), len(self.suggestions))
-        return self._stem_cached("loss", k, extra, lambda: self._remaining_loss(k))
+        return self._stem_cached("loss", k, extra, lambda: self._remaining_loss(k), lazy)
 
     def _remaining_loss(self, k):
         y = self.shaped_stem(k)
@@ -1068,12 +1106,15 @@ class Project:
                         "sounds": sounds}
         return cache[k]
 
-    def best_hits(self):
+    def best_hits(self, lazy=False):
         if self.stage != "detected":
             return []
         out = []
         for k in self.instruments:
             if k not in self.PERCUSSIVE and not self._tonal(k):
+                continue
+            if lazy and k not in self.__dict__.get("_sounds_cache", {}):
+                self._warm(("sounds", k), lambda k=k: self._sounds(k))
                 continue
             try:
                 sd = self._sounds(k)
@@ -1676,30 +1717,62 @@ class Project:
         }
 
     # ------------------------------------------------------------------ persistence
+    @staticmethod
+    def _sig(d):
+        """Cheap fingerprint of a dict of arrays (or (offset, array) pairs): changes whenever an entry is
+        added, removed, replaced or edited, without hashing hundreds of MB."""
+        parts = []
+        for key in sorted(d):
+            v = d[key]
+            lo, a = v if isinstance(v, tuple) else (0, v)
+            a = np.asarray(a)
+            flat = a.reshape(-1)
+            sample = float(np.asarray(flat[::4093], np.float64).sum()) if flat.size else 0.0
+            parts.append((key, int(lo), a.shape, str(a.dtype), sample))
+        return hash(tuple(parts))
+
+    def _heavy_parts(self):
+        patches = {**{f"{k}__lo": (0, np.array([v[0]])) for k, v in self.patches.items()},
+                   **{f"{k}__p": v[1] for k, v in self.patches.items()},
+                   **{f"{k}__w": v[1] for k, v in self.take_w.items()},
+                   **{f"{k}__wlo": (0, np.array([v[0]])) for k, v in self.take_w.items()}}
+        display = ({f"{kind}__{k}": v for kind in ("raw", "after", "damage") for k, v in self.display.get(kind, {}).items()}
+                   if self.display else None)
+        feats = ({**{f"{k}__{i}": a for k, t in self.stem_feats.items() for i, a in enumerate(t)},
+                  **{f"{k}__env": v for k, v in self.stem_env.items()}} if hasattr(self, "stem_feats") and self.display else None)
+        return {"patches": patches, "display": display, "features": feats}
+
     def save(self):
-        with self.lock:
-            os.makedirs(self.root, exist_ok=True)
-            state = {"meta": self.meta, "sections": getattr(self, "sections", []),
-                     "beats": getattr(self, "beats", np.zeros(0)).tolist(),
-                     "windows": getattr(self, "windows", []), "VA": getattr(self, "VA", np.zeros(0)).tolist(),
-                     "suggestions": self.suggestions, "mixer": self.mixer}
+        """Write the project. Only the parts that changed are written (the repairs file, timeline and
+        analysis can be hundreds of MB, and this runs after every edit), and the song is only locked
+        while the state is copied, not while the disk is written."""
+        with self._save_lock:
+            with self.lock:
+                os.makedirs(self.root, exist_ok=True)
+                state = json.dumps({"meta": self.meta, "sections": getattr(self, "sections", []),
+                                    "beats": getattr(self, "beats", np.zeros(0)).tolist(),
+                                    "windows": getattr(self, "windows", []), "VA": getattr(self, "VA", np.zeros(0)).tolist(),
+                                    "suggestions": self.suggestions, "mixer": self.mixer})
+                parts = self._heavy_parts()
+                # copies of the dicts (the arrays themselves are replaced, never edited, so references are safe)
+                parts = {name: (dict(d) if d is not None else None) for name, d in parts.items()}
             tmp = os.path.join(self.root, "project.json.tmp")
             with open(tmp, "w") as f:
-                json.dump(state, f)
+                f.write(state)
             os.replace(tmp, os.path.join(self.root, "project.json"))
-            np.savez(os.path.join(self.root, "patches.npz"),
-                     **{f"{k}__lo": np.array([v[0]]) for k, v in self.patches.items()},
-                     **{f"{k}__p": v[1] for k, v in self.patches.items()},
-                     **{f"{k}__w": v[1] for k, v in self.take_w.items()},
-                     **{f"{k}__wlo": np.array([v[0]]) for k, v in self.take_w.items()})
-            if self.display:
-                d = {f"{kind}__{k}": v.astype(np.float16) for kind in ("raw", "after", "damage")
-                     for k, v in self.display.get(kind, {}).items()}
-                np.savez(os.path.join(self.root, "display.npz"), **d)
-                if hasattr(self, "stem_feats"):
-                    np.savez(os.path.join(self.root, "features.npz"),
-                             **{f"{k}__{i}": a for k, t in self.stem_feats.items() for i, a in enumerate(t)},
-                             **{f"{k}__env": v for k, v in self.stem_env.items()})
+            for name, d in parts.items():
+                if d is None:
+                    continue
+                sig = self._sig(d)
+                if self._saved.get(name) == sig:
+                    continue
+                arrays = {k: (v[1] if isinstance(v, tuple) else v) for k, v in d.items()}
+                if name == "display":
+                    arrays = {k: np.asarray(v).astype(np.float16) for k, v in arrays.items()}
+                tmpz = os.path.join(self.root, f"{name}.tmp.npz")
+                np.savez(tmpz, **arrays)
+                os.replace(tmpz, os.path.join(self.root, f"{name}.npz"))
+                self._saved[name] = sig
 
     @classmethod
     def load(cls, root):
@@ -1754,6 +1827,10 @@ class Project:
                 p.stem_env[k] = z[f"{k}__env"]
         p.level_floor = {}
         p._compute_grid()
+        try:
+            p._saved = {name: p._sig(d) for name, d in p._heavy_parts().items() if d is not None}
+        except Exception as e:
+            log(f"couldn't fingerprint saved files (they'll be rewritten once): {e}")
         return p
 
     # ------------------------------------------------------------------ UI payload
@@ -2036,7 +2113,7 @@ class Project:
                                     "at": time.time(), "applied": self._applied_count()}
             return self.meta["quality"]
 
-    def ghost_runs(self, k):
+    def ghost_runs(self, k, lazy=False):
         """Stretches of bars where instrument k is best muted: under the singing it is quiet next to how
         it plays where nobody sings, and what's left either rises and falls with the singer (leftover
         vocal), was flagged as leftover vocal, or is so quiet it's only separation noise.
@@ -2046,7 +2123,7 @@ class Project:
         marks = tuple(sorted(i for i, x in self.suggestions.items()
                              if x["stem"] == k and x["type"] in ("bleed", "ess") and x["status"] != "rejected"))
         extra = (json.dumps(self.mixer.get("mute_ranges", []), sort_keys=True), hash(marks))
-        return self._stem_cached("ghost", k, extra, lambda: self._ghost_runs(k))
+        return self._stem_cached("ghost", k, extra, lambda: self._ghost_runs(k), lazy)
 
     def _ghost_runs(self, k):
         lv = self._beat_levels(self.render_stem(k))
@@ -2148,7 +2225,9 @@ class Project:
         # 2. tone match: what's still missing under the vocals, judged against the same part elsewhere
         lift_now = self.mixer.get("vocal_lift", {})
         for k in ([] if rec else [x for x in self.instruments if x not in NOT_REPAIRED]):     # judge what's left only once the repairs are in
-            loss = self.remaining_loss(k)
+            loss = self.remaining_loss(k, lazy=True)
+            if loss is None:
+                continue
             want = float(np.clip(round((loss + float(lift_now.get(k, 0))) * 2) / 2, 0, 6))
             threshold = 1.5 if lift_now.get(k) else 1.0
             if loss >= threshold and want - float(lift_now.get(k, 0)) >= 0.5:
@@ -2161,9 +2240,11 @@ class Project:
         cut_now = self.mixer.get("mud_cut", {})
         for k in ([] if rec else [x for x in self.instruments if x not in NOT_REPAIRED]):
             try:
-                ex = self.mud_excess(k)
+                ex = self.mud_excess(k, lazy=True)
             except Exception as e:
                 log(f"mud check skipped for {k}: {e}")
+                continue
+            if ex is None:
                 continue
             have = abs(float(cut_now.get(k, 0)))
             want = float(np.clip(round((ex + have) * 2) / 2, 0, 6))
@@ -2235,7 +2316,7 @@ class Project:
             if k in done:
                 continue
             try:
-                runs = self.ghost_runs(k)
+                runs = self.ghost_runs(k, lazy=True)
             except Exception as e:
                 log(f"ghost check skipped for {k}: {e}")
                 continue
@@ -2260,7 +2341,7 @@ class Project:
                                   "Using that take keeps the part consistent every time it comes round.",
                         "button": "Show them", "action": {"kind": "tab", "tab": "grid"}})
 
-        bh = [h for h in self.best_hits() if not h["status"]]
+        bh = [h for h in self.best_hits(lazy=True) if not h["status"]]
         bb = [g for g in self.best_bars() if not g["status"]]
         if bh or bb:
             what = []
@@ -2364,9 +2445,10 @@ class Project:
             "stage": self.stage, "has_original_display": "original" in self.display.get("raw", {}),
             "tips": self._safe(self.tips, []),
             "best_versions": self._safe(self.best_versions, []),
-            "best_hits": self._safe(self.best_hits, []),
+            "best_hits": self._safe(lambda: self.best_hits(lazy=True), []),
             "best_bars": self._safe(lambda: [{**g, "damaged_times": [self.beat_times[self.windows[v][0]] for v in g["damaged"]]}
                                              for g in self.best_bars()], []),
             "user_decisions": sum(1 for x in self.suggestions.values() if x["status"] in ("accepted", "rejected")),
             "applied_count": self._safe(self._applied_count, 0),
+            "warming": self.warming,
         }
