@@ -1,5 +1,13 @@
 # What's new
 
+## 1.14.2
+
+Faster start, and the window works while it starts:
+
+- **Use the start screen right away.** "Starting Instrumental Studio" is now a small notice at the bottom instead of a cover over the whole window, and the start screen shows immediately; its lists fill in as soon as the app answers.
+- **Only what's needed loads at startup.** The song engine and SciPy (large, and slow to load on Windows where antivirus checks every file) now load in the background a few seconds after the window opens, or the moment you open a song, instead of before the window can appear.
+- **Playback is prepared when you press play,** not when a song opens and again after every edit. The app used to render and send the whole mix each time, even if you never listened. The play button pulses while the first play gets ready.
+
 ## 1.14.1
 
 Startup and opening songs, no more "something in the background is taking too long":
