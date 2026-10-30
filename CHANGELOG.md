@@ -1,5 +1,12 @@
 # What's new
 
+## 1.14.6
+
+- **Clear stems.** Double-click **Clear stems (Windows).bat** or **(Mac).command** (Linux: `./clear_stems.sh`) in the app folder to free disk space. It lists how much each song's split uses, then lets you clear either other models' splits only (your songs stay exactly as they are) or songs' whole splits (each song stays in your Songs list with its original recording and goes back to step 1, ready to split again). It asks before deleting, and never touches original recordings or exports. Close the app first.
+- **Show folder works with no song open** (it said "No song is open").
+- Splitting no longer reads every saved song in full to look for an earlier split of the same file, and never reuses a song whose split was cleared.
+- The setup check writes to the log quietly instead of mixing log lines into its report.
+
 ## 1.14.5
 
 - **Check and fix setup.** Double-click **Check and fix setup (Windows).bat** or **(Mac).command** (Linux: `./check_setup.sh`) in the app folder. It checks Python, pip, the app's packages, ffmpeg, the Windows app-window component (WebView2), free disk space, the separation model and the extra models, and offers to install whatever is missing (asking first; the big model download is never started without a yes).
