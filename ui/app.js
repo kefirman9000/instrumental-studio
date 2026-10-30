@@ -965,6 +965,7 @@ function renderSteps() {
 
   const fromFile = !demo && ov.meta.separation !== "Imported stems" && !!ov.meta.source;
   $("#vinylBox").hidden = !fromFile;
+  $("#refBox").hidden = at < 2 || !ov.stems.length;
   const vy = ov.meta.vinyl;
   $("#btnVinylUndo").hidden = !vy;
   $("#importSub").textContent = vy ? `Vinyl crackle removed (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks)`
@@ -1667,6 +1668,10 @@ function renderModel(s) {
   $("#modelPillLight").className = "light small " + state;
   $("#modelPillText").textContent = { ok: "Model ready", busy: `Model ${pct(m.progress || 0)}`, err: "Model not installed", off: "Model not installed" }[state];
   $("#engineInfo").textContent = text[0] + ". " + text[1];
+  const kind = m.device_kind || "", gs = $("#gpuState");
+  if (gs) gs.textContent = kind === "cuda" ? "Splitting uses your graphics card." : kind === "mps" ? "Splitting uses the Mac's graphics." :
+    m.nvidia ? "An NVIDIA card was found but isn't used yet." : kind === "cpu" ? "Splitting runs on the processor." : "";
+  const gb = $("#btnGpu"); if (gb) gb.hidden = kind === "cuda" || kind === "mps";
   $("#btnModelReinstall").disabled = state === "busy";
   $("#btnModelReinstall").textContent = state === "ok" ? "Reinstall separation model" : `Download separation model (${size.replace(/^about /, "")})`;
   if (state === "busy" && !modelTimer) {
@@ -1847,6 +1852,28 @@ $$("[data-export-samples]").forEach(b => b.onclick = async () => {
   } catch (e) { hideBusy(); fail(e); }
 });
 
+/* ---------- your own clean tracks and samples */
+$("#btnRefOpen").onclick = () => {
+  const sel = $("#refStem"); sel.innerHTML = "";
+  for (const k of st.ov.stems) { const o = document.createElement("option"); o.value = k; o.textContent = k; sel.appendChild(o); }
+  $("#refStemRow").hidden = $("#refKind").value !== "track";
+  $("#dlgRef").showModal();
+};
+$("#refKind").onchange = () => { $("#refStemRow").hidden = $("#refKind").value !== "track"; };
+$("#btnRefPick").onclick = () => $("#refFile").click();
+$("#refFile").onchange = async (e) => {
+  const file = e.target.files[0]; e.target.value = "";
+  if (!file) return;
+  const kind = $("#refKind").value, stem = $("#refStem").value;
+  $("#dlgRef").close();
+  try {
+    showBusy(0.02, "Reading your file");
+    const up = await upload(file, "ref" + Date.now());
+    await api.post("/api/import_ref", { path: up.path, kind, stem, name: file.name });
+    watchJob();
+  } catch (err) { hideBusy(); fail(err); }
+};
+
 /* ---------- vinyl crackle */
 $("#btnVinylOpen").onclick = () => $("#dlgVinyl").showModal();
 $("#btnVinyl").onclick = async () => {
@@ -1905,3 +1932,8 @@ $("#btnVinylStems").onclick = async () => {
 };
 
 $("#prefRoformer").onchange = savePrefs;
+
+$("#btnGpu").onclick = async () => {
+  try { const r = await api.post("/api/gpu", {}); toast(r.message || "Done.", { ms: 9000 }); refreshState(); }
+  catch (e) { fail(e); }
+};

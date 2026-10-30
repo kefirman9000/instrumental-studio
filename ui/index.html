@@ -46,7 +46,10 @@
         <div class="step-text"><b>Find damage</b><span id="detectSub"></span></div>
         <div class="step-actions"><button id="btnDetect">Find damage</button></div>
       </li>
-      <li class="step" data-step="review"><span class="num">4</span><div class="step-text"><b>Review and export</b><span id="reviewSub"></span></div></li>
+      <li class="step" data-step="review"><span class="num">4</span><div class="step-text"><b>Review and export</b><span id="reviewSub"></span></div>
+        <div class="step-actions" id="refBox" hidden>
+          <button class="ghost small" id="btnRefOpen" title="Have a clean recording of one instrument, or a clean sample of a sound in the song? Use it to rebuild the original">Add a clean track or sample…</button>
+        </div></li>
     </ol>
     <div class="split-extra" id="splitExtra" hidden>
       <span class="dim">Split options</span>
@@ -228,6 +231,7 @@
       </div>
       <hr>
       <p class="help" id="engineInfo"></p>
+      <div class="row"><button class="small" id="btnGpu" title="Use an NVIDIA graphics card for splitting: usually 5 to 10 times faster. Downloads the graphics-card version of the model once.">Use my graphics card</button><span class="dim small" id="gpuState"></span></div>
       <button class="ghost" id="btnModelReinstall">Reinstall separation model</button>
       <hr>
       <div class="setting"><label>Troubleshooting</label><span class="help">If the app hangs, a download seems stuck, or splitting keeps failing.</span></div>
@@ -377,6 +381,20 @@
       <button type="button" class="ghost" id="btnVinylUndo" hidden>Undo crackle removal</button>
     </div>
     <div class="dlg-actions"><button value="cancel" class="ghost">Close</button></div>
+  </form>
+</dialog>
+<dialog id="dlgRef">
+  <form method="dialog">
+    <h2>Add a clean track or sample</h2>
+    <p>Use something clean from this song to rebuild it: an official stem or session track of one instrument, or one clean hit or note (a drum sample, a synth stab). Everything it makes goes to Review first.</p>
+    <label class="ref-row">What is it
+      <select id="refKind" aria-label="What the file is">
+        <option value="track">A full track of one instrument (lined up with the song automatically)</option>
+        <option value="sample">One hit or note (matched to the sound it is in the song)</option></select></label>
+    <label class="ref-row" id="refStemRow">Which instrument
+      <select id="refStem" aria-label="Which instrument it is"></select></label>
+    <input type="file" id="refFile" accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aiff" hidden>
+    <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button type="button" class="primary" id="btnRefPick">Choose the file…</button></div>
   </form>
 </dialog>
 <dialog id="dlgAuto">
