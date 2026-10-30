@@ -147,11 +147,15 @@ $("#fileSong").onchange = async e => {
   await openSongFile(f);
   e.target.value = "";
 };
-$("#btnOpenStems").onclick = async () => {
+let stemsAuto = false;          // set by "Import stems and build", used once by startStems
+async function pickStems(auto) {
+  stemsAuto = auto;
   const nat = await nativeReady();
-  if (nat) { const p = await nat.choose_folder(); if (p) startStems(p); return; }
+  if (nat) { const p = await nat.choose_folder(); if (p) startStems(p); else stemsAuto = false; return; }
   $("#fileStems").click();
-};
+}
+$("#btnOpenStems").onclick = () => pickStems(false);
+$("#btnOpenStemsAuto").onclick = () => pickStems(true);
 $("#fileStems").onchange = async e => {
   const files = [...e.target.files]; if (!files.length) return;
   await openStemFiles(files);
@@ -192,13 +196,14 @@ window.addEventListener("drop", async e => {
   const files = all.filter(f => AUDIO_RE.test(f.name) || (f.type || "").startsWith("audio/"));
   if (!files.length) { toast(all.length ? "That doesn't look like an audio file. Drop an MP3, WAV, FLAC, M4A or OGG." : "Drop audio files, not folders."); return; }
   stopPreview(); player.pause();
-  if (files.length > 1 && files.some(f => /vocal|vox/i.test(f.name))) return openStemFiles(files);
+  if (files.length > 1 && files.some(f => /vocal|vox/i.test(f.name))) return (stemsAuto = false, openStemFiles)(files);
   if (files.length > 1) toast(`Opening ${files[0].name}. Drop one song at a time, or a full set of stems including the vocals.`, { ms: 6000 });
   openSongFile(files[0]);
 });
 function S_busy() { return !$("#busy").hidden || !!st.state?.job?.running; }
 async function startStems(folder, name) {
-  try { await api.post("/api/open_stems", { folder, name, auto: $("#optAutoStems").checked }); watchJob(); } catch (e) { hideBusy(); fail(e); }
+  const auto = stemsAuto; stemsAuto = false;
+  try { await api.post("/api/open_stems", { folder, name, auto }); watchJob(); } catch (e) { hideBusy(); fail(e); }
 }
 $("#btnDemo").onclick = async () => { try { await api.post("/api/demo"); watchJob(); } catch (e) { fail(e); } };
 $("#btnSongs").onclick = () => { stopPreview(); $("#player").pause(); showWelcome(true); };
@@ -901,6 +906,10 @@ function renderSteps() {
   mark("review", false, at === 2, at < 2);
 
   const split = $("#btnSplit"), sel = $("#sepMode"), modelOk = m.installed || demo;
+  const auto = $("#btnSplitAuto");
+  auto.hidden = !(at < 1 && (modelOk || m.installing));
+  auto.className = "";
+  auto.disabled = at < 1 && !modelOk;
   sel.hidden = demo;
   if (at >= 1) {
     $("#splitSub").textContent = `Split with ${ov.meta.separation || "a separator"}: ${ov.stems.join(", ")} and vocals.`;
@@ -960,7 +969,9 @@ function speedTip(mode, cpu) {
     "hybrid6": "Roformer takes the vocals out first (the cleanest removal), then the 6-track model splits the rest. Extra download.",
   }[mode] || "";
 }
-$("#btnSplit").onclick = async () => {
+$("#btnSplit").onclick = () => doSplit(false);
+$("#btnSplitAuto").onclick = () => doSplit(true);
+async function doSplit(auto) {
   const ov = st.ov, m = st.state?.model || {};
   if (ov.stage !== "imported") {
     const lose = ov.user_decisions ? ` Your ${ov.user_decisions} review decision(s) will be cleared.` : "";
@@ -972,7 +983,7 @@ $("#btnSplit").onclick = async () => {
   }
   try {
     await api.post("/api/split", { mode: $("#sepMode").value || "4stem", backing: $("#optBacking").checked, drums: $("#optDrums").checked,
-                                   auto: $("#optAutoSplit").checked });
+                                   auto });
     watchJob();
   } catch (e) {
     if (e.message === "need_model") installModelFromStep();
@@ -984,7 +995,7 @@ $("#btnSplit").onclick = async () => {
       }
     } else fail(e);
   }
-};
+}
 async function installModelFromStep() {
   const m = st.state?.model || {};
   if (!confirm(`Download the separation model now? It's a one-time download of ${m.plan?.size || "about 1-3 GB"}, set up to run on ${m.plan?.runs_on || "your computer"}. You can keep working meanwhile.`)) return;
@@ -1738,12 +1749,6 @@ function showAutoReport(lines) {
 }
 $$("[data-auto]").forEach(b => b.onclick = openAutoBuild);
 
-// remember the two "do it all" choices
-for (const id of ["optAutoStems", "optAutoSplit"]) {
-  const el = $("#" + id); if (!el) continue;
-  try { el.checked = localStorage.getItem(id) === "1"; } catch {}
-  el.onchange = () => { try { localStorage.setItem(id, el.checked ? "1" : "0"); } catch {} };
-}
 $$("[data-export-samples]").forEach(b => b.onclick = async () => {
   showBusy(0.3, "Saving hits, notes and loops");
   try {
