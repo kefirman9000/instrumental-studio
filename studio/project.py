@@ -1793,7 +1793,8 @@ class Project:
         m = float((mix[:, :n][:, free].astype(np.float64) ** 2).mean())
         return float(np.clip(np.sqrt(o / (m + EPS)), 0.5, 4.0)) if m > 0 else 1.0
 
-    def export(self, folder, fmt="wav", what=("mix", "stems", "raw", "vocals", "report"), bits=24, match_level=False):
+    def export(self, folder, fmt="wav", what=("mix", "stems", "raw", "vocals", "report"), bits=24, match_level=False,
+               declick=False):
         """Write the chosen files. Every audio file gets the SAME gain, so the exported instruments still
         add up to the exported mix and keep the balance you heard (they used to be turned down one by one
         when they came near clipping). match_level: bring everything to the original song's level."""
@@ -1823,7 +1824,11 @@ class Project:
             g *= 0.999 / peak                     # one shared trim keeps every file in step
         for fname, f in jobs:
             p = os.path.join(folder, fname + ext)
-            save_audio(p, (f() * g).astype(np.float32), self.sr, bits=b)
+            audio = (f() * g).astype(np.float32)
+            if declick:                       # vinyl rips: clicks and crackle out of each file
+                from . import vinyl as VN
+                audio = VN.declick(audio, self.sr, "normal")[0]
+            save_audio(p, audio, self.sr, bits=b)
             written.append(p)
         self.meta["last_export_gain_db"] = float(20 * np.log10(g + EPS))
         if "samples_raw" in what or "samples_merged" in what:

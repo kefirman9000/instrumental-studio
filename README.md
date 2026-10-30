@@ -93,6 +93,10 @@ After **Find damage**, click **Build the best instrumental** (top of the Review 
 
 Click **Split and build** next to Split (or **Import stems and build** on the start screen) to go straight from a song to the finished build. The build also **improves weak sections** (trying each other model's split, a blend, and other source parts, and keeping the cleanest), **matches the tone** of every instrument under the vocals across all frequencies, and **smooths the seams** where the original recording takes over.
 
+### Vinyl rips
+
+In step 1, **Remove vinyl crackle** (Light, Normal or Strong) takes out clicks and crackle before splitting, so they never end up in the instruments. The untouched recording is kept, and **Undo crackle removal** brings it back. Export can also remove crackle from the exported files.
+
 ### Export samples
 
 **Export** (or **Export samples** in the Repairability tab) can also save every repeated drum hit, note and loop: its cleanest copy as it is, and a merge of its cleanest copies. Handy for remakes and beat-making.

@@ -1,5 +1,10 @@
 # What's new
 
+## 1.18.0
+
+- **Remove vinyl crackle** (step 1, Import). For vinyl rips: finds the clicks and crackle and rebuilds each from the sound on both sides, so tones carry straight through. **Light** takes only obvious clicks, **Normal** clicks and crackle, **Strong** fainter crackle too. Drum hits, consonants and other real sharp sounds are left alone. Best done before splitting, so the crackle never reaches the instruments; if the song is already split, it's split again with the same settings afterwards. The untouched recording is kept: **Undo crackle removal** brings it back, and choosing another strength always starts from the untouched recording.
+- **Export: Remove clicks and crackle from the files**, for songs that were split before cleaning.
+
 ## 1.17.1
 
 - The "find damage and build automatically" checkboxes are now buttons: **Split and build** next to Split, and **Import stems and build** under the start screen's cards. Split and Import stems still do just that.
