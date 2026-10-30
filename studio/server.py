@@ -21,7 +21,23 @@ from . import installer as INST
 from . import __version__
 from .audio import load_audio, wav_bytes, log
 from . import proc as PR
-from .project import Project
+
+
+def _Project():
+    """The song engine (NumPy/SciPy analysis) is loaded on first use, not before the window opens."""
+    from .project import Project
+    return Project
+
+
+def _preload():
+    """Load the song engine in the background once the window is up, so the first song opens fast."""
+    time.sleep(3)
+    try:
+        _Project()
+        from scipy import signal, fft  # noqa: F401
+        from scipy.io import wavfile  # noqa: F401
+    except Exception as e:
+        log(f"preload skipped: {e}")
 
 UI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
 HOME = os.environ.get("INSTRUMENTAL_STUDIO_HOME", os.path.join(os.path.expanduser("~"), "InstrumentalStudio"))
@@ -260,7 +276,7 @@ def _start_job(fn, *args):
 def _job_song(path, mode=None):
     """Step 1 only: bring the song into a project so it can be played. Splitting comes later."""
     root = _slug(path)
-    p = Project(root)
+    p = _Project()(root)
     p.meta["name"] = os.path.splitext(os.path.basename(path))[0]
     _progress(0.05, "Loading song")
     original, sr = load_audio(path)
@@ -362,7 +378,7 @@ def _reuse_stems(digest, mode, exclude=None):
 
 def _job_stems(folder, name):
     root = _slug(name)
-    p = Project(root)
+    p = _Project()(root)
     p.meta["name"] = name
     _progress(0.02, "Loading stems")
     stems, sr = SEP.load_stem_folder(folder)
@@ -377,7 +393,7 @@ def _job_demo():
     _progress(0.02, "Composing the demo song")
     damaged, original, _ = make_demo()
     import numpy as np
-    p = Project(_slug("Demo song"))
+    p = _Project()(_slug("Demo song"))
     p.meta["name"] = "Demo song"
     os.makedirs(p.root, exist_ok=True)
     np.savez(os.path.join(p.root, "demo_stems.npz"), **damaged)   # what "Split" will use for the demo
@@ -705,7 +721,7 @@ class Handler(BaseHTTPRequestHandler):
                 _start_job(_job_demo)
                 return self._send(200, {"ok": True})
             if path == "/api/load":
-                S.project = Project.load(os.path.join(PROJECTS, os.path.basename(str(d["id"]))))
+                S.project = _Project().load(os.path.join(PROJECTS, os.path.basename(str(d["id"]))))
                 S.rev += 1
                 S.audio_cache.clear()
                 return self._send(200, {"ok": True})
@@ -931,6 +947,7 @@ def serve(port=0, just_updated=False, safe=False):
                 raise
             time.sleep(0.25)
     httpd.daemon_threads = True
+    threading.Thread(target=_preload, daemon=True).start()
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     return httpd, f"http://127.0.0.1:{httpd.server_address[1]}/"
