@@ -187,6 +187,7 @@
       <hr>
       <div class="setting"><label>Troubleshooting</label><span class="help">If the app hangs, a download seems stuck, or splitting keeps failing.</span></div>
       <button class="ghost" id="btnTrouble">Troubleshooting and reset</button>
+      <button class="ghost" data-export-log title="Save the app's log to attach when asking for help">Export log</button>
       <button class="ghost" id="btnReveal">Show projects folder</button>
       <hr>
       <div class="updates" id="updates">
@@ -248,6 +249,7 @@
       <b>Started in safe mode</b>
       <span>The last start didn't finish, so update checks and the graphics-card check were skipped this time. If it keeps happening, the troubleshooting options can help.</span>
       <button class="small" data-trouble>Troubleshooting and reset</button>
+      <button class="small" data-export-log>Export log</button>
     </div>
     <div class="welcome-foot">
       <span class="dim" id="welcomeVer"></span>
@@ -303,6 +305,7 @@
   <div class="reset-body">
     <h2>Troubleshooting and reset</h2>
     <p>Try these in order. None of them touch your songs, projects or exports.</p>
+    <div class="reset-item"><div><b>Export a log</b><span>Saves one file with the app's log (including any freeze or crash it recorded) and details of this computer, to attach when asking for help. No audio or songs are included.</span></div><button class="small" data-export-log>Export log</button></div>
     <div class="reset-item"><div><b>Stop what's running</b><span>Stops splitting, downloads and anything else in the background.</span></div><button class="small" data-reset="stop">Stop</button></div>
     <div class="reset-item"><div><b>Restart the app</b><span>Closes and reopens the window.</span></div><button class="small" data-reset="restart">Restart</button></div>
     <div class="reset-item"><div><b>Clear downloaded model files</b><span>Deletes the separation model files so they download fresh the next time you split. Fixes a download that got cut off.</span></div><button class="small" data-reset="models">Clear</button></div>

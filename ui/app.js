@@ -30,6 +30,10 @@ const native = () => window.pywebview && window.pywebview.api;
 // The app window connects its file pickers a moment after the page loads. A click in that moment used
 // to fall back to the browser's upload (which copies the whole file); wait briefly for them instead.
 const BOOTED_AT = Date.now();
+// errors in the window go into app.log too, so an exported log shows both sides
+const clientLog = msg => { try { api.post("/api/clientlog", { msg: String(msg).slice(0, 2000) }).catch(() => {}); } catch {} };
+window.addEventListener("error", e => clientLog(`error: ${e.message} at ${e.filename}:${e.lineno}`));
+window.addEventListener("unhandledrejection", e => clientLog(`unhandled: ${e.reason && (e.reason.stack || e.reason.message) || e.reason}`));
 async function nativeReady() {
   if (native() && native().choose_song) return native();
   if (Date.now() - BOOTED_AT > 6000) return null;          // a normal browser: no app pickers coming
@@ -1612,6 +1616,7 @@ let stuckCount = 0, stuckDismissed = 0;
 function noteAlive() { stuckCount = 0; if (!$("#stuck").hidden) $("#stuck").hidden = true; }
 function noteStuck() {
   stuckCount++;
+  if (stuckCount === 3) clientLog("the window got no answer from the app 3 times in a row (stuck panel shown)");
   if (stuckCount >= 3 && Date.now() - stuckDismissed > 60000) {
     $("#stuck").hidden = false;
     $("#stuckHint").textContent = native() ? "" : "If Restart doesn't work, close this window and start the app again.";
@@ -1663,7 +1668,7 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
     }
     msg(s.has_project ? `Opening ${s.project || "your song"}` : "Ready");
     $("#safeBanner").hidden = !s.safe;
-    api.post("/api/booted").catch(() => {});      // tells the app this start finished fine
+    api.post("/api/booted", { ms: Math.round(performance.now()) }).catch(() => {});      // tells the app this start finished fine
     renderUpdate(s); pollUpdate(60000);
     if (s.job.running) { $("#boot").hidden = true; watchJob(); return; }
     if (s.has_project) { $("#boot").hidden = true; await openWorkspace(true); hideBusy(); return; }
@@ -1673,3 +1678,11 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
 })();
 
 $("#btnQuality").onclick = () => scoreSections();
+
+async function exportLog() {
+  try {
+    const r = await api.post("/api/log/export", { reveal: true });
+    toast(`Log saved: ${r.path}. Attach that file when asking for help.`, { ms: 12000 });
+  } catch (e) { fail(e); }
+}
+$$("[data-export-log]").forEach(b => b.onclick = exportLog);
