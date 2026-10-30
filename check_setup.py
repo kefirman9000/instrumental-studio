@@ -164,6 +164,18 @@ def check_model():
         return
     if INST.installed(fresh=True):
         say(OK, "Separation model (Demucs + PyTorch)")
+        try:
+            cuda = INST.nvidia_cuda()
+            r = subprocess.run([sys.executable, "-c", "import torch;print(torch.cuda.is_available())"],
+                               capture_output=True, text=True, timeout=90)
+            on_gpu = r.stdout.strip().endswith("True")
+            if cuda and not on_gpu:
+                say(WARN, "Your NVIDIA graphics card isn't used for splitting",
+                    "Splitting could be 5 to 10 times faster. In the app: Settings, Use my graphics card.")
+            elif on_gpu:
+                say(OK, "Splitting uses your NVIDIA graphics card")
+        except Exception:
+            pass
     else:
         try:
             p = INST.plan()
