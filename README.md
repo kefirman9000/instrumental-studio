@@ -272,6 +272,8 @@ Updates never touch your songs, projects or exports. The previous version is kep
 
 **The model light is red after a download.** The panel says what went wrong. Click **Try again**, or Settings → **Reinstall separation model**. The message says what went wrong; most often it's the internet connection or not enough disk space (it needs about 3 GB). If it says your Python isn't supported, install Python 3.12 or 3.13 from python.org.
 
+**Splitting is slow and you have an NVIDIA graphics card?** Click **Use my graphics card** (start screen or Settings), or double-click **Use graphics card (Windows).bat** in the app folder. It swaps in the graphics-card version of PyTorch once (about 3 GB) and splitting gets 5 to 10 times faster. The log says what each split ran on.
+
 **Not sure everything is installed?** Double-click **Check and fix setup** in the app folder. It checks everything the app needs and offers to install what's missing. The app also opens it by itself if something it needs is missing.
 
 **Running out of disk space?** Close the app and double-click **Clear stems** in the app folder. It shows how much space each song's split uses and clears what you choose: other models' splits only, or whole splits (the songs go back to step 1 and keep their original recordings).
