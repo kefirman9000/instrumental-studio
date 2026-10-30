@@ -989,6 +989,11 @@ class Handler(BaseHTTPRequestHandler):
                 res = self._edited()
                 res["new_ids"] = ids
                 return self._send(200, res)
+            elif path == "/api/pattern":
+                ids = p.make_pattern_hits()
+                res = self._edited()
+                res["new_ids"] = ids
+                return self._send(200, res)
             elif path == "/api/take":
                 sid = p.make_take(d["stem"], int(d["section"]), int(d["source"]))
                 p.check_ids([sid])

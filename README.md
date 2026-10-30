@@ -159,6 +159,10 @@ Each row has **Apply** and **Add to review**. Drum sounds also have **Blend**: i
 
 Drag across a part that sounds glitchy or artifacted and choose **Clean up this part**. In one go the app looks for clicks and gaps there, prepares smoothing for the watery separation sound under the vocals, and rebuilds damaged drum hits and repeated bars from their cleanest copies. Everything lands in Review for you to hear first; apply what helps, reject the rest. If it's beyond saving, the same menu can keep the original recording there, try another model, or mute it.
 
+### Learn the drum pattern
+
+**Learn the drum pattern** (Repairability tab) learns where each drum plays in the bar from the parts without singing, then restores hits the vocals took out of the drum track, but only where the pattern is near-certain, the original recording has that drum there, and the drum track is missing it. Every restored part goes to Review first. It's also a step in **Build the best instrumental**.
+
 ### Use the best version of repeating parts
 
 When an instrument plays the same part more than once, the **Best versions** list (Repairability tab) offers its cleanest take for the other times, matched bar by bar to the beat and level, so the part sounds the same throughout. You can pick a different take from the list, and each one goes to Review first.
