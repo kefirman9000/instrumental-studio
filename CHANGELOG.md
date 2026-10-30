@@ -1,5 +1,12 @@
 # What's new
 
+## 1.23.1
+
+- **Fix: Use my graphics card didn't switch anything.** When the processor-only PyTorch was already installed, the installer called it "already satisfied" and kept it. It now removes it first and installs the version for your NVIDIA card, then checks the card really works (and says what to do if it doesn't, like updating the driver or restarting).
+- **The GPU button is easier to find:** it's also on the start screen, under the separation model, whenever an NVIDIA card is found but not used.
+- **Use graphics card (Windows).bat** in the app folder does the same without opening the app; the setup check also offers it.
+- **Each split says what it runs on** (graphics card or processor) in its progress message and in the log, and the log notes if the card failed and the processor took over.
+
 ## 1.23.0
 
 - **Fix: Repaired didn't play after a split** (since 1.21). Rendering crashed whenever a frequency cut was in place. Every release is now tested end to end on the demo song before it's published, so a break like this can't ship again.

@@ -48,6 +48,8 @@ def run(model_name, inp, outdir, device=None):
     wav = (wav - mean) / std
 
     dev = pick_device(device)
+    gpu = torch.cuda.get_device_name(0) if dev == "cuda" else ("Apple GPU" if dev == "mps" else "processor")
+    print(f"DEVICE {dev} {gpu}", flush=True)
     # on a CPU, split the song into chunks processed in parallel (Demucs' -j option)
     cpu_jobs = max(1, min(4, (os.cpu_count() or 2) // 2))
     try:
