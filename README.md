@@ -233,6 +233,8 @@ Updates never touch your songs, projects or exports. The previous version is kep
 
 **Not sure everything is installed?** Double-click **Check and fix setup** in the app folder. It checks everything the app needs and offers to install what's missing. The app also opens it by itself if something it needs is missing.
 
+**Running out of disk space?** Close the app and double-click **Clear stems** in the app folder. It shows how much space each song's split uses and clears what you choose: other models' splits only, or whole splits (the songs go back to step 1 and keep their original recordings).
+
 **MP3 files won't open.** ffmpeg is missing. Install it (step 3 above) and restart the app, or convert the song to WAV.
 
 **The app hangs or a download seems stuck.** Press **Stop** on the progress screen, or open **Troubleshooting and reset** (Settings, or the link at the bottom of the start screen). **Clear downloaded model files** fixes a model download that got cut off; **Restart the app** fixes most other hangs. If a start doesn't finish, the next one opens in safe mode by itself. Background tasks that show no progress for 15 minutes are stopped automatically.
