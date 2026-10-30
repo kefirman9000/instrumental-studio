@@ -139,7 +139,7 @@ Songs repeat the same sounds over and over, so for nearly every damaged one ther
 - **Best hits**: the app finds each drum sound (kick, snare, hi-hat and cymbals, toms) and every time it's played, picks the cleanest hit, and fills in what the vocals took from each smeared one, lined up to the sample and matched to how hard it was played. Works on the drum track, or on the separate kick, snare, toms and cymbals tracks when you split the drums.
 - **Repeated bars**: riffs and patterns an instrument plays again and again. Damaged repeats are replaced by the cleanest one, matched to the beat and level.
 
-Each row has **Apply** and **Add to review**. **Apply all** at the top does every repeated part in one go (or **Add all to Review** to listen first), and Undo takes the whole batch back in one step.
+Each row has **Apply** and **Add to review**. Drum sounds also have **Blend**: it fills in from the five cleanest hits together instead of the single cleanest one, keeping only what they share, so noise in any one hit drops out while the attack stays sharp. **Blend all** does every drum sound. **Apply all** at the top does every repeated part in one go (or **Add all to Review** to listen first), and Undo takes the whole batch back in one step.
 
 ### Clean up a glitchy part
 
@@ -231,6 +231,8 @@ Updates never touch your songs, projects or exports. The previous version is kep
 **Splitting is very slow.** Without a graphics card the app starts you on **Fast** separation, which takes a few minutes per song. **Best quality** runs four models in a row and can take 5–15 minutes on a CPU; change it in Settings → *Separation for new songs*. Re-opening a song you've split before is instant: the app reuses the earlier split.
 
 **"Can't verify GitHub's certificate" when checking for updates (Mac).** Open Applications → Python and double-click **Install Certificates.command**.
+
+**"Not allowed" errors.** The app only accepts commands from the window it opened, and it makes a new secret each time it starts. A window or tab left open from before a restart gets turned away: close it, or reload it.
 
 **Something went wrong and there's no console to read.** The app writes its messages to *app.log* in the InstrumentalStudio folder in your home folder.
 

@@ -3,12 +3,12 @@ import os, sys, time, json, urllib.request
 OUT = sys.argv[1] if len(sys.argv) > 1 else "shots"
 os.environ.setdefault("INSTRUMENTAL_STUDIO_HOME", os.path.join(OUT, "home"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from studio.server import serve
+from studio.server import serve, TOKEN
 from playwright.sync_api import sync_playwright
 
 httpd, url = serve(0)
 def post(p, d=None):
-    r = urllib.request.Request(url + p.lstrip("/"), data=json.dumps(d or {}).encode(), headers={"Content-Type": "application/json"})
+    r = urllib.request.Request(url + p.lstrip("/"), data=json.dumps(d or {}).encode(), headers={"Content-Type": "application/json", "X-Studio-Token": TOKEN})
     return json.load(urllib.request.urlopen(r))
 errors = []
 with sync_playwright() as p:

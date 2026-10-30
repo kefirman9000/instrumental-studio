@@ -2,6 +2,9 @@
 /* Instrumental Studio UI */
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+// This session's secret, written into the page by the app. Every change sent to the app carries it,
+// so other web pages open in a browser can't drive the app.
+const TOKEN = document.querySelector('meta[name="studio-token"]')?.content || "";
 const api = {
   async get(path, timeoutMs = 15000) {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), timeoutMs);
@@ -12,7 +15,7 @@ const api = {
     finally { clearTimeout(t); }
   },
   async post(path, body) {
-    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Studio-Token": TOKEN }, body: JSON.stringify(body || {}) });
     const j = await r.json();
     if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; throw e; }
     return j;
@@ -105,7 +108,7 @@ function needModel() {
 }
 
 async function upload(file, batch) {
-  const r = await fetch("/api/upload", { method: "POST", headers: { "X-Filename": encodeURIComponent(file.name), "X-Batch": batch }, body: file });
+  const r = await fetch("/api/upload", { method: "POST", headers: { "X-Filename": encodeURIComponent(file.name), "X-Batch": batch, "X-Studio-Token": TOKEN }, body: file });
   const j = await r.json(); if (!r.ok) throw new Error(j.error); return j;
 }
 
@@ -791,6 +794,7 @@ async function runTip(a) {
   if (a.kind === "tab") return activateTab(a.tab);
   if (a.kind === "alt") return tryAlt(a.mode, a.start, a.end, null);
   if (a.kind === "mute") return setMutes([...(st.ov.mixer.mute_ranges || []), { start: a.start, end: a.end, stem: a.stem }]);
+  if (a.kind === "mutes") return setMutes([...(st.ov.mixer.mute_ranges || []), ...a.ranges]);
   if (a.kind === "scan") {
     await edit("/api/glitch_scan", {});
     const n = st.ov.suggestions.filter(x => x.type === "glitch" && x.status === "pending").length;
@@ -1164,9 +1168,9 @@ async function addFixes(path, body, accept) {
       { action: ["Show in Review", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
   } catch (e) { fail(e); }
 }
-async function applyBest(kind, accept) {
+async function applyBest(kind, accept, blend = false) {
   try {
-    const r = await api.post("/api/apply_best", { kind, accept });
+    const r = await api.post("/api/apply_best", { kind, accept, blend });
     await applyEdit(r);
     const n = r.new_ids.length;
     if (!n) return toast("Nothing left to rebuild there.");
@@ -1175,26 +1179,33 @@ async function applyBest(kind, accept) {
       { ms: 8000, action: ["Show in Review", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
   } catch (e) { fail(e); }
 }
-$$("#bulkBest button, .hdr-btn").forEach(b => b.onclick = () => applyBest(b.dataset.kind, b.dataset.accept === "1"));
+$$("#bulkBest button, .hdr-btn").forEach(b => b.onclick = () => applyBest(b.dataset.kind, b.dataset.accept === "1", b.dataset.blend === "1"));
 
 function renderHitsBars() {
   const ov = st.ov, hl = $("#hitList"), bl = $("#barList");
   if (ov.stage !== "detected") { hl.innerHTML = bl.innerHTML = `<p class="help">Available after Find damage.</p>`; return; }
-  const row = (title, pillText, body, onAdd, color) => {
+  // onBlend (drum hits only): an extra Blend button that applies a blend of the cleanest hits
+  const row = (title, pillText, body, onAdd, color, onBlend, blendTip) => {
     const d = document.createElement("div"); d.className = "best-item";
     d.innerHTML = `<div class="bi-top"><span class="dot" style="background:${color}"></span><b></b><span class="pill"></span></div><p></p>
-      <div class="btns"><button class="small primary">Apply</button><button class="small">Add to review</button></div>`;
+      <div class="btns"><button class="small primary">Apply</button>${onBlend ? `<button class="small blend">Blend</button>` : ""}<button class="small">Add to review</button></div>`;
     d.querySelector("b").textContent = title; d.querySelector(".pill").textContent = pillText; d.querySelector("p").textContent = body;
-    const [ap, rv] = d.querySelectorAll("button");
-    ap.onclick = () => onAdd(true); rv.onclick = () => onAdd(false);
+    const bs = d.querySelectorAll("button");
+    bs[0].onclick = () => onAdd(true); bs[bs.length - 1].onclick = () => onAdd(false);
+    if (onBlend) { bs[1].onclick = () => onBlend(); bs[1].title = blendTip || ""; }
     return d;
   };
   const added = (path, body) => async accept => addFixes(path, body, accept);
   hl.innerHTML = (ov.best_hits || []).length ? "" : `<p class="help">No smeared drum hits found${ov.stems.some(k => ["drums", "kick", "snare", "toms", "cymbals"].includes(k)) ? "" : " (no drum track)"}.</p>`;
   for (const h of ov.best_hits || []) {
-    hl.append(row(`${nice(h.stem)}: ${h.name}`, h.status ? statusText({ type: "hits", status: h.status }) : `${h.damaged} under vocals`,
-      `${h.count} hits in the song; cleanest at ${fmtP(h.best_time)}.`, added("/api/hits", { stem: h.stem, sound: h.sound }),
-      ov.colors[h.stem] || "#888"));
+    const canBlend = (h.blend_n || 0) >= 2;
+    hl.append(row(`${nice(h.stem)}: ${h.name}`,
+      h.status ? statusText({ type: "hits", status: h.status }) + (h.blended ? " (blend)" : "") : `${h.damaged} under vocals`,
+      `${h.count} hits in the song, ${h.clean ?? "?"} clean; cleanest at ${fmtP(h.best_time)}.`,
+      added("/api/hits", { stem: h.stem, sound: h.sound }), ov.colors[h.stem] || "#888",
+      canBlend ? () => addFixes("/api/hits", { stem: h.stem, sound: h.sound, blend: true }, true) : null,
+      `Apply, filling in from a blend of the ${h.blend_n} cleanest ${h.name} hits instead of just one. ` +
+      `Evens out one-off noise in any single hit. Replaces the single-hit version if one is applied.`));
   }
   bl.innerHTML = (ov.best_bars || []).length ? "" : `<p class="help">No damaged repeats of a bar found.</p>`;
   for (const g of ov.best_bars || []) {
@@ -1205,7 +1216,8 @@ function renderHitsBars() {
 }
 function renderGrid() {
   renderBest(); renderHitsBars();
-  const any = st.ov.stage === "detected" && ((st.ov.best_versions || []).some(x => !x.status) || (st.ov.best_hits || []).some(x => !x.status) || (st.ov.best_bars || []).some(x => !x.status));
+  const any = st.ov.stage === "detected" && ((st.ov.best_versions || []).some(x => !x.status) || (st.ov.best_hits || []).some(x => !x.status) || (st.ov.best_bars || []).some(x => !x.status)
+    || (st.ov.best_hits || []).some(x => x.status === "accepted" && !x.blended && (x.blend_n || 0) >= 2));
   $("#bulkBest").hidden = !any;
   $$(".hdr-btn").forEach(b => (b.hidden = st.ov.stage !== "detected"));
   const ov = st.ov, w = $("#gridWrap");
@@ -1301,7 +1313,7 @@ $("#dlgExport").addEventListener("close", async () => {
   const format = f.elements.fmt.value;
   showBusy(0.3, "Writing files");
   try {
-    const r = await api.post("/api/export", { what, format, reveal: true });
+    const r = await api.post("/api/export", { what, format, reveal: true, match_level: f.elements.match_level.checked });
     hideBusy(); toast(`Saved ${r.files.length} file(s) to ${r.folder}`, { ms: 9000, action: ["Show folder", () => api.post("/api/reveal", { path: r.folder })] });
   } catch (e) { hideBusy(); fail(e); }
 });
