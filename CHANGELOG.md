@@ -1,5 +1,9 @@
 # What's new
 
+## 1.22.5
+
+- **Fix: vinyl crackle removal could leave a quiet track full of clicks.** On dense crackle, a few repairs could blow up into loud spikes, heard as clicks, and anything that sets levels by the loudest peak then turned the rest down. Repairs are now never louder than the music around them (a bad one is skipped) and never rebuild more than a few milliseconds at once. If you used it before this update: open **Vinyl crackle…** and choose **Undo crackle removal**, then run it again.
+
 ## 1.22.4
 
 - **Tidier steps bar.** The vinyl controls in step 1 are now one small **Vinyl crackle…** button that opens a small window with the strength and the actions (step 1 still says when crackle was removed). *Split and build* is now a smaller **Split + build** next to Split.
