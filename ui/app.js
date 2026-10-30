@@ -969,7 +969,8 @@ function renderSteps() {
   $("#btnVinylUndo").hidden = !vy;
   $("#importSub").textContent = vy ? `Song loaded. Vinyl crackle removed (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks).`
                                    : "Song loaded, ready to play";
-  $("#btnVinyl").textContent = vy ? "Remove again" : "Remove vinyl crackle";
+  $("#btnVinyl").textContent = vy ? "Remove again" : (at >= 1 ? "Remove and split again" : "Remove vinyl crackle");
+  $("#btnVinylStems").hidden = at < 1 || ov.stems.length === 0;
   const split = $("#btnSplit"), sel = $("#sepMode"), modelOk = m.installed || demo;
   const auto = $("#btnSplitAuto");
   auto.hidden = !(at < 1 && (modelOk || m.installing));
@@ -1883,3 +1884,11 @@ $$("[data-sponsor]").forEach(b => b.onclick = async () => {
   if (nat && nat.open_sponsors) { try { await nat.open_sponsors(); return; } catch {} }
   window.open(SPONSORS_URL, "_blank", "noopener");
 });
+
+$("#btnVinylStems").onclick = async () => {
+  try {
+    stopPreview(); player.pause();
+    await api.post("/api/vinyl/stems", { strength: $("#vinylStrength").value });
+    showBusy(0.02, "Removing crackle from the instruments"); watchJob();
+  } catch (e) { fail(e); }
+};

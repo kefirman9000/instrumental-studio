@@ -35,6 +35,7 @@
           <select id="vinylStrength" aria-label="How much crackle to remove" title="Light: only obvious clicks. Normal: clicks and crackle. Strong: also fainter crackle (check that nothing musical was touched).">
             <option value="light">Light</option><option value="normal" selected>Normal</option><option value="strong">Strong</option></select>
           <button class="small" id="btnVinyl" title="For vinyl rips: find the clicks and crackle and rebuild each from the sound around it. Best done before splitting. The untouched recording is kept.">Remove vinyl crackle</button>
+          <button class="small" id="btnVinylStems" hidden title="Already split? Remove the clicks and crackle from each instrument track directly, without splitting again, so your repairs stay. They go to Review (Clicks and smoothing) first.">Remove from the instruments</button>
           <button class="ghost small" id="btnVinylUndo" hidden>Undo crackle removal</button>
         </div></li>
       <li class="step" data-step="split"><span class="num">2</span>
