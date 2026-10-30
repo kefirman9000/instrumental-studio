@@ -91,7 +91,7 @@ Already have stems from another tool? Click **Import stems** and select all of t
 
 After **Find damage**, click **Build the best instrumental** (top of the Review tab). It shows its plan, then works through every kind of fix in the right order: the original recording where nobody sings, the cleanest model per bar, best versions of repeating parts, repeated riffs, blended drum hits and note starts, close-match repairs, leftover-singing cleanup, clicks, ghost-vocal mutes, and tone under the vocals. Where fixes overlap it picks one instead of stacking them, it checks every fix against the original and leaves out anything that doesn't fit, and the whole build is **one step**: Undo takes it all back. Prefer it over the separate **Apply all** buttons, which don't work out overlaps.
 
-Tick **Then find damage and build automatically** next to Split (or the matching box on the start screen for imported stems) to go straight from a song to the finished build. The build also **improves weak sections** (trying each other model's split, a blend, and other source parts, and keeping the cleanest), **matches the tone** of every instrument under the vocals across all frequencies, and **smooths the seams** where the original recording takes over.
+Click **Split and build** next to Split (or **Import stems and build** on the start screen) to go straight from a song to the finished build. The build also **improves weak sections** (trying each other model's split, a blend, and other source parts, and keeping the cleanest), **matches the tone** of every instrument under the vocals across all frequencies, and **smooths the seams** where the original recording takes over.
 
 ### Export samples
 

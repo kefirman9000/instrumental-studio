@@ -343,5 +343,4 @@ label.check input { margin-top: 3px; }
 .auto-step span { color: var(--muted); font-size: 12px; line-height: 1.4; }
 .auto-step.off { opacity: .55; }
 #autoReport { padding-left: 18px; line-height: 1.6; }
-.auto-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
-.welcome .auto-opt, #welcome .auto-opt { margin: 2px 0 6px; }
+.start-extra { display: flex; justify-content: flex-end; margin-top: 8px; }
