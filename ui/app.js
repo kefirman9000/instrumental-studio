@@ -1875,3 +1875,11 @@ $("#btnPattern").onclick = async () => {
 
 $("#showLeftover").checked = showLeftover;
 $("#showLeftover").onchange = e => { showLeftover = e.target.checked; try { localStorage.setItem("showLeftover", showLeftover ? "1" : "0"); } catch {} renderAll(); };
+
+/* ---------- support */
+const SPONSORS_URL = "https://github.com/sponsors/kefirman9000";
+$$("[data-sponsor]").forEach(b => b.onclick = async () => {
+  const nat = native();
+  if (nat && nat.open_sponsors) { try { await nat.open_sponsors(); return; } catch {} }
+  window.open(SPONSORS_URL, "_blank", "noopener");
+});
