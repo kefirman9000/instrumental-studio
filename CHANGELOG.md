@@ -1,5 +1,10 @@
 # What's new
 
+## 1.14.5
+
+- **Check and fix setup.** Double-click **Check and fix setup (Windows).bat** or **(Mac).command** (Linux: `./check_setup.sh`) in the app folder. It checks Python, pip, the app's packages, ffmpeg, the Windows app-window component (WebView2), free disk space, the separation model and the extra models, and offers to install whatever is missing (asking first; the big model download is never started without a yes).
+- **The app checks before it starts.** If something it needs is missing or broken, it opens the setup check in its own window instead of failing silently.
+
 ## 1.14.4
 
 - **Export log.** On the start screen, in Troubleshooting and reset, and on the "taking too long" panel: saves one file (InstrumentalStudio/logs/InstrumentalStudio-log-....zip) with the app's log and details of this computer, to attach when asking for help. No audio or songs are included.
