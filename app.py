@@ -32,10 +32,16 @@ TITLE = "Instrumental Studio"
 HOME = diag.home_dir()
 
 
-def _open_setup_check(why):
+def _open_setup_check(why, then_exit=True):
     """Something the app needs is missing or broken: open the setup checker in its own window (it
     explains and offers to install), instead of failing silently with no console."""
     diag.line(f"can't start: {why}. Opening the setup check.")
+    _launch_setup_check()
+    if then_exit:
+        sys.exit(1)
+
+
+def _launch_setup_check():
     script = os.path.join(APP_DIR, "check_setup.py")
     try:
         if sys.platform.startswith("win"):
@@ -50,7 +56,6 @@ def _open_setup_check(why):
             print(f"Instrumental Studio can't start: {why}\nRun: python3 {script}", file=sys.stderr)
     except Exception as e:
         diag.line(f"couldn't open the setup check: {e}")
-    sys.exit(1)
 
 
 class JsApi:
@@ -78,12 +83,70 @@ class JsApi:
     def choose_folder(self):
         return self._dialog("folder")
 
+    def setup_check(self):
+        _launch_setup_check()
+        return True
+
+    def export_log(self):
+        """Works without the engine: the log lives in a file this process can read too."""
+        path = diag.export_bundle(os.path.join(HOME, "logs"), {"Exported from": "the start-up error page"})
+        _show_in_folder(path)
+        return path
+
+    def open_log(self):
+        _show_in_folder(diag.log_path())
+        return True
+
     def restart(self):
         """Works even if the engine is stuck: it runs here, stops the engine and starts the app again."""
         from studio import updater, proc
         updater.relaunch()       # start the new copy first: stopping the engine closes this window
         proc.kill_all()
         return True
+
+
+def _show_in_folder(path):
+    try:
+        if sys.platform.startswith("win"):
+            subprocess.Popen(["explorer", "/select,", path])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(path)])
+    except Exception as e:
+        diag.line(f"couldn't show {path}: {e}")
+
+
+STARTING_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
+body{background:#111318;color:#e6e9ef;font:15px system-ui,-apple-system,Segoe UI,sans-serif;margin:0;height:100vh;
+display:grid;place-items:center}.c{text-align:center}.sp{width:28px;height:28px;border-radius:50%;border:3px solid #2a2f3a;
+border-top-color:#e0a050;animation:s .9s linear infinite;margin:0 auto 16px}@keyframes s{to{transform:rotate(360deg)}}
+p{color:#8a93a6}</style></head><body><div class="c"><div class="sp"></div><h2>Starting Instrumental Studio</h2>
+<p>Starting the engine. The first start after an update can take a little longer.</p></div></body></html>"""
+
+
+def error_html(reason):
+    import html
+    try:
+        with open(diag.log_path(), encoding="utf-8", errors="replace") as f:
+            tail = "".join(f.readlines()[-40:])
+    except OSError:
+        tail = "(no log yet)"
+    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
+body{{background:#111318;color:#e6e9ef;font:15px system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:28px 34px}}
+h2{{margin:0 0 8px}}p{{color:#a7afbf;line-height:1.5;max-width:760px}}
+button{{background:#232836;color:#e6e9ef;border:1px solid #39404f;border-radius:7px;padding:8px 14px;margin:4px 8px 4px 0;
+font:inherit;cursor:pointer}}button.p{{background:#e0a050;color:#111318;border-color:#e0a050;font-weight:600}}
+pre{{background:#0b0d12;border:1px solid #2a2f3a;border-radius:7px;padding:12px;max-height:46vh;overflow:auto;
+font-size:12px;color:#c6ccd8;white-space:pre-wrap}}</style></head><body>
+<h2>Instrumental Studio couldn't finish starting</h2>
+<p>{html.escape(reason)}</p>
+<p><button class="p" onclick="pywebview.api.export_log()">Export log</button>
+<button onclick="pywebview.api.setup_check()">Check and fix setup</button>
+<button onclick="pywebview.api.open_log()">Show the log file</button>
+<button onclick="pywebview.api.restart()">Try again</button></p>
+<p>Export log saves one file to attach when asking for help. The end of the log:</p>
+<pre>{html.escape(tail)}</pre></body></html>"""
 
 
 def find_chromium():
@@ -115,30 +178,32 @@ def free_port():
 
 def start_engine(port, args, safe):
     from studio import proc
-    cmd = [proc.gui_python(), "-m", "studio.engine_main", "--port", str(port), "--watch-parent"]
+    cmd = [proc.gui_python(), "-m", "studio.engine_main", "--port", str(port), "--parent", str(os.getpid())]
     cmd += ["--after-update"] if args.after_update else []
     cmd += ["--safe"] if safe else []
     cmd += ["--browser"] if args.browser else []
-    # stdin stays open as a lifeline: when this process ends, the engine sees it close and stops too.
-    # proc.popen tracks it, so Restart (proc.kill_all) stops it as well.
-    return proc.popen(cmd, cwd=APP_DIR, stdin=subprocess.PIPE)
+    # The engine watches this process and stops when it ends. proc.popen tracks it, so Restart
+    # (proc.kill_all) stops it as well. Its output goes to app.log, never to a pipe nobody reads.
+    return proc.popen(cmd, cwd=APP_DIR, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL)
 
 
-def wait_for_engine(url, engine, timeout=90):
-    """True once the engine answers; False if it exited first. Ignores any system proxy settings."""
+def wait_for_engine(url, engine, timeout=60):
+    """"ready" once the engine answers, "exited" if it stopped first, "timeout" if it never answered.
+    Ignores any system proxy settings."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     t0 = time.time()
     while time.time() - t0 < timeout:
         if engine.poll() is not None:
-            return False
+            return "exited"
         try:
             with opener.open(url, timeout=2) as r:
                 if r.status == 200:
-                    return True
+                    return "ready"
         except Exception:
             pass
         time.sleep(0.1)
-    return True        # still starting: open the window anyway; it shows that it's waiting
+    return "timeout"
 
 
 def main():
@@ -169,26 +234,32 @@ def main():
 
     port = args.port or free_port()
     url = f"http://127.0.0.1:{port}/"
-    diag.mark("starting the engine" + (" (safe mode)" if safe else ""))
-    engine = start_engine(port, args, safe)
-    if not wait_for_engine(url, engine):
-        code = engine.poll()
-        _open_setup_check(f"the engine stopped while starting (exit code {code}); details are in app.log")
-    diag.mark(f"engine answering at {url}")
-    print(f"{TITLE} running at {url}  (projects in {HOME})")
+    holder = {}
+
+    def launch():
+        diag.mark("starting the engine" + (" (safe mode)" if safe else ""))
+        holder["engine"] = start_engine(port, args, safe)
+        st = wait_for_engine(url, holder["engine"])
+        if st == "ready":
+            diag.mark(f"engine answering at {url}")
+            print(f"{TITLE} running at {url}  (projects in {HOME})")
+            return None
+        code = holder["engine"].poll()
+        why = (f"The engine stopped while starting (exit code {code})." if st == "exited"
+               else "The engine didn't answer within a minute.")
+        diag.line(f"start-up failed: {why}")
+        return why + " Something it needs may be missing: try Check and fix setup. Export log saves the details."
 
     def stop_engine():
-        try:
-            engine.stdin.close()
-        except Exception:
-            pass
-        proc.kill(engine)
+        e = holder.get("engine")
+        if e is not None:
+            proc.kill(e)
 
     def follow(close):
         """Close the window when the engine ends (a restart from inside the app, or a crash), or when a
         restart is asked for from this window."""
         def on_engine_exit():
-            code = engine.wait()
+            code = holder["engine"].wait()
             if not RESTART.is_set():
                 diag.line(f"the engine ended (exit code {code}); closing the window")
             try:
@@ -215,15 +286,27 @@ def main():
             webview = None
         if webview is not None:
             api = JsApi()
-            win = webview.create_window(TITLE, url, width=1480, height=920, min_size=(1100, 700), js_api=api,
-                                        background_color="#111318")
+            # the window opens straight away with a "Starting" page; the app loads into it once the
+            # engine answers, or an error page with the log and what to do shows instead
+            win = webview.create_window(TITLE, html=STARTING_HTML, width=1480, height=920, min_size=(1100, 700),
+                                        js_api=api, background_color="#111318")
             api.window = win
             diag.mark("opening the window (pywebview " + getattr(webview, "__version__", "?") + ")")
-            follow(win.destroy)
-            webview.start()
+
+            def boot():
+                problem = launch()
+                if problem:
+                    win.load_html(error_html(problem))
+                    return
+                follow(win.destroy)
+                win.load_url(url)
+            webview.start(boot)
             diag.line("window closed")
             stop_engine()
             return
+        problem = launch()
+        if problem:
+            _open_setup_check(problem)
         diag.mark("pywebview not installed: using a browser window")
         browser = find_chromium()
         if browser:
@@ -240,6 +323,10 @@ def main():
             else:
                 time.sleep(2)
             return
+    if "engine" not in holder:             # --browser: nothing above started it
+        problem = launch()
+        if problem:
+            _open_setup_check(problem)
     webbrowser.open(url)
     follow(lambda: None)
     print("Press Ctrl+C to quit.")
