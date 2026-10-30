@@ -400,6 +400,9 @@ class Project:
             a, b = max(lo, 0), min(lo + p.shape[1], n)
             if b > a:
                 delta[:, a:b] += p[:, a - lo:b - lo].astype(np.float32)
+        # Replacing edits are laid down widest first, so the most specific wins where they overlap:
+        # another model's split (alt) < a repeated bar < a best version of the whole part.
+        takes.sort(key=lambda i: {"alt": 0, "bars": 1, "take": 2}.get(self.suggestions[i]["type"], 0))
         for sid in takes:      # a best-version edit replaces the part outright, other edits included
             lo, p = self.patches[sid]
             _, w = self.take_w[sid]
@@ -1578,6 +1581,12 @@ class Project:
                     self._render_cache.pop(("stem", k), None)
                     self._refresh_after(k, 0, self.stems[k].shape[1])
             for it in h["items"]:
+                if it["sug"] is None:          # made by that step: undo removes it again
+                    self._invalidate(it.get("stem", ""), it["id"])
+                    self.suggestions.pop(it["id"], None)
+                    self.patches.pop(it["id"], None)
+                    self.take_w.pop(it["id"], None)
+                    continue
                 self.suggestions[it["id"]] = it["sug"]
                 if it["patch"] is not None:
                     self.patches[it["id"]] = it["patch"]
@@ -1886,6 +1895,258 @@ class Project:
         sums = np.add.reduceat(x, idx)[:-1]
         lens = np.maximum(np.diff(idx), 1)
         return 10 * np.log10(sums / lens + 1e-12)
+
+    # ------------------------------------------------------------------ build the best instrumental
+    AUTO_STEPS = ("keep", "bestof", "versions", "bars", "hits", "repairs", "leftovers", "clicks", "mutes", "tone")
+
+    def _free_sections(self):
+        """Sections with no singing: the original recording already is a clean instrumental there."""
+        if self.meta.get("separation") == "Imported stems" or not len(self.VA):
+            return []
+        out = []
+        for sec in self.sections:
+            a = int(np.searchsorted(self.beat_times, sec["start"]))
+            b = int(np.searchsorted(self.beat_times, sec["end"]))
+            va = np.asarray(self.VA[a:max(b, a + 1)])
+            if len(va) and float(va.max()) < 0.04:
+                out.append(sec)
+        return out
+
+    def build_plan(self):
+        """What Build the best instrumental would do, without changing anything."""
+        if self.stage != "detected":
+            raise RuntimeError("Find damage first (step 3), then build.")
+        sugs = list(self.suggestions.values())
+        pend = lambda t: [x for x in sugs if x["type"] in t and x["status"] == "pending"]
+        free = self._free_sections()
+        hits = [h for h in self.best_hits() if not h["status"]]
+        steps = [
+            ("keep", "Use the original recording where nobody sings",
+             f"{len(free)} part{'s' if len(free) != 1 else ''} ({', '.join(s['name'] for s in free[:4])}{'...' if len(free) > 4 else ''}): "
+             "the cleanest sound there is. Fixes inside them are skipped.", len(free)),
+            ("bestof", "Build each instrument from the cleanest model, bar by bar",
+             "Uses the other models' splits you already have." if self.alt_modes() else
+             "Needs another model's split first (Try another model here); skipped for now.", len(self.alt_modes())),
+            ("versions", "Use the cleanest take of parts that repeat",
+             "Whole parts replaced by a cleaner copy of the same part, when it's a close match.",
+             len([x for x in self.best_versions() if not x["status"]])),
+            ("bars", "Rebuild riffs and patterns that repeat", "Damaged repeats replaced by the cleanest one, where no best version covers them.",
+             len([g for g in self.best_bars() if not g["status"]])),
+            ("hits", "Rebuild drum hits and note starts from a blend of their cleanest copies",
+             "Drums: used instead of ordinary repairs on the same hits, so nothing is filled in twice.",
+             len(hits)),
+            ("repairs", "Apply the repairs with a close match",
+             "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
+             len([x for x in pend(("repair",)) if x.get("recommended")])),
+            ("leftovers", "Remove leftover singing and \"s\" sounds", "From the instruments.", len(pend(("bleed", "ess")))),
+            ("clicks", "Fix clicks and dropouts", "A few milliseconds each.", len(pend(("glitch",)))),
+            ("mutes", "Mute bars where an instrument is only leftover singing or noise", "Worked out after the fixes.", 1),
+            ("tone", "Match the tone under the vocals", "Fill in what's still thin and clear the mud, measured against the same parts "
+                                                       "where nobody sings, after the fixes.", 1),
+        ]
+        return [{"key": k, "title": t, "detail": d, "count": int(c), "on": bool(c) and (k != "bestof" or bool(self.alt_modes()))}
+                for k, t, d, c in steps]
+
+    def build_best(self, steps=None, progress=lambda f, m: None):
+        """Work through every kind of fix in order, choose one where they overlap, check everything against
+        the original, and apply the result as ONE undo step. Returns a report.
+
+        Order and rules (why each one is where it is):
+          1 keep      original recording where nobody sings: nothing beats it, and kept parts ignore fixes
+          2 bestof    other models' splits, bar by bar: the base the rest builds on
+          3 versions  a cleaner copy of a whole repeating part (close matches only)
+          4 bars      repeated riffs, where no best version covers them
+          5 hits      blended clean hits/note starts. On drums they replace ordinary repairs in that part;
+                      on pitched instruments ordinary repairs win, and note starts fill only parts with none
+          6 repairs   close matches only, where nothing above covers that instrument
+          7 leftovers leftover singing removed; 8 clicks fixed
+          9 mutes     bars that are only ghost vocal or noise (measured on the result)
+         10 tone      lift what's still thin and cut the mud under the vocals (measured on the result)
+        Anything that doesn't fit the original (wrong part, off the beat) is never applied; applied ones
+        that don't fit are taken out."""
+        steps = set(steps or self.AUTO_STEPS)
+        with self.lock:
+            if self.stage != "detected":
+                raise RuntimeError("Find damage first (step 3), then build.")
+            h0 = len(self.history)
+            before = set(self.suggestions)
+            snap = self._snapshot(list(self.suggestions))
+            mixer0 = json.loads(json.dumps(self.mixer))
+            report = []
+            ov = lambda a, b: a["start"] < b["end"] - 0.01 and b["start"] < a["end"] - 0.01
+
+            # -- make the candidates (all still waiting)
+            progress(0.05, "Finding the cleanest versions of repeating parts")
+            if "bestof" in steps and self.alt_modes() and not any(i.startswith("e_") for i in self.suggestions):
+                try:
+                    self.best_of_models()
+                except Exception as e:
+                    log(f"build: best-of skipped: {e}")
+            if "versions" in steps:
+                for x in self.best_versions():
+                    if not x["status"]:
+                        try:
+                            self.make_take(x["stem"], x["section"], x["best"]["section"])
+                        except Exception as e:
+                            log(f"build: best version skipped: {e}")
+            if "bars" in steps:
+                for g in self.best_bars():
+                    if not g["status"]:
+                        try:
+                            self.make_bars(g["stem"], g["best"], g["damaged"])
+                        except Exception as e:
+                            log(f"build: repeated bars skipped: {e}")
+            progress(0.25, "Rebuilding hits and note starts")
+            if "hits" in steps:
+                for hh in self.best_hits():
+                    if not hh["status"]:
+                        try:
+                            self.make_hits(hh["stem"], hh["sound"], blend=hh.get("blend_n", 0) >= 3)
+                        except Exception as e:
+                            log(f"build: hits skipped: {e}")
+            del self.history[h0:]              # one undo step for all of it (recorded below)
+            new = [i for i in self.suggestions if i not in before]
+
+            # -- check everything against the original
+            progress(0.45, "Checking every fix against the original")
+            cand = [i for i, x in self.suggestions.items()
+                    if x["type"] in self.CHECK_TYPES and x["status"] in ("pending", "accepted", "auto", "low")]
+            self.check_ids(cand)
+            bad = {i for i in cand if self.flagged(i)}
+
+            # -- choose
+            keep = [{"start": sc["start"], "end": sc["end"], "mode": "original"} for sc in self._free_sections()] \
+                if "keep" in steps else []
+            kept = self.keep_ranges("original") + keep
+            inside_kept = lambda x: any(r["start"] <= x["start"] + 0.05 and r["end"] >= x["end"] - 0.05 for r in kept)
+            accept, reject = set(), set()
+            for i in bad:                                   # never applied; taken out if they were
+                if self.suggestions[i]["status"] in ("accepted", "auto"):
+                    reject.add(i)
+            S = self.suggestions
+            on = lambda i: (i in accept) or (S[i]["status"] in ("accepted", "auto") and i not in reject)
+            usable = lambda i: i not in bad and not inside_kept(S[i]) and S[i]["status"] in ("pending", "accepted", "auto")
+
+            def pick(kind, cond=lambda x: True):
+                for i, x in S.items():
+                    if x["type"] == kind and usable(i) and cond(x) and S[i]["status"] == "pending":
+                        accept.add(i)
+            if "bestof" in steps:
+                pick("alt", lambda x: x.get("alt_mode") == "best-of")
+            if "versions" in steps:
+                pick("take", lambda x: x.get("conf", 0) >= 0.8)
+            def active(kind):
+                """Applied fixes of one kind, by instrument (looked up once, not once per fix)."""
+                d = {}
+                for j, y in S.items():
+                    if y["type"] == kind and on(j):
+                        d.setdefault(y["stem"], []).append(y)
+                return d
+            takes_on = active("take")
+            covered = lambda x: any(ov(y, x) for y in takes_on.get(x["stem"], ()))
+            if "bars" in steps:
+                pick("bars", lambda x: not covered(x))
+            drum = lambda x: x["stem"] in self.PERCUSSIVE
+            if "hits" in steps:
+                pick("hits", lambda x: drum(x) and not covered(x))
+            if "repairs" in steps:
+                hits_on = active("hits")
+                drum_hits = lambda x: drum(x) and any(ov(y, x) for y in hits_on.get(x["stem"], ()))
+                pick("repair", lambda x: x.get("recommended") and not covered(x) and not drum_hits(x))
+            if "hits" in steps:                              # note starts only where no repair fills that part
+                reps_on = active("repair")
+                pick("hits", lambda x: not drum(x) and not covered(x)
+                     and not any(ov(y, x) for y in reps_on.get(x["stem"], ())))
+            if "leftovers" in steps:
+                for i, x in S.items():
+                    if x["type"] in ("bleed", "ess") and x["status"] == "pending" and not inside_kept(x):
+                        accept.add(i)
+            if "clicks" in steps:
+                for i, x in S.items():
+                    if x["type"] == "glitch" and x["status"] == "pending":
+                        accept.add(i)
+
+            # -- apply statuses and the kept parts, then measure the result for mutes and tone
+            progress(0.6, "Applying the chosen fixes")
+            for i in accept:
+                S[i]["status"] = "accepted"
+            for i in reject:
+                S[i]["status"] = "rejected"
+            if keep:
+                self.mixer["keep"] = self._clean_keep(self.mixer.get("keep", []) + keep)
+            self._render_cache.clear()
+            mutes, lift, cut = [], {}, {}
+            if "mutes" in steps:
+                progress(0.7, "Looking for bars that are only leftover singing")
+                for k in self.instruments:
+                    try:
+                        mutes += [{"start": r["start"], "end": r["end"], "stem": k} for r in self.ghost_runs(k)]
+                    except Exception as e:
+                        log(f"build: mute check skipped for {k}: {e}")
+                if mutes:
+                    self.mixer["mute_ranges"] = self.mixer.get("mute_ranges", []) + mutes
+                    self._render_cache.clear()
+            if "tone" in steps:
+                progress(0.8, "Matching the tone under the vocals")
+                for k in [x for x in self.instruments if x not in NOT_REPAIRED]:
+                    try:
+                        have = float(self.mixer.get("vocal_lift", {}).get(k, 0))
+                        loss = self.remaining_loss(k)
+                        want = float(np.clip(round((loss + have) * 2) / 2, 0, 6))
+                        if loss >= 1.0 and want - have >= 0.5:
+                            lift[k] = want
+                        cut_have = abs(float(self.mixer.get("mud_cut", {}).get(k, 0)))
+                        ex = self.mud_excess(k)
+                        cw = float(np.clip(round((ex + cut_have) * 2) / 2, 0, 6))
+                        if ex >= 1.5 and cw - cut_have >= 0.5:
+                            cut[k] = -cw
+                    except Exception as e:
+                        log(f"build: tone check skipped for {k}: {e}")
+                if lift:
+                    self.mixer.setdefault("vocal_lift", {}).update(lift)
+                if cut:
+                    self.mixer.setdefault("mud_cut", {}).update(cut)
+
+            # -- final check: nothing applied may disagree with the original
+            progress(0.9, "Checking the result against the original")
+            applied = [i for i, x in S.items() if x["type"] in self.CHECK_TYPES and x["status"] in ("accepted", "auto")]
+            late = [i for i in self.check_ids(applied)]
+            for i in late:
+                S[i]["status"] = "rejected"
+
+            # -- one undo step, refreshed displays
+            self.history.append({"label": "Build the best instrumental",
+                                 "items": snap + [{"id": i, "sug": None, "stem": S[i]["stem"], "patch": None} for i in new],
+                                 "mixer": mixer0})
+            self.history = self.history[-200:]
+            self._render_cache.clear()
+            for k in self.instruments:
+                self._refresh_after(k, 0, self.stems[k].shape[1])
+            self._compute_grid()
+            self.meta["verified"] = {"at": time.time(), "applied": self._applied_count(), "checked": len(applied),
+                                     "flagged": len(late)}
+
+            n_by = {}
+            for i in accept:
+                if S[i]["status"] == "accepted":
+                    n_by[S[i]["type"]] = n_by.get(S[i]["type"], 0) + 1
+            names = {"alt": "best-of-models take", "take": "best version", "bars": "repeated bar fix", "hits": "hit/note-start rebuild",
+                     "repair": "repair", "bleed": "leftover-singing cleanup", "ess": "\"s\" sound removal", "glitch": "click fix"}
+            for t, n in n_by.items():
+                report.append(f"Applied {n} {names.get(t, t)}{'s' if n != 1 else ''}")
+            if keep:
+                report.append(f"Original recording kept in {len(keep)} part{'s' if len(keep) != 1 else ''} without singing")
+            if mutes:
+                report.append(f"Muted {len(mutes)} stretch{'es' if len(mutes) != 1 else ''} that were only leftover singing or noise")
+            for k, v in lift.items():
+                report.append(f"Filled in the {k} under the vocals (+{v:.1f} dB)")
+            for k, v in cut.items():
+                report.append(f"Cleared the mud from the {k} under the vocals ({v:.1f} dB)")
+            held = len([i for i in bad if S[i]["status"] == "pending"]) + len(late)
+            if reject or late or held:
+                report.append(f"Left out {len(reject) + len(late) + held} fix{'es' if len(reject) + len(late) + held != 1 else ''} "
+                              f"that don't line up with the original (see Doesn't fit)")
+            return {"report": report, "new": len(new)}
 
     # ------------------------------------------------------------------ double-check against the original
     CHECK_TYPES = ("repair", "hits", "bars", "take", "alt", "rebuild")
