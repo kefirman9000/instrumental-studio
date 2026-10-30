@@ -1,5 +1,9 @@
 # What's new
 
+## 1.22.6
+
+- **No Roformer unless you ask for it.** The second vocal-removal pass (and Build the best instrumental, which runs it) now uses the faster standard model; Roformer was used automatically whenever it was installed, which is much slower. Turn it back on in Settings with *Use Roformer for extra passes*. The suggestion to try a different model also stops recommending Roformer splits unless that's on, and the Roformer split options are marked *slow*. Roformer splits you pick yourself work as before.
+
 ## 1.22.5
 
 - **Fix: vinyl crackle removal could leave a quiet track full of clicks.** On dense crackle, a few repairs could blow up into loud spikes, heard as clicks, and anything that sets levels by the loudest peak then turned the rest down. Repairs are now never louder than the music around them (a bad one is skipped) and never rebuild more than a few milliseconds at once. If you used it before this update: open **Vinyl crackle…** and choose **Undo crackle removal**, then run it again.

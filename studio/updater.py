@@ -224,9 +224,9 @@ def prefs_path(home):
 def load_prefs(home):
     try:
         with open(prefs_path(home)) as f:
-            return {"check_on_start": True, "auto_install": False, **json.load(f)}
+            return {"check_on_start": True, "auto_install": False, "roformer_passes": False, **json.load(f)}
     except (OSError, ValueError):
-        return {"check_on_start": True, "auto_install": False}
+        return {"check_on_start": True, "auto_install": False, "roformer_passes": False}
 
 
 def save_prefs(home, prefs):
