@@ -29,15 +29,6 @@ def _Project():
     return Project
 
 
-def _preload():
-    """Load the song engine in the background once the window is up, so the first song opens fast."""
-    time.sleep(3)
-    try:
-        _Project()
-        from scipy import signal, fft  # noqa: F401
-        from scipy.io import wavfile  # noqa: F401
-    except Exception as e:
-        log(f"preload skipped: {e}")
 
 UI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
 HOME = os.environ.get("INSTRUMENTAL_STUDIO_HOME", os.path.join(os.path.expanduser("~"), "InstrumentalStudio"))
@@ -401,32 +392,56 @@ def _job_demo():
     S.project = p
 
 
-_project_meta = {}      # project.json path -> (modified time, listing row); the files can be large
+_project_meta = {}      # project folder -> (modified time, listing row)
+
+
+def _peek_meta(pj):
+    """Name and length of a song from the start of its project.json, without parsing the whole file
+    (it holds every repair and can be tens of MB; parsing it all froze the window at startup)."""
+    with open(pj, "r", encoding="utf-8", errors="replace") as f:
+        head = f.read(65536)
+    name = re.search(r'"name":\s*"((?:[^"\\]|\\.)*)"', head)
+    dur = re.search(r'"duration":\s*([0-9.eE+-]+)', head)
+    try:
+        nm = json.loads(f'"{name.group(1)}"') if name else None
+    except ValueError:
+        nm = None
+    try:
+        du = float(dur.group(1)) if dur else None
+    except ValueError:
+        du = None
+    return nm, du
 
 
 def list_projects():
-    """Rows for the Songs list. Asked for on every status poll, so each project.json (which holds every
-    repair and can be megabytes) is only read again when it has changed."""
+    """Rows for the Songs list. Reads each song's small summary.json (written on save); older songs
+    without one are peeked at, never fully parsed. Results are kept until the song changes."""
     out = []
     if os.path.isdir(PROJECTS):
         for d in sorted(os.listdir(PROJECTS)):
-            pj = os.path.join(PROJECTS, d, "project.json")
+            folder = os.path.join(PROJECTS, d)
+            pj = os.path.join(folder, "project.json")
             try:
                 mt = os.path.getmtime(pj)
             except OSError:
                 continue
-            hit = _project_meta.get(pj)
+            hit = _project_meta.get(folder)
             if hit and hit[0] == mt:
                 out.append(hit[1])
                 continue
+            name, dur = None, None
             try:
-                with open(pj) as f:
-                    meta = json.load(f)["meta"]
-                row = {"id": d, "name": meta.get("name", d), "duration": meta.get("duration"), "modified": mt}
-                _project_meta[pj] = (mt, row)
-                out.append(row)
-            except Exception:
-                pass
+                with open(os.path.join(folder, "summary.json")) as f:
+                    sm = json.load(f)
+                name, dur = sm.get("name"), sm.get("duration")
+            except (OSError, ValueError):
+                try:
+                    name, dur = _peek_meta(pj)
+                except OSError:
+                    pass
+            row = {"id": d, "name": name or d, "duration": dur, "modified": mt}
+            _project_meta[folder] = (mt, row)
+            out.append(row)
     return sorted(out, key=lambda x: -x["modified"])
 
 
@@ -907,6 +922,7 @@ def _startup_update():
     prefs = UP.load_prefs(HOME)
     if not prefs.get("check_on_start") or S.just_updated:
         return
+    time.sleep(15)          # let the window settle first: setting up the secure connection is heavy
     do_check()
     info = S.update.get("info") or {}
     if info.get("available") and prefs.get("auto_install"):
@@ -947,7 +963,6 @@ def serve(port=0, just_updated=False, safe=False):
                 raise
             time.sleep(0.25)
     httpd.daemon_threads = True
-    threading.Thread(target=_preload, daemon=True).start()
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     return httpd, f"http://127.0.0.1:{httpd.server_address[1]}/"

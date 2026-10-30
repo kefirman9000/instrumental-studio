@@ -27,6 +27,18 @@ const pct = x => (x > 0 && x < 0.005 ? "<1%" : `${Math.round(100 * x)}%`);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const nice = k => (k || "").replace(/_/g, " ");
 const native = () => window.pywebview && window.pywebview.api;
+// The app window connects its file pickers a moment after the page loads. A click in that moment used
+// to fall back to the browser's upload (which copies the whole file); wait briefly for them instead.
+const BOOTED_AT = Date.now();
+async function nativeReady() {
+  if (native() && native().choose_song) return native();
+  if (Date.now() - BOOTED_AT > 6000) return null;          // a normal browser: no app pickers coming
+  return await new Promise(res => {
+    const done = () => res(native() && native().choose_song ? native() : null);
+    window.addEventListener("pywebviewready", done, { once: true });
+    setTimeout(done, 2500);
+  });
+}
 
 const st = {
   hear: (() => { try { return localStorage.getItem("hear") || "mix"; } catch { return "mix"; } })(),
@@ -118,7 +130,8 @@ async function upload(file, batch) {
 }
 
 $("#btnOpenSong").onclick = async () => {
-  if (native()) { const p = await native().choose_song(); if (p) startSong(p); return; }
+  const nat = await nativeReady();
+  if (nat) { const p = await nat.choose_song(); if (p) startSong(p); return; }
   $("#fileSong").click();
 };
 async function openSongFile(f) {
@@ -131,7 +144,8 @@ $("#fileSong").onchange = async e => {
   e.target.value = "";
 };
 $("#btnOpenStems").onclick = async () => {
-  if (native()) { const p = await native().choose_folder(); if (p) startStems(p); return; }
+  const nat = await nativeReady();
+  if (nat) { const p = await nat.choose_folder(); if (p) startStems(p); return; }
   $("#fileStems").click();
 };
 $("#fileStems").onchange = async e => {
