@@ -57,6 +57,26 @@ def _run_extra(args, progress, frac0, frac1, label):
         raise RuntimeError(label + " failed:\n" + "\n".join(tail[-12:]))
 
 
+def vocals_in(audio, sr, workdir, progress=lambda f, m: None, frac0=0.0, frac1=1.0, label="Looking for leftover singing"):
+    """Run a vocal-removal model on any (2, n) audio and return the vocals it finds there (2, n).
+    Roformer when it's installed (the cleanest), otherwise Demucs."""
+    from scipy.io import wavfile
+    from .installer import extra_installed
+    os.makedirs(workdir, exist_ok=True)
+    wav = os.path.join(workdir, "in.wav")
+    wavfile.write(wav, sr, np.asarray(audio, np.float32).T)
+    out = os.path.join(workdir, "out")
+    if extra_installed("roformer"):
+        _run_extra(["roformer", BS_ROFORMER, wav, out, models_dir()], progress, frac0, frac1, label)
+        f = os.path.join(out, "vocals.wav")
+    else:
+        d = _run_model(wav, "htdemucs", out, progress, frac0, frac1)
+        f = os.path.join(d, "vocals.wav")
+    v = load_audio(f, sr)[0]
+    n = audio.shape[1]
+    return np.pad(v[:, :n], ((0, 0), (0, max(0, n - v.shape[1])))).astype(np.float32)
+
+
 def demucs_available():
     from .installer import installed
     return installed()

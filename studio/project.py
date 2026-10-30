@@ -705,6 +705,104 @@ class Project:
             out = out + band * ((10 ** (db / 20) - 1) * vc)[None, :]
         return self._apply_eq_ranges(k, out, a, b)
 
+    # ------------------------------------------------------------------ second vocal-removal pass on an instrument
+    def add_deep_leftovers(self, k, found):
+        """`found` is what a vocal model found in instrument k on a second pass. Offer to take it out, per
+        section, only in bars where someone is singing AND what was found moves like the actual singing
+        (so a melody line the model mistook for a voice is left alone). Returns the new review ids."""
+        with self.lock:
+            n = self.stems[k].shape[1]
+            found = found[:, :n]
+            vb = (np.asarray(self.centers) >= 250) & (np.asarray(self.centers) <= 5000)
+            w = np.zeros(n, np.float32)
+            for wi, (s0, L) in enumerate(self.windows):
+                a, b = self._window_samples(s0, L)
+                b = min(b, n)
+                if b - a < self.sr // 4 or float(np.mean(self.VA[s0:s0 + L]) if L else 0) < 0.2:
+                    continue
+                Ef = VF.band_energy(found[:, a:b].mean(0), self.B)[vb]
+                Ev = VF.band_energy(self.stems["vocals"][:, a:b].mean(0), self.B)[vb]
+                Es = VF.band_energy(self.stems[k][:, a:b].mean(0), self.B)[vb]
+                if Ef.sum() < 1e-3 * (Es.sum() + 1e-12):
+                    continue                                   # nothing worth taking out
+                x, y = np.log(Ef + 1e-10).ravel(), np.log(Ev + 1e-10).ravel()
+                if x.std() < 1e-3 or y.std() < 1e-3 or np.corrcoef(x, y)[0, 1] < 0.5:
+                    continue                                   # doesn't move like the singer
+                w[a:b] = 1
+            if not w.any():
+                return []
+            from scipy.ndimage import uniform_filter1d
+            w = uniform_filter1d(w, int(0.03 * self.sr)) * np.clip(self._vocal_curve(0, n) * 1.5, 0, 1)
+            ids = []
+            for si, sec in enumerate(self.sections):
+                a, b = int(sec["start"] * self.sr), min(n, int(sec["end"] * self.sr))
+                if b <= a or not w[a:b].any():
+                    continue
+                patch = -(found[:, a:b] * w[None, a:b])
+                rem = float((patch ** 2).sum())
+                tot = float((self.stems[k][:, a:b] ** 2).sum()) + 1e-12
+                if rem < 1e-4 * tot:
+                    continue
+                rid = f"d_{k}_{si}"
+                self.suggestions[rid] = {
+                    "id": rid, "type": "bleed", "stem": k, "status": "pending", "start": sec["start"], "end": sec["end"],
+                    "section": si, "conf": 0.9, "severity": float(min(1.0, rem / tot * 10)),
+                    "removed_db": float(10 * np.log10(rem / tot + 1e-12)), "deep": True, "donors": [],
+                    "note": f"Removes leftover singing a second vocal-removal pass found in the {k} (only where it moves like the singer)"}
+                self.patches[rid] = (a, patch.astype(np.float16))
+                ids.append(rid)
+            return ids
+
+    # ------------------------------------------------------------------ the singer's pitch
+    def _vocal_f0(self, V, sr):
+        """Fundamental frequency of the singing per STFT frame of a vocal magnitude spectrum V (bins, frames),
+        and how voiced each frame is (0..1). Harmonic sum over a grid of candidate pitches."""
+        bw = sr / N_FFT
+        cands = np.geomspace(80.0, 1000.0, 160)
+        L = np.log(V + 1e-6)
+        S = np.zeros((len(cands), V.shape[1]))
+        for h in range(1, 7):
+            bins = cands * h / bw
+            ok = bins < V.shape[0] - 1
+            i0 = np.floor(bins[ok]).astype(int)
+            fr = (bins[ok] - i0)[:, None]
+            S[ok] += (1 - fr) * L[i0] + fr * L[i0 + 1]
+        best = np.argmax(S, axis=0)
+        f0 = cands[best]
+        # voiced: harmonics hold a good share of the frame's energy between 80 Hz and 5 kHz
+        freqs = np.arange(V.shape[0]) * bw
+        band = (freqs >= 80) & (freqs <= 5000)
+        E = (V ** 2)
+        tot = E[band].sum(0) + 1e-12
+        harm = np.zeros(V.shape[1])
+        for h in range(1, 9):
+            b = np.clip(np.round(f0 * h / bw).astype(int), 0, V.shape[0] - 2)
+            harm += E[b, np.arange(V.shape[1])] + E[b + 1, np.arange(V.shape[1])]
+        voiced = np.clip((harm / tot - 0.15) / 0.35, 0, 1)
+        loud = 20 * np.log10(np.sqrt(tot) + 1e-12)
+        voiced *= (loud > np.percentile(loud, 99) - 45)
+        return f0, voiced
+
+    def _pitch_gain(self, V, sr, g, lo, hi):
+        """Gain (bins, frames): narrow notches on the singer's harmonics, deeper where the singer is louder."""
+        f0, voiced = self._vocal_f0(V, sr)
+        bw = sr / N_FFT
+        nb, nf = V.shape
+        freqs = np.arange(nb)[:, None] * bw
+        cut = np.zeros((nb, nf))
+        vmax = V.max(0) + 1e-9
+        for h in range(1, 25):
+            fh = f0 * h
+            if (fh > hi * 1.25).all():
+                break
+            sigma = np.maximum(1.2 * bw, 0.015 * fh)
+            shape = np.exp(-0.5 * ((freqs - fh[None, :]) / sigma[None, :]) ** 2)
+            bi = np.clip(np.round(fh / bw).astype(int), 0, nb - 1)
+            strength = np.sqrt(np.clip(V[bi, np.arange(nf)] / vmax, 0, 1))
+            inband = ((fh >= lo * 0.8) & (fh <= hi * 1.25)).astype(float)
+            cut = np.maximum(cut, shape * (strength * inband * voiced)[None, :])
+        return 1 - (1 - g) * cut
+
     # ------------------------------------------------------------------ lower frequencies in part of the song
     EQ_PRESETS = {"vocal": (300.0, 3500.0), "ess": (5000.0, 10000.0), "harsh": (2000.0, 5000.0),
                   "mud": (150.0, 500.0), "boom": (60.0, 150.0)}
@@ -738,7 +836,19 @@ class Project:
             if not w.any():
                 continue
             x = out[:, s0 - a:s1 - a]
-            if r.get("mode") == "follow":
+            if r.get("mode") == "pitch":
+                # notch exactly the notes the singer is singing (and their overtones), nothing in between
+                V = np.abs(stft(self.stems["vocals"][:, s0:s1].mean(0)))
+                plo = 80.0 if r.get("preset") in (None, "vocal") else lo
+                G = self._pitch_gain(V, sr, g, plo, hi)
+                wf = np.interp(np.arange(V.shape[1]) * HOP, np.arange(len(w)), w)
+                G = 1 - (1 - G) * wf[None, :]
+                for ch in range(x.shape[0]):
+                    X = stft(x[ch])
+                    m = min(X.shape[1], G.shape[1])
+                    X[:, :m] *= G[:, :m]
+                    x[ch] = istft(X, x.shape[1])
+            elif r.get("mode") == "follow":
                 # cut each frequency by how much the singer is using it at that moment (within the band)
                 V = np.abs(stft(self.stems["vocals"][:, s0:s1].mean(0)))
                 freqs = np.fft.rfftfreq(N_FFT, 1.0 / sr)
@@ -2524,8 +2634,8 @@ class Project:
         return written
 
     # ------------------------------------------------------------------ build the best instrumental
-    AUTO_STEPS = ("keep", "bestof", "versions", "bars", "hits", "pattern", "repairs", "leftovers", "clicks", "improve",
-                  "mutes", "tone", "seams")
+    AUTO_STEPS = ("keep", "bestof", "versions", "bars", "hits", "pattern", "repairs", "deep", "leftovers", "clicks",
+                  "improve", "mutes", "notch", "tone", "seams")
 
     def _free_sections(self):
         """Sections with no singing: the original recording already is a clean instrumental there."""
@@ -2569,20 +2679,26 @@ class Project:
             ("repairs", "Apply the repairs with a close match",
              "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
              len([x for x in pend(("repair",)) if x.get("recommended")])),
+            ("deep", "Second vocal-removal pass on the instruments",
+             "Runs the vocal model again on each instrument (not the drums) and removes what it finds, only where it moves "
+             "like the singer. Takes a few minutes.", len([k for k in self.instruments if k not in NOT_REPAIRED and k not in self.PERCUSSIVE])),
             ("leftovers", "Remove leftover singing and \"s\" sounds", "From the instruments.", len(pend(("bleed", "ess")))),
             ("clicks", "Fix clicks and dropouts", "A few milliseconds each.", len(pend(("glitch",)))),
             ("improve", "Improve weak sections", "Every section and instrument scoring under 75 tries the alternatives (each other "
                                                 "model's split, a half-and-half blend with it, other source parts) and keeps "
                                                 "whichever is clearly cleaner and still fits the original.", 1),
             ("mutes", "Mute bars where an instrument is only leftover singing or noise", "Worked out after the fixes.", 1),
+            ("notch", "Notch the singer's notes in every instrument",
+             "Narrow cuts on exactly the notes being sung and their overtones (-9 dB, only while singing). Off by default: "
+             "it can thin an instrument that plays the same notes as the singer.", 1),
             ("tone", "Match the tone under the vocals, across all frequencies",
              "Each instrument under the singing is matched to the same parts where nobody sings, band by band "
              "(replaces the simpler fill-in and mud cut for that instrument).", 1),
             ("seams", "Smooth the seams", "Where the original recording takes over, crossfades are lengthened where the "
                                           "switch would be heard.", 1),
         ]
-        return [{"key": k, "title": t, "detail": d, "count": int(c), "on": bool(c) and (k != "bestof" or bool(self.alt_modes()))}
-                for k, t, d, c in steps]
+        return [{"key": k, "title": t, "detail": d, "count": int(c),
+                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k != "notch"} for k, t, d, c in steps]
 
     def build_best(self, steps=None, progress=lambda f, m: None):
         """Work through every kind of fix in order, choose one where they overlap, check everything against
@@ -2736,6 +2852,15 @@ class Project:
                 if mutes:
                     self.mixer["mute_ranges"] = self.mixer.get("mute_ranges", []) + mutes
                     self._render_cache.clear()
+            notched = False
+            if "notch" in steps and not any(r.get("mode") == "pitch" and not r.get("stem")
+                                            for r in self.mixer.get("eq_ranges", [])):
+                dur = float(self.meta.get("duration") or self.stems[self.instruments[0]].shape[1] / self.sr)
+                self.mixer.setdefault("eq_ranges", []).append(
+                    {"start": 0.0, "end": dur, "stem": None, "mode": "pitch", "db": -9, "only_vocals": True,
+                     "preset": "vocal", "auto": True})
+                self._render_cache.clear()
+                notched = True
             if "tone" in steps:
                 progress(0.8, "Matching the tone under the vocals")
                 for k in [x for x in self.instruments if x not in NOT_REPAIRED]:
@@ -2797,6 +2922,8 @@ class Project:
             if mutes:
                 report.append(f"Muted {len(mutes)} stretch{'es' if len(mutes) != 1 else ''} that were only leftover singing or noise")
             report += improved
+            if notched:
+                report.append("Notched the singer's notes in every instrument (-9 dB, while singing); listed in the Levels tab")
             for k, (hi_, lo_) in toned.items():
                 report.append(f"Matched the {k}'s tone under the vocals (from {lo_:+.1f} to {hi_:+.1f} dB across the range)")
             sm = [x for x in self.mixer.get("seams", []) if x.get("fade", 0) > 0.05]
@@ -3268,6 +3395,17 @@ class Project:
                                   f"Levels tab, and Undo takes them all back.",
                         "button": "Mute those parts",
                         "action": {"kind": "mutes", "ranges": [{"start": r["start"], "end": r["end"], "stem": k} for r in runs]}})
+
+        if not any(x.get("deep") for x in sugs) and [k for k in self.instruments if k not in NOT_REPAIRED and k not in self.PERCUSSIVE]:
+            out.append({"id": "deep", "title": "Look for leftover singing with a second vocal-removal pass",
+                        "detail": "Runs the vocal model again on each instrument and offers to take out what it finds, only where "
+                                  "it moves like the singer. The strongest way to remove ghost vocals. Takes a few minutes.",
+                        "button": "Run it", "action": {"kind": "deep"}})
+        if not any(r.get("mode") == "pitch" for r in self.mixer.get("eq_ranges", [])):
+            out.append({"id": "notch", "title": "Notch the singer's notes in every instrument",
+                        "detail": "Narrow cuts on exactly the notes being sung and their overtones, only while singing. Takes out "
+                                  "ghost vocals more precisely than a band cut; listen for any instrument that plays the same notes.",
+                        "button": "Notch them (-9 dB)", "action": {"kind": "notch"}})
 
         bv = [x for x in self.best_versions() if not x["status"]]
         if bv:

@@ -828,7 +828,7 @@ function renderEqList() {
     const d = document.createElement("div"); d.className = "keep-item";
     d.innerHTML = `<i class="sw no_edits"></i><span></span><button class="ghost small">Remove</button>`;
     const what = r.preset ? EQ_NAMES[r.preset] || r.preset : `${Math.round(r.lo)} Hz to ${Math.round(r.hi)} Hz`;
-    d.querySelector("span").textContent = `${r.stem ? nice(r.stem) : "All instruments"}: ${what} ${r.db} dB` +
+    d.querySelector("span").textContent = `${r.stem ? nice(r.stem) : "All instruments"}: ${r.mode === "pitch" ? "the singer's notes" : what} ${r.db} dB` +
       `${r.mode === "follow" ? ", following the singer" : ""}${r.only_vocals === false ? "" : ", while singing"}, ${fmtP(r.start)} to ${fmtP(r.end)}`;
     d.querySelector("span").onclick = () => seek(r.start);
     d.querySelector("button").onclick = () => setEq(list.filter((_, j) => j !== i));
@@ -902,6 +902,14 @@ async function runTip(a) {
   if (a.kind === "alt") return tryAlt(a.mode, a.start, a.end, null);
   if (a.kind === "mute") return setMutes([...(st.ov.mixer.mute_ranges || []), { start: a.start, end: a.end, stem: a.stem }]);
   if (a.kind === "mutes") return setMutes([...(st.ov.mixer.mute_ranges || []), ...a.ranges]);
+  if (a.kind === "deep") {
+    try { stopPreview(); player.pause(); await api.post("/api/deep", {}); showBusy(0.02, "Second vocal-removal pass"); return watchJob(); }
+    catch (e) { return fail(e); }
+  }
+  if (a.kind === "notch") {
+    return setEq([...(st.ov.mixer.eq_ranges || []), { start: 0, end: st.ov.meta.duration, stem: null, mode: "pitch", db: -9,
+                                                     only_vocals: true, preset: "vocal" }]);
+  }
   if (a.kind === "mud") return edit("/api/mixer", { mud_cut: { ...(st.ov.mixer.mud_cut || {}), [a.stem]: a.db } });
   if (a.kind === "status") return edit("/api/status", { ids: a.ids, status: a.status });
   if (a.kind === "verify") return runChecked("Double-checking every fix against the original", async () => {
@@ -1766,7 +1774,7 @@ async function openAutoBuild() {
     for (const stp of r.steps) {
       const row = document.createElement("label"); row.className = "auto-step" + (stp.on ? "" : " off");
       row.innerHTML = `<input type="checkbox" name="${stp.key}"${stp.on ? " checked" : ""}><div><b></b><span></span></div>`;
-      row.querySelector("b").textContent = stp.title + (stp.count > 1 && !["mutes", "tone", "bestof", "improve", "seams"].includes(stp.key) ? ` (${stp.count})` : "");
+      row.querySelector("b").textContent = stp.title + (stp.count > 1 && !["mutes", "tone", "bestof", "improve", "seams", "notch", "pattern", "deep"].includes(stp.key) ? ` (${stp.count})` : "");
       row.querySelector("span").textContent = stp.detail;
       box.append(row);
     }
