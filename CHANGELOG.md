@@ -1,5 +1,13 @@
 # What's new
 
+## 1.13.0
+
+- **Blend the cleanest drum hits.** Each drum sound in the Repairability tab now has a **Blend** button next to **Apply**. Instead of filling in from the single cleanest hit, it uses the 5 cleanest together: each is lined up and level-matched, and only what they have in common is kept, so a cymbal wash or a bit of leftover singing in any one of them drops out. The attack stays as sharp as the cleanest hit's. **Blend all** (Best hits) and **Blend all hits** / **Apply all, blend hits** (at the top) do every sound at once. Blending a sound that was already applied the other way switches it over; Undo switches it back.
+- **Smarter muting.** The suggestions now look bar by bar for stretches where an instrument is only the singer's ghost (much quieter than it plays on its own and rising and falling with the vocal, or flagged as leftover singing) or only separation noise, and offer to mute just those bars in one click.
+- **Match the original's loudness** when exporting (optional): measured where nobody sings, so the instrumental sits at the same level as the song.
+- **Exported instruments add up to the exported mix again.** Files near clipping used to be turned down one at a time, which changed the balance between them. Now every file gets the same adjustment.
+- **Safer.** Other web pages open on your computer can no longer send commands to the app: every change needs a secret that only the app's own window has, requests from other sites are refused, and the app can't be shown inside another site. **Show folder** only opens folders inside the InstrumentalStudio folder and never runs a file.
+
 ## 1.12.0
 
 - **Rebuild any part.** Drag across part of the song, pick an instrument (or all of them) and choose **Rebuild**: it's rebuilt from the bars where that instrument plays the same thing, even if nothing was flagged there. Every rebuilt bar goes to Review first.
