@@ -87,6 +87,10 @@ Already have stems from another tool? Click **Import stems** and select all of t
 
 ## A quick tour
 
+### Build the best instrumental in one go
+
+After **Find damage**, click **Build the best instrumental** (top of the Review tab). It shows its plan, then works through every kind of fix in the right order: the original recording where nobody sings, the cleanest model per bar, best versions of repeating parts, repeated riffs, blended drum hits and note starts, close-match repairs, leftover-singing cleanup, clicks, ghost-vocal mutes, and tone under the vocals. Where fixes overlap it picks one instead of stacking them, it checks every fix against the original and leaves out anything that doesn't fit, and the whole build is **one step**: Undo takes it all back. Prefer it over the separate **Apply all** buttons, which don't work out overlaps.
+
 ### Review each fix
 
 ![A selected fix on the guitar, showing what was filled back in, how good the match is, and where it was borrowed from](docs/screenshots/review-repair.png)
