@@ -68,6 +68,9 @@ def check_python():
     elif v >= (3, 14):
         say(WARN, f"Python {v.major}.{v.minor}", "Very new: the separation model may not support it yet. "
                                                    "If its install fails, install Python 3.12 or 3.13 from python.org.")
+    elif v.releaselevel != "final":
+        say(WARN, f"Python {sys.version.split()[0]} is a pre-release (test) version",
+            f"Pre-releases can have bugs. Install the final Python {v.major}.{v.minor} from python.org ({where}).")
     else:
         say(OK, f"Python {v.major}.{v.minor}.{v.micro}", where)
 
