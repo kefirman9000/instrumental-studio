@@ -103,6 +103,16 @@ def setup(home=None):
     return f
 
 
+def append(msg, home=None):
+    """Add one line to app.log without taking over the console (for the setup check and other tools)."""
+    try:
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_path(home), "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except OSError:
+        pass
+
+
 def line(msg):
     """One timestamped line in the log."""
     ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]

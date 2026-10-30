@@ -168,7 +168,7 @@ def check_model():
         except Exception:
             size, where = "about 1-3 GB", "this computer"
         say(WARN, "Separation model isn't installed",
-            f"Needed only for splitting songs ({size}, runs on {where}). Opening songs, importing stems and "
+            f"Needed only for splitting songs: {size}, runs on {where}. Opening songs, importing stems and "
             f"the demo work without it. You can also install it from the app's start screen.")
         if not ONLY_CHECK and (not YES) and ask(f"Download and install it now ({size})?", default=False):
             def prog(f, m):
@@ -219,8 +219,7 @@ def main():
         print("Everything the app needs is in place." + (" Start it again." if FROM_APP else ""))
     try:
         from studio import diag
-        diag.setup()
-        diag.line(f"setup check: {'problems: ' + ', '.join(problems) if problems else 'all good'}")
+        diag.append(f"setup check: {'problems: ' + ', '.join(problems) if problems else 'all good'}")
     except Exception:
         pass
     return 1 if problems else 0
