@@ -1,5 +1,15 @@
 # What's new
 
+## 1.15.2
+
+From a log you sent (thank you):
+
+- **No more long "[pywebview] Error while processing window.native..." lines at start.** The app gave the page a public link to the window, and pywebview tried to walk through every internal part of the Windows window when the page loaded. That link is private now, which also saves a little time at start.
+- **"Slow request" times in the log are now real.** They used to include the time a connection sat idle waiting for the window's next request (which is how a request could seem to take 100 minutes while you were away).
+- **Closing the window no longer logs "the engine ended (exit code 1)"** as if something went wrong; closing the window stops the engine on purpose.
+- The setup check warns if Python is a pre-release (test) version, such as 3.13.0rc3.
+- The log shows the pywebview version.
+
 ## 1.15.1
 
 - **Fix: nothing appeared when starting on Windows (1.15.0).** The window waited for the engine before showing anything, and on Windows the engine didn't come up. Now the window opens straight away with a "Starting Instrumental Studio" page and the app loads into it once the engine answers.

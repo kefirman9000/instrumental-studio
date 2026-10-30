@@ -63,14 +63,17 @@ class JsApi:
     process, which is never busy, so they always respond."""
 
     def __init__(self):
-        self.window = None
+        # Leading underscore: pywebview exposes every public attribute of this object to the page and
+        # walks into it. A public `window` made it crawl through the whole native window at load
+        # (the long "Error while processing window.native..." lines in app.log).
+        self._window = None
 
     def _dialog(self, kind, **kw):
         import webview
         fd = getattr(webview, "FileDialog", None)
         const = {"open": getattr(fd, "OPEN", None) if fd else getattr(webview, "OPEN_DIALOG", 10),
                  "folder": getattr(fd, "FOLDER", None) if fd else getattr(webview, "FOLDER_DIALOG", 20)}[kind]
-        res = self.window.create_file_dialog(const, **kw)
+        res = self._window.create_file_dialog(const, **kw)
         if not res:
             return None
         return res[0] if isinstance(res, (list, tuple)) else res
@@ -234,7 +237,7 @@ def main():
 
     port = args.port or free_port()
     url = f"http://127.0.0.1:{port}/"
-    holder = {}
+    holder = {"closing": False}
 
     def launch():
         diag.mark("starting the engine" + (" (safe mode)" if safe else ""))
@@ -251,6 +254,7 @@ def main():
         return why + " Something it needs may be missing: try Check and fix setup. Export log saves the details."
 
     def stop_engine():
+        holder["closing"] = True
         e = holder.get("engine")
         if e is not None:
             proc.kill(e)
@@ -260,8 +264,10 @@ def main():
         restart is asked for from this window."""
         def on_engine_exit():
             code = holder["engine"].wait()
-            if not RESTART.is_set():
-                diag.line(f"the engine ended (exit code {code}); closing the window")
+            if holder["closing"]:
+                diag.line("engine stopped (the window was closed)")
+            elif not RESTART.is_set():
+                diag.line(f"the engine ended unexpectedly (exit code {code}); closing the window")
             try:
                 close()
             finally:
@@ -290,8 +296,13 @@ def main():
             # engine answers, or an error page with the log and what to do shows instead
             win = webview.create_window(TITLE, html=STARTING_HTML, width=1480, height=920, min_size=(1100, 700),
                                         js_api=api, background_color="#111318")
-            api.window = win
-            diag.mark("opening the window (pywebview " + getattr(webview, "__version__", "?") + ")")
+            api._window = win
+            try:
+                from importlib.metadata import version as _v
+                wv = _v("pywebview")
+            except Exception:
+                wv = getattr(webview, "__version__", "?")
+            diag.mark(f"opening the window (pywebview {wv})")
 
             def boot():
                 problem = launch()

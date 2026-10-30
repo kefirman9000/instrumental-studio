@@ -503,10 +503,18 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def parse_request(self):
+        # the clock starts once a request has arrived: a kept-open connection can sit idle for hours
+        # between requests, and counting that made the log report "slow requests" that weren't
+        self._t0 = time.time()
+        return super().parse_request()
+
     def handle_one_request(self):
-        t0 = time.time()
+        self._t0 = None
         super().handle_one_request()
-        dt = time.time() - t0
+        if self._t0 is None:
+            return
+        dt = time.time() - self._t0
         if dt > 1.0 and getattr(self, "path", None):
             DG.line(f"slow request: {getattr(self, 'command', '?')} {self.path.split('?')[0]} took {dt:.1f} s")
 
