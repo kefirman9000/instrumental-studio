@@ -153,4 +153,5 @@ def segment(x, lo, hi):
 
 
 def log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    from . import diag
+    diag.line(msg)

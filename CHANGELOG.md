@@ -1,5 +1,11 @@
 # What's new
 
+## 1.14.4
+
+- **Export log.** On the start screen, in Troubleshooting and reset, and on the "taking too long" panel: saves one file (InstrumentalStudio/logs/InstrumentalStudio-log-....zip) with the app's log and details of this computer, to attach when asking for help. No audio or songs are included.
+- **The log is always kept now,** however the app was started (it used to be written only without a console), and it records more: each startup step with timings, any request that took over a second, errors in the window, Python errors in any thread, and hard crashes.
+- **Freezes are recorded.** If the app stays blocked for more than 3 seconds, the log gets a snapshot of exactly what every part of the app was doing at that moment.
+
 ## 1.14.3
 
 The window no longer freezes when you click while the app is starting:
