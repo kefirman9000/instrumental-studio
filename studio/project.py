@@ -108,7 +108,7 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
-        for cache in ("_sounds_cache", "_dscale", "_guard"):
+        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail"):
             self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
@@ -705,6 +705,65 @@ class Project:
             out = out + band * ((10 ** (db / 20) - 1) * vc)[None, :]
         return self._apply_eq_ranges(k, out, a, b)
 
+    # ------------------------------------------------------------------ where leftover singing remains
+    MAP_RATE = 4             # values per second
+
+    def _leftover_curve(self, k):
+        """0..1, MAP_RATE per second: how much instrument k still moves like the singer there (as it sounds
+        now: repairs, cuts and mutes included)."""
+        n = self.stems[k].shape[1]
+        y = self.shaped_stem(k) * self._gain_curve(k, 0, n)
+        Es = VF.band_energy(np.asarray(y, np.float32).mean(0), self.B)
+        Ev = VF.band_energy(self.stems["vocals"].mean(0), self.B)
+        nf = min(Es.shape[1], Ev.shape[1])
+        vb = (np.asarray(self.centers) >= 250) & (np.asarray(self.centers) <= 5000)
+        Ls, Lv = np.log(Es[vb, :nf] + 1e-10), np.log(Ev[vb, :nf] + 1e-10)
+        tot_s = Es[:, :nf].sum(0) + 1e-12
+        voc = self._vocal_curve(0, nf * HOP)[::HOP][:nf]
+        fps = self.sr / HOP
+        win, hop = int(0.75 * fps), int(fps / self.MAP_RATE)
+        out = []
+        for c in range(0, nf, hop):
+            a, b = max(0, c - win // 2), min(nf, c + win // 2)
+            if b - a < 8 or float(voc[a:b].mean()) < 0.2:
+                out.append(0.0)
+                continue
+            x, z = Ls[:, a:b].ravel(), Lv[:, a:b].ravel()
+            if x.std() < 1e-3 or z.std() < 1e-3:
+                out.append(0.0)
+                continue
+            r = float(np.corrcoef(x, z)[0, 1])
+            share = float(Es[vb, a:b].sum() / tot_s[a:b].sum())          # how much of it is in the vocal range
+            out.append(round(float(np.clip((r - 0.35) / 0.4, 0, 1) * np.clip(share * 1.5, 0, 1)), 2))
+        return out
+
+    def leftover_map(self, lazy=True):
+        if self.stage != "detected":
+            return {}
+        out = {}
+        for k in self.instruments:
+            if k in NOT_REPAIRED:
+                continue
+            extra = (json.dumps([self.mixer.get(x) for x in ("eq_ranges", "mute_ranges", "tone_eq", "vocal_lift", "mud_cut",
+                                                             "keep", "section_gain", "stem_gain")], sort_keys=True),
+                     len(self.suggestions))
+            out[k] = self._stem_cached("leftmap", k, extra, lambda k=k: self._leftover_curve(k), lazy)
+        return out
+
+    def leftover_runs(self, k, curve=None, thr=0.5, min_s=0.5):
+        """Stretches where instrument k still has clear leftover singing: [(start, end)] in seconds."""
+        c = curve if curve is not None else self._leftover_curve(k)
+        runs, start = [], None
+        for i, v in enumerate(list(c) + [0.0]):
+            t = i / self.MAP_RATE
+            if v >= thr and start is None:
+                start = t
+            elif v < thr and start is not None:
+                if t - start >= min_s:
+                    runs.append((max(0.0, start - 0.25), t + 0.25))
+                start = None
+        return runs
+
     # ------------------------------------------------------------------ second vocal-removal pass on an instrument
     def add_deep_leftovers(self, k, found):
         """`found` is what a vocal model found in instrument k on a second pass. Offer to take it out, per
@@ -718,7 +777,10 @@ class Project:
             for wi, (s0, L) in enumerate(self.windows):
                 a, b = self._window_samples(s0, L)
                 b = min(b, n)
-                if b - a < self.sr // 4 or float(np.mean(self.VA[s0:s0 + L]) if L else 0) < 0.2:
+                prev = self.windows[wi - 1] if wi else None
+                sung_here = float(np.mean(self.VA[s0:s0 + L]) if L else 0) >= 0.2
+                sung_before = bool(prev) and float(np.mean(self.VA[prev[0]:prev[0] + prev[1]]) if prev[1] else 0) >= 0.2
+                if b - a < self.sr // 4 or not (sung_here or sung_before):   # the bar after a line holds its reverb
                     continue
                 Ef = VF.band_energy(found[:, a:b].mean(0), self.B)[vb]
                 Ev = VF.band_energy(self.stems["vocals"][:, a:b].mean(0), self.B)[vb]
@@ -732,7 +794,8 @@ class Project:
             if not w.any():
                 return []
             from scipy.ndimage import uniform_filter1d
-            w = uniform_filter1d(w, int(0.03 * self.sr)) * np.clip(self._vocal_curve(0, n) * 1.5, 0, 1)
+            w = uniform_filter1d(w, int(0.03 * self.sr)) * np.maximum(np.clip(self._vocal_curve(0, n) * 1.5, 0, 1),
+                                                                       self._vocal_tail(0, n))
             ids = []
             for si, sec in enumerate(self.sections):
                 a, b = int(sec["start"] * self.sr), min(n, int(sec["end"] * self.sr))
@@ -786,6 +849,15 @@ class Project:
     def _pitch_gain(self, V, sr, g, lo, hi):
         """Gain (bins, frames): narrow notches on the singer's harmonics, deeper where the singer is louder."""
         f0, voiced = self._vocal_f0(V, sr)
+        # reverb keeps ringing on the last note sung: hold it, fading, for up to ~0.8 s
+        dec = float(np.exp(-(HOP / sr) / (0.8 / 3)))
+        hf, hv = 0.0, 0.0
+        for i in range(len(f0)):
+            if voiced[i] >= hv * dec:
+                hf, hv = f0[i], voiced[i]
+            else:
+                hv *= dec
+                f0[i], voiced[i] = hf, hv
         bw = sr / N_FFT
         nb, nf = V.shape
         freqs = np.arange(nb)[:, None] * bw
@@ -832,10 +904,19 @@ class Project:
             w = np.minimum(np.clip((t - r["start"] + ramp / 2) / ramp, 0, 1),
                            np.clip((r["end"] + ramp / 2 - t) / ramp, 0, 1)).astype(np.float32)
             if r.get("only_vocals", True):
-                w = w * self._vocal_curve(s0, s1)
+                vw = self._vocal_curve(s0, s1)
+                if r.get("tails", True):                      # and the reverb ringing on after each line
+                    vw = np.maximum(vw, self._vocal_tail(s0, s1))
+                w = w * vw
             if not w.any():
                 continue
             x = out[:, s0 - a:s1 - a]
+            # 2) centre only: the lead vocal sits in the middle of the mix, most instruments are spread out,
+            #    so cutting only the middle (mid) leaves the stereo sides of the instrument untouched
+            centre = bool(r.get("centre")) and x.shape[0] == 2
+            if centre:
+                side = (x[0] - x[1]) * 0.5
+                x = ((x[0] + x[1]) * 0.5)[None, :].copy()
             if r.get("mode") == "pitch":
                 # notch exactly the notes the singer is singing (and their overtones), nothing in between
                 V = np.abs(stft(self.stems["vocals"][:, s0:s1].mean(0)))
@@ -870,8 +951,34 @@ class Project:
                 for ch in range(x.shape[0]):
                     filt = sig.oaconvolve(x[ch], taps, mode="same").astype(np.float32)
                     x[ch] = x[ch] + (filt - x[ch]) * w
+            if centre:
+                mid = x[0]
+                x = np.stack([mid + side, mid - side])
             out[:, s0 - a:s1 - a] = x
         return out
+
+    def _vocal_tail(self, a, b, release=0.8):
+        """0..1 for [a, b): the singing itself and its reverb tail, which rings on for up to `release` seconds
+        after each line ends (decaying). Measured from the vocal track every 10 ms."""
+        if "vocals" not in self.stems:
+            return np.zeros(b - a, np.float32)
+        if "_tail" not in self.__dict__:
+            v = self.stems["vocals"].mean(0)
+            hop = max(1, self.sr // 100)
+            m = len(v) // hop
+            rms = np.sqrt((v[:m * hop].reshape(m, hop) ** 2).mean(1) + 1e-12)
+            db = 20 * np.log10(rms + 1e-12)
+            sung = np.clip((db - (np.percentile(db, 99) - 40)) / 10, 0, 1)
+            dec = float(np.exp(-0.01 / (release / 3)))
+            env = np.empty(m, np.float32)
+            cur = 0.0
+            for i in range(m):                                  # hold and decay after each line
+                cur = max(float(sung[i]), cur * dec)
+                env[i] = cur
+            self.__dict__["_tail"] = (hop, env)
+        hop, env = self.__dict__["_tail"]
+        idx = np.clip(np.arange(a, b) // hop, 0, len(env) - 1)
+        return env[idx]
 
     # ------------------------------------------------------------------ full tone match under the vocals
     def _toned(self, k):
@@ -2000,6 +2107,12 @@ class Project:
             save_audio(p, audio, self.sr, bits=b)
             written.append(p)
         self.meta["last_export_gain_db"] = float(20 * np.log10(g + EPS))
+        if "tempo" in what:
+            written += self.export_tempo(folder, name)
+        if "drum_midi" in what:
+            p = self.export_drum_midi(os.path.join(folder, f"{name} - drums.mid"))
+            if p:
+                written.append(p)
         if "samples_raw" in what or "samples_merged" in what:
             written += self.export_samples(os.path.join(folder, f"{name} - samples"), raw="samples_raw" in what,
                                            merged="samples_merged" in what, fmt=fmt if fmt in ("wav", "flac") else "wav")
@@ -2240,7 +2353,7 @@ class Project:
             t = self.beat_times[s0] if s0 < len(self.beat_times) else 0
             si = self._section_of(t)
             bar_sec[wi] = (si, self._section_kind(self.sections[si]["name"]) if si is not None and si < len(self.sections) else "part")
-        for k in [x for x in self.instruments if x in self.PERCUSSIVE]:
+        for k in [x for x in self.instruments if x in self.PERCUSSIVE or x == "bass"]:
             try:
                 sd = self._sounds(k)
             except Exception as e:
@@ -2363,9 +2476,10 @@ class Project:
                 raw = self.stems[k]
                 n = raw.shape[1]
                 src = []
+                cap = 0.5 if k == "bass" else 0.25          # a bass note: its attack and the start of its body
                 for j in (snd.get("ranked") or [snd["best"]])[:self.BLEND_HITS]:
                     pj = int(sd["pos"][j])
-                    ln = int(min(sd["next"][j] - pj, 0.25 * self.sr))
+                    ln = int(min(sd["next"][j] - pj, cap * self.sr))
                     if pj - pre >= 0 and ln >= int(0.03 * self.sr):
                         src.append((pj, ln))
                 if not src:
@@ -2410,7 +2524,8 @@ class Project:
                         "strength": 1.0, "blend": len(src) > 1,
                         "donors": [{"beat": 0, "start": pj / self.sr, "end": (pj + L) / self.sr,
                                     "section": self._section_of(pj / self.sr), "match": 1.0, "vocal_overlap": 0.0} for pj, _ in src],
-                        "note": f"Restores {used} {snd['name']} hit{'s' if used != 1 else ''} the drum pattern says belong here "
+                        "note": f"Restores {used} {snd['name']} {'note' if k == 'bass' else 'hit'}{'s' if used != 1 else ''} the "
+                                f"{'bass' if k == 'bass' else 'drum'} pattern says belong here "
                                 f"(the original recording has them; the vocals took them out of the drum track), "
                                 f"from a blend of the {len(src)} cleanest"}
                     self.patches[rid] = (a, patch.astype(np.float16))
@@ -2454,9 +2569,7 @@ class Project:
         Unchosen tries are removed. Returns report lines."""
         q = self.quality()
         cells = sorted(((v, key) for key, v in q["cells"].items() if v < threshold))
-        if not cells:
-            return [], q
-        pre = set(self.suggestions)
+        pre = set(self.suggestions)            # (no weak sections still goes on to the weakest single bars)
         lines, n_done = [], 0
         for idx, (score, key) in enumerate(cells):
             si, k = key.split(":", 1)
@@ -2525,7 +2638,125 @@ class Project:
                 self._render_cache.pop("mix", None)
                 n_done += 1
                 lines.append(f"The {k} in {sec['name']}: used {chosen[2]} (scored {score} before)")
+        # then the weakest single bars: try rebuilding each from the bars that match it best
+        bars = [x for x in (self.quality().get("weak_bars") or []) if x["score"] < 60][:10]
+        for wb in bars:
+            k = wb["stem"]
+            a, b = int(wb["start"] * self.sr), min(int(wb["end"] * self.sr), self.stems[k].shape[1])
+            if b - a < self.sr // 4 or k in NOT_REPAIRED:
+                continue
+            try:
+                before_ids = set(self.suggestions)
+                ids = self.rebuild_range(wb["start"], wb["end"], k)
+            except Exception as e:
+                log(f"improve: bar rebuild skipped: {e}")
+                continue
+            R = self.render_stem(k)[:, a:b]
+            raw = self.stems[k][:, a:b]
+            base, lv0 = self._seg_score(R, a, b)
+            best = None
+            for sid in ids or []:
+                try:
+                    sc, lv = self._seg_score(self._with_candidate(sid, a, b, R, raw), a, b)
+                    sc += 0.5 * float(np.clip((lv0 - lv) / 10, 0, 1))
+                except Exception:
+                    continue
+                if sc + 0.03 < base and not self.check_fix(sid) and (best is None or sc < best[0]):
+                    best = (sc, sid)
+            for sid in ids or []:
+                if (best is None or sid != best[1]) and sid not in before_ids:
+                    self.suggestions.pop(sid, None)
+                    self.patches.pop(sid, None)
+                    self.take_w.pop(sid, None)
+            if best:
+                self.suggestions[best[1]]["status"] = "accepted"
+                self._render_cache.pop(("stem", k), None)
+                self._render_cache.pop("mix", None)
+                lines.append(f"The {k} at {int(wb['start'] // 60)}:{wb['start'] % 60:04.1f}: rebuilt (scored {wb['score']} before)")
         return lines, q
+
+    # ------------------------------------------------------------------ for music software: tempo, markers, drum MIDI
+    def _beats_per_bar(self):
+        Ls = [L for _, L in self.windows if L]
+        return int(np.median(Ls)) if Ls else 4
+
+    def _markers(self):
+        return [(float(sec["start"]), sec["name"]) for sec in self.sections]
+
+    def export_tempo(self, folder, name):
+        """The song's tempo and sections, for lining stems up in music software:
+        a MIDI tempo map (a tempo change on every beat, section markers), Audacity labels, and a text summary."""
+        from . import midi as MD
+        os.makedirs(folder, exist_ok=True)
+        files = []
+        p = os.path.join(folder, f"{name} - tempo map.mid")
+        MD.write(p, self.beat_times, self._beats_per_bar(), self._markers(), [], name=f"{name} tempo map")
+        files.append(p)
+        p = os.path.join(folder, f"{name} - section markers (Audacity labels).txt")
+        with open(p, "w", encoding="utf-8") as f:
+            for sec in self.sections:
+                f.write(f"{sec['start']:.3f}\t{sec['end']:.3f}\t{sec['name']}\n")
+        files.append(p)
+        bt = np.asarray(self.beat_times)
+        bpm = float(self.meta.get("bpm") or (60 / np.median(np.diff(bt)) if len(bt) > 2 else 0))
+        drift = float(np.std(60 / np.diff(bt))) if len(bt) > 3 else 0.0
+        p = os.path.join(folder, f"{name} - tempo.txt")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(f"Tempo: {bpm:.2f} BPM (it varies by about {drift:.1f} BPM; the tempo map follows it beat by beat)\n")
+            f.write(f"Time signature: {self._beats_per_bar()}/4\n")
+            f.write(f"First beat at: {bt[0]:.3f} s\n" if len(bt) else "")
+            f.write("All exported audio starts at 0 s; place the stems and the MIDI files at the start of the project.\n\n")
+            f.write("Sections:\n")
+            for sec in self.sections:
+                f.write(f"  {int(sec['start'] // 60)}:{sec['start'] % 60:06.3f}  {sec['name']}\n")
+        files.append(p)
+        return files
+
+    GM_DRUMS = {"kick": [36, 35], "snare / clap": [38, 40, 39], "hi-hat / cymbal": [42, 46, 49, 51], "tom / low drum": [45, 47, 50, 43]}
+    GM_BY_STEM = {"kick": "kick", "snare": "snare / clap", "toms": "tom / low drum", "cymbals": "hi-hat / cymbal"}
+
+    def export_drum_midi(self, path):
+        """Every hit of every repeated drum sound as General MIDI drum notes, plus the hits the learned
+        pattern restores under the singing, on the song's own tempo map. Loudness sets the velocity."""
+        from . import midi as MD
+        drums = [k for k in self.instruments if k in self.PERCUSSIVE]
+        if not drums:
+            return None
+        restored = {}
+        try:
+            restored = self.find_pattern_hits()
+        except Exception as e:
+            log(f"drum MIDI: pattern hits skipped: {e}")
+        notes, used = [], {}
+        for k in drums:
+            try:
+                sd = self._sounds(k)
+            except Exception as e:
+                log(f"drum MIDI: {k} skipped: {e}")
+                continue
+            lv = sd["lv"]
+            for snd in sd["sounds"]:
+                kind = self.GM_BY_STEM.get(k) or snd["name"]
+                choices = self.GM_DRUMS.get(kind, [37])
+                n_used = used.get(kind, 0)
+                note = choices[min(n_used, len(choices) - 1)]
+                used[kind] = n_used + 1
+                mem = snd.get("members") or []
+                if not mem:
+                    continue
+                lo, hi = float(np.percentile(lv[mem], 5)), float(np.percentile(lv[mem], 95)) + 1e-6
+                for i in mem:
+                    vel = 45 + 82 * float(np.clip((lv[i] - lo) / (hi - lo), 0, 1))
+                    notes.append((float(sd["pos"][i]) / self.sr, note, vel, 0.08))
+                med = 45 + 82 * 0.5
+                for q in restored.get((k, snd["id"]), []):
+                    notes.append((q / self.sr, note, med, 0.08))
+        if not notes:
+            return None
+        notes.sort()
+        MD.write(path, self.beat_times, self._beats_per_bar(), self._markers(), [("Drums", 9, notes)],
+                 name=f"{self.meta.get('name', 'song')} drums")
+        return path
 
     # ------------------------------------------------------------------ samples: hits, notes and loops
     @staticmethod
@@ -2673,9 +2904,9 @@ class Project:
             ("hits", "Rebuild drum hits and note starts from a blend of their cleanest copies",
              "Drums: used instead of ordinary repairs on the same hits, so nothing is filled in twice.",
              len(hits)),
-            ("pattern", "Learn the drum pattern and restore hits the vocals took",
-             "Only where the pattern is near-certain a hit belongs, the original recording has that drum's attack there, and "
-             "the drum track is missing it.", len([x for x in self.instruments if x in self.PERCUSSIVE])),
+            ("pattern", "Learn the drum and bass patterns and restore hits and notes the vocals took",
+             "Only where the pattern is near-certain one belongs, the original recording has that sound there, and the "
+             "track is missing it.", len([x for x in self.instruments if x in self.PERCUSSIVE or x == "bass"])),
             ("repairs", "Apply the repairs with a close match",
              "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
              len([x for x in pend(("repair",)) if x.get("recommended")])),
@@ -2688,9 +2919,9 @@ class Project:
                                                 "model's split, a half-and-half blend with it, other source parts) and keeps "
                                                 "whichever is clearly cleaner and still fits the original.", 1),
             ("mutes", "Mute bars where an instrument is only leftover singing or noise", "Worked out after the fixes.", 1),
-            ("notch", "Notch the singer's notes in every instrument",
-             "Narrow cuts on exactly the notes being sung and their overtones (-9 dB, only while singing). Off by default: "
-             "it can thin an instrument that plays the same notes as the singer.", 1),
+            ("notch", "Notch the singer's notes where leftover singing remains",
+             "After everything else: narrow cuts on exactly the notes being sung (and their reverb), only in the centre of "
+             "the mix and only in the stretches where an instrument still moves like the singer.", 1),
             ("tone", "Match the tone under the vocals, across all frequencies",
              "Each instrument under the singing is matched to the same parts where nobody sings, band by band "
              "(replaces the simpler fill-in and mud cut for that instrument).", 1),
@@ -2698,7 +2929,7 @@ class Project:
                                           "switch would be heard.", 1),
         ]
         return [{"key": k, "title": t, "detail": d, "count": int(c),
-                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k != "notch"} for k, t, d, c in steps]
+                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes()))} for k, t, d, c in steps]
 
     def build_best(self, steps=None, progress=lambda f, m: None):
         """Work through every kind of fix in order, choose one where they overlap, check everything against
@@ -2852,15 +3083,22 @@ class Project:
                 if mutes:
                     self.mixer["mute_ranges"] = self.mixer.get("mute_ranges", []) + mutes
                     self._render_cache.clear()
-            notched = False
-            if "notch" in steps and not any(r.get("mode") == "pitch" and not r.get("stem")
-                                            for r in self.mixer.get("eq_ranges", [])):
-                dur = float(self.meta.get("duration") or self.stems[self.instruments[0]].shape[1] / self.sr)
-                self.mixer.setdefault("eq_ranges", []).append(
-                    {"start": 0.0, "end": dur, "stem": None, "mode": "pitch", "db": -9, "only_vocals": True,
-                     "preset": "vocal", "auto": True})
-                self._render_cache.clear()
-                notched = True
+            notched = 0
+            if "notch" in steps:
+                progress(0.78, "Finding where leftover singing remains")
+                have = self.mixer.setdefault("eq_ranges", [])
+                for k in [x for x in self.instruments if x not in NOT_REPAIRED]:
+                    try:
+                        for a_, b_ in self.leftover_runs(k):
+                            if any(r.get("auto") and r.get("stem") == k and r["start"] <= a_ and r["end"] >= b_ for r in have):
+                                continue
+                            have.append({"start": round(a_, 2), "end": round(b_, 2), "stem": k, "mode": "pitch", "db": -9,
+                                         "only_vocals": True, "tails": True, "centre": True, "preset": "vocal", "auto": True})
+                            notched += 1
+                    except Exception as e:
+                        log(f"build: leftover map skipped for {k}: {e}")
+                if notched:
+                    self._render_cache.clear()
             if "tone" in steps:
                 progress(0.8, "Matching the tone under the vocals")
                 for k in [x for x in self.instruments if x not in NOT_REPAIRED]:
@@ -2923,7 +3161,8 @@ class Project:
                 report.append(f"Muted {len(mutes)} stretch{'es' if len(mutes) != 1 else ''} that were only leftover singing or noise")
             report += improved
             if notched:
-                report.append("Notched the singer's notes in every instrument (-9 dB, while singing); listed in the Levels tab")
+                report.append(f"Notched the singer's notes in {notched} stretch{'es' if notched != 1 else ''} where leftover "
+                              f"singing remained (centre only, -9 dB); listed in the Levels tab")
             for k, (hi_, lo_) in toned.items():
                 report.append(f"Matched the {k}'s tone under the vocals (from {lo_:+.1f} to {hi_:+.1f} dB across the range)")
             sm = [x for x in self.mixer.get("seams", []) if x.get("fade", 0) > 0.05]
@@ -3171,7 +3410,26 @@ class Project:
             if "quality_before" not in self.meta:
                 self.meta["quality_before"] = score("raw")[0]
             now, cells = score("repaired")
+            # bar by bar, for the bars with singing: the weakest ones, so one bad bar isn't averaged away
+            weak = []
+            for k in self.instruments:
+                if k in NOT_REPAIRED:
+                    continue
+                y = self.shaped_stem(k) * self._gain_curve(k, 0, self.stems[k].shape[1])
+                Ek = VF.band_energy(np.asarray(y, np.float32).mean(0)[:n], self.B)[:, :nf]
+                for wi, (s0, L) in enumerate(self.windows):
+                    if not L or float(np.mean(self.VA[s0:s0 + L])) < 0.2:
+                        continue
+                    a_, b_ = self._window_samples(s0, L)
+                    f0_, f1_ = a_ // HOP, min(nf, b_ // HOP)
+                    e = Ek[:, f0_:f1_]
+                    if f1_ - f0_ < 8 or float(e.sum()) < 1e-6:
+                        continue
+                    qv = VF.clean_score(*VF.clean_terms(e, Eo[:, f0_:f1_], Ev[:, f0_:f1_], vf[f0_:f1_], vb))
+                    weak.append({"stem": k, "start": a_ / self.sr, "end": b_ / self.sr, "score": int(qv)})
+            weak.sort(key=lambda x: x["score"])
             self.meta["quality"] = {"before": self.meta["quality_before"], "now": now, "cells": cells,
+                                    "weak_bars": [x for x in weak if x["score"] < 70][:15],
                                     "at": time.time(), "applied": self._applied_count()}
             return self.meta["quality"]
 
@@ -3523,5 +3781,7 @@ class Project:
                                              for g in self.best_bars()], []),
             "user_decisions": sum(1 for x in self.suggestions.values() if x["status"] in ("accepted", "rejected")),
             "applied_count": self._safe(self._applied_count, 0),
+            "leftover_map": self._safe(lambda: self.leftover_map(lazy=True), {}),
+            "map_rate": self.MAP_RATE,
             "warming": self.warming,
         }
