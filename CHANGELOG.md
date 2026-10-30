@@ -1,5 +1,14 @@
 # What's new
 
+## 1.17.0
+
+- **Improve weak sections** (a new step in Build the best instrumental). Every section and instrument scoring under 75 tries the alternatives: each other model's split, a half-and-half blend with it, and other source parts for a best version. Each is scored against the original, and the one that's clearly cleaner (and still fits the original) is kept; the others are removed. The report says what changed and the clean score before and after.
+- **Full tone match.** Each instrument under the singing is matched to the same parts where nobody sings, across the whole frequency range (40 bands), not just the two bands of the earlier fill-in and mud cut. Part of Build the best instrumental's tone step.
+- **Smooth seams.** Wherever the original recording takes over from the instrumental (and back), the app measures how different the two sound right there and lengthens the crossfade where the switch would be heard. Also a Build step.
+- **Import stems and build automatically.** On the start screen, tick *After importing stems, find the damage and build the best instrumental automatically*. Next to Split there's the same for songs: *Then find damage and build automatically*. You get the finished result to review; Undo takes the build back in one step.
+- **Export samples.** In Export (and the Repairability tab): every repeated drum hit, note and loop, as its cleanest single copy, and/or merged from its cleanest copies (noise in any one copy drops out), as WAV files in a samples folder, by instrument. Drum tracks also get their cleanest whole bars.
+- **Clearer model list.** Grouped into *4 tracks* and *6 tracks*, each named for what it's for: Best quality (recommended), Quick draft, Fewest gaps, Cleanest vocal removal. The same grouping is used in Try another model.
+
 ## 1.16.0
 
 - **Build the best instrumental.** One button (top of the Review tab, and in the Repairability tab) that works through every kind of fix in the right order and applies the result as **one step you can undo**. It first shows its plan, with each step on a checkbox:
