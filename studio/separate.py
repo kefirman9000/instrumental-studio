@@ -78,6 +78,23 @@ def vocals_in(audio, sr, workdir, progress=lambda f, m: None, frac0=0.0, frac1=1
     return np.pad(v[:, :n], ((0, 0), (0, max(0, n - v.shape[1])))).astype(np.float32)
 
 
+def instruments_in(audio, sr, workdir, progress=lambda f, m: None, frac0=0.0, frac1=1.0):
+    """Run the fast model once on a vocal track and return everything in it that ISN'T singing (2, n):
+    the synths, effects and licks a split often files as vocals."""
+    from scipy.io import wavfile
+    os.makedirs(workdir, exist_ok=True)
+    wav = os.path.join(workdir, "in.wav")
+    wavfile.write(wav, sr, np.asarray(audio, np.float32).T)
+    d = _run_model(wav, "htdemucs", os.path.join(workdir, "out"), progress, frac0, frac1)
+    n = audio.shape[1]
+    out = np.zeros((2, n), np.float32)
+    for f in os.listdir(d):
+        if f.endswith(".wav") and f != "vocals.wav":
+            x = load_audio(os.path.join(d, f), sr)[0][:, :n]
+            out[:, :x.shape[1]] += x
+    return out
+
+
 def demucs_available():
     from .installer import installed
     return installed()

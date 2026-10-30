@@ -98,7 +98,7 @@ class JsApi:
 
     def export_log(self):
         """Works without the engine: the log lives in a file this process can read too."""
-        path = diag.export_bundle(os.path.join(HOME, "logs"), {"Exported from": "the start-up error page"})
+        path = diag.export_bundle(diag.log_dir(), {"Exported from": "the start-up error page"})
         _show_in_folder(path)
         return path
 

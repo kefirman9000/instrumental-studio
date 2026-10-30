@@ -37,6 +37,12 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Test the whole pipeline (a failure stops the release)
+        if: steps.chk.outputs.exists == 'false'
+        run: |
+          python3 -m pip install --quiet numpy scipy
+          python3 tests/test_pipeline.py
+
       - name: Build the download
         if: steps.chk.outputs.exists == 'false'
         run: |

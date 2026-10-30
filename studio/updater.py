@@ -24,7 +24,7 @@ from . import __version__
 
 REPO = os.environ.get("INSTRUMENTAL_STUDIO_REPO", "kefirman9000/instrumental-studio")
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-KEEP = {".git", ".backup", "__pycache__"}
+KEEP = {".git", ".backup", "__pycache__", "logs"}     # logs live next to the start files
 UA = {"User-Agent": f"InstrumentalStudio/{__version__}", "Accept": "application/vnd.github+json"}
 
 

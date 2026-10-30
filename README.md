@@ -103,7 +103,18 @@ Export can add a **tempo map and section markers** (a MIDI tempo map that follow
 
 ### Export samples
 
-**Export** (or **Export samples** in the Repairability tab) can also save every repeated drum hit, note and loop: its cleanest copy as it is, and a merge of its cleanest copies. Handy for remakes and beat-making.
+**Export** (or **Export samples** in the Repairability tab) can also save the song's reusable pieces, with context:
+- **Loops:** the cleanest 4-bar and 2-bar phrase of each kind of section (Verse, Chorus...), starting on the bar, from the finished instrumental and from each instrument, named with the section and tempo.
+- **Hits and notes:** only sounds that are a real part of the song (played often, among the loudest on their track), as the cleanest copy and a merge of the cleanest copies.
+- **Riffs:** patterns that repeat at least 4 times.
+
+### Your own clean tracks and samples
+
+Have an official stem, a session track or a clean sample of something in the song? In step 4, **Add a clean track or sample…**:
+- **A full track of one instrument** is lined up with the song automatically, level-matched, and offered for that instrument section by section.
+- **One hit or note** (a drum sample, a synth stab) is matched to the repeated sound it is in the song, and that sound's damaged hits, and the ones the pattern says the vocals took, are rebuilt from it.
+
+Everything goes to Review first.
 
 ### Review each fix
 
@@ -275,7 +286,7 @@ Updates never touch your songs, projects or exports. The previous version is kep
 
 **"Not allowed" errors.** The app only accepts commands from the window it opened, and it makes a new secret each time it starts. A window or tab left open from before a restart gets turned away: close it, or reload it.
 
-**Something went wrong, froze or crashed.** Click **Export log** (start screen, or Troubleshooting and reset). It saves one file with the app's log, including a snapshot of anything that froze for more than 3 seconds, to attach when asking for help. The live log is *app.log* in the InstrumentalStudio folder in your home folder.
+**Something went wrong, froze or crashed.** Click **Export log** (start screen, or Troubleshooting and reset). It saves one file with the app's log, including a snapshot of anything that froze for more than 3 seconds, to attach when asking for help. The live log is in the **logs** folder next to the app's start files: *app.log* has everything, *errors.log* only the problems.
 
 **The app opens in my web browser instead of its own window.** Run `pip install pywebview`, then start the app again.
 
