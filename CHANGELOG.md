@@ -1,5 +1,14 @@
 # What's new
 
+## 1.14.3
+
+The window no longer freezes when you click while the app is starting:
+
+- **The Songs list no longer reads every saved song in full.** Each project file holds every repair and can be tens of MB; the first check at startup parsed them all, and the window couldn't respond until it finished. Songs now keep a tiny summary for the list (older songs are peeked at, never parsed).
+- **No background loading while the window is up.** 1.14.2 loaded the analysis libraries a few seconds after start, which also stopped the window responding while it happened. They now load when you open a song, under its progress screen.
+- **Open a song works on the first click.** The app's file picker connects a moment after the window appears; a click in that moment used to fall back to a slow browser upload. It now waits for the picker.
+- The update check waits 15 seconds after start.
+
 ## 1.14.2
 
 Faster start, and the window works while it starts:
