@@ -1,5 +1,17 @@
 # What's new
 
+## 1.14.1
+
+Startup and opening songs, no more "something in the background is taking too long":
+
+- **Saving no longer freezes the app.** After every edit the whole project used to be written again (repairs, timeline and analysis, often hundreds of MB) while the song was locked, and several saves could pile up. Now only what changed is written, the song is only held while its state is copied, and quick runs of edits are saved together.
+- **Status checks answer instantly.** Each one used to re-scan the disk to see whether the model was installed (slow on Windows, where antivirus inspects every folder read), several times a second at startup. The answer is now kept for 30 seconds.
+- **Much less memory when finding drum hits and note starts.** It used to build a ~700 MB table per track at once; now it works in small pieces.
+- **Songs open straight away.** The slowest suggestions (per-instrument measurements, repeated hits and notes) are worked out in the background and appear a moment later, with a small *Working out more suggestions* sign while that happens. Find damage now prepares them up front.
+- **Something to look at while it loads:** a starting screen as soon as the window opens, and a progress screen while a song opens, instead of a window that looks frozen.
+- The graphics-card check (which loads PyTorch) waits a few seconds so the window comes up first.
+- The "taking too long" panel now needs three missed checks in a row, not two.
+
 ## 1.14.0
 
 - **Double-check against the original.** Every fix is now checked against the original recording: everything it adds must really be in the song at that moment, and its hits must land on the original's beat. This catches the two problems that slipped through before: drums borrowed from a bar where the beat was found slightly off (they flam or land late), and the backing guitar standing in for the lead (or a different part or note). Fixes that don't fit lose their Recommended mark, are never applied by **Apply** or **Apply all** (they wait in Review), and are listed under the new **Doesn't fit** filter. A suggestion takes them all out in one click, and **Check now** re-checks everything, including the beat grid itself.
