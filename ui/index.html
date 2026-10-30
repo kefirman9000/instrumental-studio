@@ -36,8 +36,7 @@
         <div class="step-actions">
           <select id="sepMode" aria-label="How to split"></select>
           <button id="btnSplit">Split</button>
-          <label class="auto-opt" title="After splitting, runs Find damage and every step of Build the best instrumental. Undo takes the build back in one step.">
-            <input type="checkbox" id="optAutoSplit"> Then find damage and build automatically</label>
+          <button id="btnSplitAuto" hidden title="Split, find the damage and build the best instrumental in one go. You get the finished result to review; Undo takes the build back in one step.">Split and build</button>
         </div>
       </li>
       <li class="step" data-step="detect"><span class="num">3</span>
@@ -245,13 +244,13 @@
         <b>Import stems</b><span>Already split with UVR, Spleeter or another tool. Select all the files, including the vocals.</span>
         <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
       </button>
-      <label class="auto-opt" title="Runs Find damage and then every step of Build the best instrumental, so you get the finished result to review">
-        <input type="checkbox" id="optAutoStems"> After importing stems, find the damage and build the best instrumental automatically
-      </label>
       <button class="big" id="btnDemo">
         <b>Try the demo song</b><span>A short song to walk through every step, including splitting</span>
         <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
       </button>
+    </div>
+    <div class="start-extra">
+      <button class="ghost small" id="btnOpenStemsAuto" title="Import stems, find the damage and build the best instrumental in one go. You get the finished result to review; Undo takes the build back in one step.">Import stems and build</button>
     </div>
     <p class="drop-hint">You can also drag a song, or a full set of stems, straight into this window.</p>
     <div class="recent" id="recent"></div>

@@ -1,5 +1,9 @@
 # What's new
 
+## 1.17.1
+
+- The "find damage and build automatically" checkboxes are now buttons: **Split and build** next to Split, and **Import stems and build** under the start screen's cards. Split and Import stems still do just that.
+
 ## 1.17.0
 
 - **Improve weak sections** (a new step in Build the best instrumental). Every section and instrument scoring under 75 tries the alternatives: each other model's split, a half-and-half blend with it, and other source parts for a best version. Each is scored against the original, and the one that's clearly cleaner (and still fits the original) is kept; the others are removed. The report says what changed and the clean score before and after.
