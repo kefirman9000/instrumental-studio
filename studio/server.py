@@ -394,6 +394,87 @@ def _job_full(mode, opts):
     _auto_rest(S.project)
 
 
+# ------------------------------------------------------------------ vinyl crackle
+FRESH_MIXER = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}, "keep": [], "vocal_lift": {},
+               "mute_ranges": [], "sides": [], "mud_cut": {}, "tone_eq": {}, "seams": []}
+
+
+def _use_recording(p, audio, sr, source, raw, vinyl):
+    """Make `audio` (saved at `source`) the song's recording. A split made from the previous recording no
+    longer matches, so it's cleared; returns that split's settings so it can be done again."""
+    import json as _json
+    was = p.meta.get("sep_mode") if p.stage != "imported" else None
+    sd = os.path.join(p.root, "stems")
+    if os.path.isdir(sd):
+        for f in os.listdir(sd):
+            if f.endswith(".npy") and not f.startswith("_"):
+                os.remove(os.path.join(sd, f))
+    shutil.rmtree(os.path.join(p.root, "alt"), ignore_errors=True)
+    p.stems, p.take_w, p.history = {}, {}, []
+    for k in list(p.__dict__):
+        if k in ("_render_cache",):
+            p._render_cache = {}
+        elif k in ("_sounds_cache", "_dscale", "_guard", "_metric_cache", "_alt_cache", "_render_gen", "stem_feats",
+                   "stem_env", "inst_sum"):
+            p.__dict__.pop(k, None)
+    for k in ("sep_mode", "separation", "analyzed", "quality", "quality_before", "verified", "grid_drift"):
+        p.meta.pop(k, None)
+    base = p.meta.get("source_hash_raw") or p.meta.get("source_hash") or ""
+    p.meta["source_hash_raw"] = base
+    if vinyl:
+        p.meta.update(source_raw=raw, vinyl=vinyl, source_hash=f"{base}:vinyl:{vinyl['strength']}")
+    else:
+        p.meta.pop("source_raw", None)
+        p.meta.pop("vinyl", None)
+        p.meta["source_hash"] = base
+    p.mixer = _json.loads(_json.dumps(FRESH_MIXER))
+    p.set_original(audio, sr, source=source, progress=lambda f, m: _progress(0.66 + 0.04 * f, m))
+    return was
+
+
+def _split_again(p, key):
+    if not key or p.meta.get("source") == "demo":
+        return []
+    mode = key.split("+")[0]
+    opts = {"backing": "+backing" in key, "drums": "+drums" in key}
+    _progress(0.7, "Splitting the cleaned recording again")
+    _job_split(mode, opts)
+    return [f"Split again with the same settings ({SEP.MODELS.get(mode, ('',))[0]}). Run Find damage again, "
+            f"or Build the best instrumental."]
+
+
+def _job_vinyl(strength):
+    from . import vinyl as VN
+    from .audio import save_audio
+    p = S.project
+    raw = p.meta.get("source_raw") or p.meta.get("source")
+    if not raw or raw == "demo" or not os.path.isfile(raw):
+        raise RuntimeError("Only a song opened from a file can be cleaned (not imported stems or the demo).")
+    _progress(0.03, "Reading the recording")
+    x, sr = load_audio(raw)                      # always the untouched file, so strengths never stack
+    y, n = VN.declick(x, sr, strength, progress=lambda f: _progress(0.05 + 0.6 * f, f"Removing clicks and crackle ({strength})"))
+    out = os.path.join(p.root, f"source_declicked_{strength}.wav")
+    save_audio(out, y, sr, bits=32)
+    key = _use_recording(p, y, sr, out, raw, {"strength": strength, "clicks": int(n)})
+    lines = [f"Removed {n} clicks and crackles ({strength}). The untouched recording is kept: Undo crackle removal "
+             f"brings it back."] + _split_again(p, key)
+    p.save()
+    S.job["result"] = {"report": lines, "title": "Vinyl crackle removed"}
+
+
+def _job_vinyl_undo():
+    p = S.project
+    raw = p.meta.get("source_raw")
+    if not raw or not os.path.isfile(raw):
+        raise RuntimeError("The untouched recording isn't there any more.")
+    _progress(0.05, "Reading the untouched recording")
+    x, sr = load_audio(raw)
+    key = _use_recording(p, x, sr, raw, raw, None)
+    lines = ["Back to the untouched recording."] + _split_again(p, key)
+    p.save()
+    S.job["result"] = {"report": lines, "title": "Crackle removal undone"}
+
+
 def _job_stems(folder, name, auto=False):
     root = _slug(name)
     p = _Project()(root)
@@ -772,6 +853,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "Split the song into instruments first."})
                 _start_job(_job_detect)
                 return self._send(200, {"ok": True})
+            if path == "/api/vinyl":
+                self._proj()
+                st_ = d.get("strength", "normal")
+                if st_ not in ("light", "normal", "strong"):
+                    raise ValueError("Unknown strength.")
+                _start_job(_job_vinyl, st_)
+                return self._send(200, {"ok": True})
+            if path == "/api/vinyl/undo":
+                self._proj()
+                _start_job(_job_vinyl_undo)
+                return self._send(200, {"ok": True})
             if path == "/api/auto/plan":
                 return self._send(200, {"steps": self._proj().build_plan()})
             if path == "/api/auto/build":
@@ -936,7 +1028,7 @@ class Handler(BaseHTTPRequestHandler):
                 if fmt not in ("wav", "flac", "mp3"):
                     raise ValueError("Unknown format.")
                 files = p.export(folder, fmt, tuple(d.get("what", ["mix", "stems", "vocals", "report"])),
-                                 match_level=bool(d.get("match_level", False)))
+                                 match_level=bool(d.get("match_level", False)), declick=bool(d.get("declick", False)))
                 if d.get("reveal", True):
                     reveal(folder)
                 return self._send(200, {"ok": True, "folder": folder, "files": files})
