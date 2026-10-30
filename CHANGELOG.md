@@ -1,5 +1,9 @@
 # What's new
 
+## 1.22.3
+
+- **Remove vinyl crackle after splitting.** Once a song is split, step 1 has **Remove from the instruments**: it cleans the clicks and crackle out of each instrument track directly, without splitting again, so repairs and decisions stay. The fixes go to Review under Clicks and smoothing to hear first, and Build the best instrumental applies them with the other click fixes. (*Remove and split again* still cleans the recording itself and re-splits, which is the most thorough.)
+
 ## 1.22.2
 
 - **Fix: Remove vinyl crackle wasn't visible.** Its controls didn't fit in step 1 and were hidden behind step 2. They now sit on their own line under *Import*.

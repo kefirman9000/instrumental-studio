@@ -816,6 +816,38 @@ class Project:
                 ids.append(rid)
             return ids
 
+    # ------------------------------------------------------------------ vinyl crackle, after splitting
+    def declick_stems(self, strength="normal", progress=lambda f, m: None):
+        """Remove vinyl clicks and crackle from each instrument track directly (no new split, so repairs and
+        decisions stay). One review item per instrument and section, under Clicks and smoothing."""
+        from . import vinyl as VN
+        with self.lock:
+            ids = []
+            ks = [k for k in self.instruments]
+            for i, k in enumerate(ks):
+                x = self.stems[k]
+                y, n = VN.declick(x, self.sr, strength,
+                                  progress=lambda f, i=i: progress((i + f) / max(1, len(ks)), f"Removing crackle from the {k}"))
+                if not n:
+                    continue
+                diff = (y - x).astype(np.float32)
+                changed = np.flatnonzero(np.abs(diff).max(0) > 1e-7)
+                for si, sec in enumerate(self.sections):
+                    a, b = int(sec["start"] * self.sr), min(x.shape[1], int(sec["end"] * self.sr))
+                    c = changed[(changed >= a) & (changed < b)]
+                    if not len(c):
+                        continue
+                    lo, hi = int(c[0]), int(c[-1]) + 1
+                    clicks = int(np.sum(np.diff(c) > int(0.002 * self.sr)) + 1)
+                    rid = f"vc_{k}_{si}"
+                    self.suggestions[rid] = {
+                        "id": rid, "type": "glitch", "stem": k, "status": "pending", "start": lo / self.sr,
+                        "end": hi / self.sr, "section": si, "conf": 1.0, "severity": 0.0, "donors": [], "vinyl": True,
+                        "note": f"Removes {clicks} vinyl click{'s' if clicks != 1 else ''} and crackle from the {k} ({strength})"}
+                    self.patches[rid] = (lo, diff[:, lo:hi].astype(np.float16))
+                    ids.append(rid)
+            return ids
+
     # ------------------------------------------------------------------ the singer's pitch
     def _vocal_f0(self, V, sr):
         """Fundamental frequency of the singing per STFT frame of a vocal magnitude spectrum V (bins, frames),
