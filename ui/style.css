@@ -344,3 +344,4 @@ label.check input { margin-top: 3px; }
 .auto-step.off { opacity: .55; }
 #autoReport { padding-left: 18px; line-height: 1.6; }
 .start-extra { display: flex; justify-content: flex-end; margin-top: 8px; }
+.sponsor-link { color: #e86aa6; }
