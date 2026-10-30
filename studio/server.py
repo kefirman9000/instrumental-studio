@@ -439,6 +439,29 @@ def reveal(path):
         pass
 
 
+_save_state = {"lock": threading.Lock(), "pending": set()}
+
+
+def _schedule_save(p):
+    """Save after an edit, merging bursts: clicking through ten repairs saves once or twice, not ten
+    times in parallel threads (each used to rewrite every file while holding the song)."""
+    with _save_state["lock"]:
+        if id(p) in _save_state["pending"]:
+            return
+        _save_state["pending"].add(id(p))
+
+    def run():
+        time.sleep(0.4)
+        with _save_state["lock"]:
+            _save_state["pending"].discard(id(p))
+        try:
+            p.save()
+        except Exception:
+            traceback.print_exc()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -535,7 +558,7 @@ class Handler(BaseHTTPRequestHandler):
         S.rev += 1
         S.audio_cache.clear()
         p = S.project
-        threading.Thread(target=p.save, daemon=True).start()
+        _schedule_save(p)
         return {"ok": True, "rev": S.rev, "overview": p.overview()}
 
     # --------------------------------------------------------------- GET
@@ -565,12 +588,13 @@ class Handler(BaseHTTPRequestHandler):
                                         b'<meta charset="utf-8">\n<meta name="studio-token" content="' + TOKEN.encode() + b'">', 1)
                 return self._send(200, data, ctype + ("; charset=utf-8" if ctype.startswith("text") else ""))
             if path == "/api/state":
-                S.model["installed"] = S.model["installed"] or SEP.demucs_available()
+                have = SEP.demucs_available()          # cached for 30 s: polls must answer instantly
+                S.model["installed"] = S.model["installed"] or have
                 devname = S.model["device"]
                 return self._send(200, {
                     "job": S.job, "rev": S.rev, "has_project": S.project is not None,
                     "project": S.project.meta.get("name") if S.project else None,
-                    "demucs": SEP.demucs_available(), "device": devname,
+                    "demucs": have, "device": devname,
                     "models": {k: v[0] for k, v in SEP.MODELS.items()}, "home": HOME,
                     "projects": list_projects(), "model": S.model, "extras": extras_state(), "version": __version__, "repo": UP.REPO,
                     "update": S.update, "update_prefs": UP.load_prefs(HOME), "just_updated": S.just_updated,
@@ -891,7 +915,11 @@ def serve(port=0, just_updated=False, safe=False):
     if safe:
         S.model["device"] = "not checked (safe mode)"
     elif S.model["installed"]:
-        threading.Thread(target=_probe_device, daemon=True).start()
+        # loading PyTorch to look at the graphics card is heavy on the disk: let the window come up first
+        S.model["device"] = S.model.get("device") or "checking..."
+        t = threading.Timer(6.0, _probe_device)
+        t.daemon = True
+        t.start()
     else:
         threading.Thread(target=_model_plan, daemon=True).start()
     for attempt in range(40):   # after an update restart the old copy may still hold the port briefly

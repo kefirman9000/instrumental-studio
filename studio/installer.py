@@ -9,6 +9,7 @@ torchaudio that has no wheels for current Python), and its model code is used di
 studio/demucs_worker.py, so torchaudio's file I/O is never needed.
 """
 import importlib
+import time
 import importlib.util
 import os
 import re
@@ -22,9 +23,33 @@ TORCH_INDEX = "https://download.pytorch.org/whl/"
 DEMUCS_DEPS = ["dora-search", "einops", "julius>=0.2.3", "openunmix", "pyyaml", "tqdm", "omegaconf"]
 
 
-def installed():
+_spec_cache = {}        # module name -> (checked at, found); scanning site-packages is slow on Windows
+SPEC_TTL = 30.0
+
+
+def _has(module, fresh=False):
+    """Is a module installed? Asked on every status poll, so the answer is kept for SPEC_TTL seconds:
+    re-scanning the disk each time (antivirus inspects every directory read) made polls pile up."""
+    now = time.time()
+    hit = _spec_cache.get(module)
+    if hit and not fresh and now - hit[0] < SPEC_TTL:
+        return hit[1]
     importlib.invalidate_caches()
-    return all(importlib.util.find_spec(m) is not None for m in ("torch", "torchaudio", "demucs", "openunmix", "dora"))
+    try:
+        found = importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        found = False
+    _spec_cache[module] = (now, found)
+    return found
+
+
+def forget_checks():
+    """Call after installing something, so the next check looks again."""
+    _spec_cache.clear()
+
+
+def installed(fresh=False):
+    return all(_has(m, fresh) for m in ("torch", "torchaudio", "demucs", "openunmix", "dora"))
 
 
 def nvidia_cuda():
@@ -139,6 +164,7 @@ def install(progress=lambda f, m: None):
         raise RuntimeError("Installed, but it doesn't load:\n" + r.stderr[-600:])
     importlib.invalidate_caches()
     dev = r.stdout.strip()
+    forget_checks()
     progress(1.0, "Separation model installed")
     return {"device": dev, "note": p.get("note")}
 
@@ -160,9 +186,8 @@ EXTRAS = {
 }
 
 
-def extra_installed(key):
-    importlib.invalidate_caches()
-    return importlib.util.find_spec(EXTRAS[key]["module"]) is not None
+def extra_installed(key, fresh=False):
+    return _has(EXTRAS[key]["module"], fresh)
 
 
 def install_extra(key, progress=lambda f, m: None):
@@ -175,5 +200,5 @@ def install_extra(key, progress=lambda f, m: None):
     r = proc.run([sys.executable, "-c", f"import {e['module']}"], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"{e['label']} installed but doesn't load:\n" + r.stderr[-500:])
-    importlib.invalidate_caches()
+    forget_checks()
     progress(1.0, f"{e['label']} installed")

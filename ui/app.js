@@ -76,7 +76,12 @@ async function refreshState() {
 }
 
 async function loadProject(id) {
-  try { await api.post("/api/load", { id }); await openWorkspace(); } catch (e) { fail(e); }
+  const name = (st.state?.projects || []).find(p => p.id === id)?.name || "the song";
+  try {
+    showLoading(0.15, `Opening ${name}: loading its tracks`);
+    await api.post("/api/load", { id });
+    await openWorkspace(true);
+  } catch (e) { fail(e); } finally { hideBusy(); }
 }
 
 function showWelcome(on) {
@@ -196,7 +201,10 @@ function showBusy(f, msg) {
   const secs = Math.round((Date.now() - busySince) / 1000);
   $("#busyTime").textContent = secs >= 5 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")} elapsed` : "";
   $("#btnBusyHelp").hidden = secs < 45;
-  $("#busy").hidden = false; $("#busyMsg").textContent = msg; $("#busyBar").style.width = pct(f); $("#busyPct").textContent = pct(f); }
+  $("#busy").hidden = false; $("#busyMsg").textContent = msg; $("#busyBar").style.width = pct(f); $("#busyPct").textContent = pct(f);
+  $("#btnStop").hidden = false; }
+// a progress screen for opening songs (nothing to stop there)
+function showLoading(f, msg) { showBusy(f, msg); $("#btnStop").hidden = true; $("#btnBusyHelp").hidden = true; }
 function hideBusy() { $("#busy").hidden = true; }
 async function watchJob() {
   for (;;) {
@@ -224,10 +232,13 @@ async function watchJob() {
 }
 
 /* ------------------------------------------------------------------ workspace */
-async function openWorkspace() {
+async function openWorkspace(loading) {
+  if (loading) showLoading(0.5, "Laying out the song");
   // the first look at a big song (many tracks) can take a while; don't call the app stuck for it
   const r = await api.get("/api/overview", 120000);
+  if (loading) showLoading(0.8, "Drawing the instruments");
   st.rev = r.rev; st.ov = r.overview; st.sel = null; st.scope = null; st.specs = {};
+  setTimeout(followWarm, 0);
   showWelcome(false);
   $("#workspace").hidden = false; $("#transport").hidden = false; $("#btnExport").disabled = false;
   $("#songName").textContent = st.ov.meta.name || "";
@@ -595,6 +606,23 @@ async function applyEdit(r, opt = {}) {
   if (!opt.keepSpectro) await loadSpectros(st.ov.stems, ["after", "damage"]);
   reloadAudio();
   renderAll();
+  followWarm();
+}
+// Slow suggestions (per-instrument measurements, repeated hits and notes) are worked out in the
+// background so a song opens straight away. While the app says it's still at it, ask again now and
+// then and refresh just the lists; nothing else is reloaded.
+let warmTimer = null;
+function followWarm() {
+  if (warmTimer || !st.ov || !st.ov.warming) return;
+  warmTimer = setTimeout(async () => {
+    warmTimer = null;
+    const rev = st.rev;
+    try {
+      const r = await api.get("/api/overview", 60000);
+      if (r.rev === rev && st.rev === rev) { st.ov = r.overview; renderAll(); }
+    } catch { /* try again later */ }
+    followWarm();
+  }, 2500);
 }
 $("#btnUndo").onclick = () => edit("/api/undo", {});
 
@@ -771,7 +799,8 @@ const inKept = s => (st.ov.mixer.keep || []).some(r => r.start <= s.start + 0.05
 /* ---------- quality tips */
 function renderTips() {
   const tips = st.ov.tips || [], box = $("#tipsBox"), list = $("#tipsList");
-  box.hidden = !tips.length;
+  box.hidden = !tips.length && !st.ov.warming;
+  $("#warmChip").hidden = !st.ov.warming;
   const actionable = tips.filter(t => t.action).length;
   $("#tipCount").textContent = actionable ? `${actionable}` : "";
   list.innerHTML = "";
@@ -1230,7 +1259,7 @@ function renderHitsBars() {
     return d;
   };
   const added = (path, body) => async accept => addFixes(path, body, accept);
-  hl.innerHTML = (ov.best_hits || []).length ? "" : `<p class="help">No smeared drum hits found${ov.stems.some(k => ["drums", "kick", "snare", "toms", "cymbals"].includes(k)) ? "" : " (no drum track)"}.</p>`;
+  hl.innerHTML = (ov.best_hits || []).length ? "" : ov.warming ? `<p class="help"><span class="spin small"></span>Looking for repeated hits and notes. They'll show up here in a moment.</p>` : `<p class="help">No smeared drum hits found${ov.stems.some(k => ["drums", "kick", "snare", "toms", "cymbals"].includes(k)) ? "" : " (no drum track)"}.</p>`;
   for (const h of ov.best_hits || []) {
     const canBlend = (h.blend_n || 0) >= 2;
     hl.append(row(`${nice(h.stem)}: ${h.name}`,
@@ -1562,7 +1591,7 @@ let stuckCount = 0, stuckDismissed = 0;
 function noteAlive() { stuckCount = 0; if (!$("#stuck").hidden) $("#stuck").hidden = true; }
 function noteStuck() {
   stuckCount++;
-  if (stuckCount >= 2 && Date.now() - stuckDismissed > 60000) {
+  if (stuckCount >= 3 && Date.now() - stuckDismissed > 60000) {
     $("#stuck").hidden = false;
     $("#stuckHint").textContent = native() ? "" : "If Restart doesn't work, close this window and start the app again.";
   }
@@ -1599,19 +1628,26 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
 
 /* ------------------------------------------------------------------ boot */
 (async function boot() {
+  const msg = t => { const m = $("#bootMsg"); if (m) m.textContent = t; };
   try {
     let s;
     for (let i = 0; ; i++) {
       try { s = await refreshState(); break; }
-      catch (e) { if (i >= 2) throw e; await new Promise(r => setTimeout(r, 1500)); }
+      catch (e) {
+        if (i >= 4) throw e;
+        msg(i ? "Still starting. The first start after an update or restart can take a little longer." : "Waking up the app");
+        await new Promise(r => setTimeout(r, 1500));
+      }
     }
+    msg(s.has_project ? `Opening ${s.project || "your song"}` : "Ready");
     $("#safeBanner").hidden = !s.safe;
     api.post("/api/booted").catch(() => {});      // tells the app this start finished fine
     renderUpdate(s); pollUpdate(60000);
-    if (s.job.running) { watchJob(); return; }
-    if (s.has_project) { await openWorkspace(); return; }
+    if (s.job.running) { $("#boot").hidden = true; watchJob(); return; }
+    if (s.has_project) { $("#boot").hidden = true; await openWorkspace(true); hideBusy(); return; }
     showWelcome(true);
-  } catch (e) { fail(e); }
+  } catch (e) { fail(e); hideBusy(); }
+  finally { $("#boot").hidden = true; }
 })();
 
 $("#btnQuality").onclick = () => scoreSections();
