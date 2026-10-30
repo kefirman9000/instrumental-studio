@@ -335,9 +335,47 @@ def _job_detect():
     S.project.detect(lambda f, m: _progress(None if f is None else f, m))
 
 
+def _deep_clean(p, f0=0.0, f1=1.0):
+    """Second vocal-removal pass: run the vocal model on each instrument (not drums) and offer to take out
+    what it finds, where it moves like the singer. Returns the new review ids."""
+    if not SEP.demucs_available():
+        raise RuntimeError("The second pass needs the separation model. Install it from the start screen.")
+    from .project import NOT_REPAIRED
+    targets = [k for k in p.instruments if k not in NOT_REPAIRED and k not in p.PERCUSSIVE]
+    ids = []
+    for i, k in enumerate(targets):
+        a = f0 + (f1 - f0) * i / max(1, len(targets))
+        b = f0 + (f1 - f0) * (i + 1) / max(1, len(targets))
+        work = os.path.join(p.root, "work_deep", k)
+        try:
+            found = SEP.vocals_in(p.stems[k], p.sr, work, lambda f, m: _progress(None if f is None else f, m), a, b,
+                                  f"Second pass on the {k}")
+            ids += p.add_deep_leftovers(k, found)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    shutil.rmtree(os.path.join(p.root, "work_deep"), ignore_errors=True)
+    return ids
+
+
+def _job_deep():
+    p = S.project
+    ids = _deep_clean(p, 0.02, 0.95)
+    p.check_ids(ids)
+    p.save()
+    S.job["result"] = {"title": "Second pass done", "new_ids": ids,
+                       "report": [f"Found leftover singing in {len(ids)} part{'s' if len(ids) != 1 else ''} of the instruments. "
+                                  f"They're in Review under Vocal leftovers, to hear before applying."] if ids else
+                                 ["The second pass found no leftover singing that moves like the singer."]}
+
+
 def _job_build(steps):
     p = S.project
-    res = p.build_best(steps, lambda f, m: _progress(f, m))
+    if "deep" in steps:
+        try:
+            _deep_clean(p, 0.0, 0.4)
+        except Exception as e:
+            log(f"build: second pass skipped: {e}")
+    res = p.build_best(steps, lambda f, m: _progress(None if f is None else (0.4 + 0.6 * f if "deep" in steps else f), m))
     _progress(0.97, "Saving")
     p.save()
     S.job["result"] = {"report": res["report"]}
@@ -380,9 +418,15 @@ def _reuse_stems(digest, mode, exclude=None):
 
 
 def _auto_rest(p):
-    """After a split or a stem import: find the damage, then build the best instrumental, all steps."""
-    p.detect(lambda f, m: _progress(None if f is None else 0.4 * f, f"Finding damage: {m}"))
-    res = p.build_best(list(p.AUTO_STEPS), lambda f, m: _progress(None if f is None else 0.4 + 0.57 * f, m))
+    """After a split or a stem import: find the damage, then build the best instrumental with its usual steps."""
+    p.detect(lambda f, m: _progress(None if f is None else 0.3 * f, f"Finding damage: {m}"))
+    steps = [x["key"] for x in p.build_plan() if x["on"]]
+    if "deep" in steps:
+        try:
+            _deep_clean(p, 0.3, 0.55)
+        except Exception as e:
+            log(f"auto: second pass skipped: {e}")
+    res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.55 + 0.42 * f, m))
     _progress(0.98, "Saving")
     p.save()
     S.job["result"] = {"report": res["report"]}
@@ -859,6 +903,11 @@ class Handler(BaseHTTPRequestHandler):
                 if st_ not in ("light", "normal", "strong"):
                     raise ValueError("Unknown strength.")
                 _start_job(_job_vinyl, st_)
+                return self._send(200, {"ok": True})
+            if path == "/api/deep":
+                if self._proj().stage != "detected":
+                    raise ValueError("Find damage first (step 3).")
+                _start_job(_job_deep)
                 return self._send(200, {"ok": True})
             if path == "/api/vinyl/undo":
                 self._proj()

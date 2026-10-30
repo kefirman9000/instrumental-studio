@@ -115,8 +115,8 @@
         <label class="small">to <input type="number" id="eqHi" value="3500" min="20" max="20000" step="10" style="width:76px"> Hz</label>
       </div>
       <div class="alt-row eq-row" data-split-only>
-        <select id="eqMode" aria-label="How" title="Fixed cut: the whole band goes down by the amount. Follow the singer: only the frequencies the vocal is using at each moment go down, which takes out a ghost vocal and leaves the rest of the instrument alone.">
-          <option value="follow">Follow the singer</option><option value="fixed">Fixed cut</option></select>
+        <select id="eqMode" aria-label="How" title="Notch the singer's notes: narrow cuts on exactly the notes being sung and their overtones. Follow the singer: the frequencies the vocal is using at each moment. Fixed cut: the whole band goes down by the amount.">
+          <option value="pitch">Notch the singer's notes (most precise)</option><option value="follow">Follow the singer</option><option value="fixed">Fixed cut</option></select>
         <select id="eqDb" aria-label="By how much">
           <option value="-3">-3 dB</option><option value="-6" selected>-6 dB</option><option value="-9">-9 dB</option>
           <option value="-12">-12 dB</option><option value="-18">-18 dB</option></select>
