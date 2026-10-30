@@ -11,19 +11,20 @@ import numpy as np
 from .audio import load_audio, log
 
 MODELS = {
-    # key: (label, demucs model names, stems)
-    "4stem": ("4 tracks: drums, bass, other (best quality)", ["htdemucs_ft"], ["drums", "bass", "other", "vocals"]),
-    "4stem_fast": ("4 tracks, fast", ["htdemucs"], ["drums", "bass", "other", "vocals"]),
-    "6stem": ("6 tracks: adds guitar and piano", ["htdemucs_6s"],
-              ["drums", "bass", "guitar", "piano", "other", "vocals"]),
-    "6stem_best": ("6 tracks, best quality (slower)", ["htdemucs_6s", "htdemucs_ft"],
-                   ["drums", "bass", "guitar", "piano", "other", "vocals"]),
-    "ensemble": ("4 tracks, least damage (two models, slowest)", ["htdemucs_ft", "htdemucs"],
+    # key: (label "N tracks · what it's for", demucs model names, stems). Shown grouped by track count, in
+    # this order, recommended first. Keys never change (projects and settings remember them).
+    "4stem": ("4 tracks · Best quality (recommended)", ["htdemucs_ft"], ["drums", "bass", "other", "vocals"]),
+    "4stem_fast": ("4 tracks · Quick draft (fastest)", ["htdemucs"], ["drums", "bass", "other", "vocals"]),
+    "ensemble": ("4 tracks · Fewest gaps (two models combined, slowest)", ["htdemucs_ft", "htdemucs"],
                  ["drums", "bass", "other", "vocals"]),
     # Roformer takes the vocals out first (cleanest vocal removal), then Demucs splits what's left
-    "hybrid": ("4 tracks, cleanest vocal removal (Roformer + Demucs)", ["htdemucs_ft"],
+    "hybrid": ("4 tracks · Cleanest vocal removal (Roformer first)", ["htdemucs_ft"],
                ["drums", "bass", "other", "vocals"]),
-    "hybrid6": ("6 tracks, cleanest vocal removal (Roformer + Demucs)", ["htdemucs_6s"],
+    "6stem_best": ("6 tracks · Best quality", ["htdemucs_6s", "htdemucs_ft"],
+                   ["drums", "bass", "guitar", "piano", "other", "vocals"]),
+    "6stem": ("6 tracks · Quick (piano track less clean)", ["htdemucs_6s"],
+              ["drums", "bass", "guitar", "piano", "other", "vocals"]),
+    "hybrid6": ("6 tracks · Cleanest vocal removal (Roformer first)", ["htdemucs_6s"],
                 ["drums", "bass", "guitar", "piano", "other", "vocals"]),
 }
 NEEDS_EXTRA = {"hybrid": "roformer", "hybrid6": "roformer"}

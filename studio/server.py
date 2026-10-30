@@ -379,7 +379,22 @@ def _reuse_stems(digest, mode, exclude=None):
     return None
 
 
-def _job_stems(folder, name):
+def _auto_rest(p):
+    """After a split or a stem import: find the damage, then build the best instrumental, all steps."""
+    p.detect(lambda f, m: _progress(None if f is None else 0.4 * f, f"Finding damage: {m}"))
+    res = p.build_best(list(p.AUTO_STEPS), lambda f, m: _progress(None if f is None else 0.4 + 0.57 * f, m))
+    _progress(0.98, "Saving")
+    p.save()
+    S.job["result"] = {"report": res["report"]}
+
+
+def _job_full(mode, opts):
+    """One click for a song: split it, find the damage, build the best instrumental."""
+    _job_split(mode, opts)
+    _auto_rest(S.project)
+
+
+def _job_stems(folder, name, auto=False):
     root = _slug(name)
     p = _Project()(root)
     p.meta["name"] = name
@@ -389,6 +404,8 @@ def _job_stems(folder, name):
     p.set_stems(stems, sr, None, source=folder)
     p.prepare(lambda f, m: _progress(None if f is None else 0.05 + 0.95 * f, m))
     S.project = p
+    if auto:
+        _auto_rest(p)
 
 
 def _job_demo():
@@ -733,7 +750,7 @@ class Handler(BaseHTTPRequestHandler):
                     missing = [k for k in need - {None} if not INST.extra_installed(k)]
                     if missing:
                         return self._send(409, {"error": "need_extra", "extras": missing})
-                _start_job(_job_split, mode, opts)
+                _start_job(_job_full if d.get("auto") else _job_split, mode, opts)
                 return self._send(200, {"ok": True})
             if path == "/api/alt":
                 p = self._proj()
@@ -765,7 +782,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
                 folder = d["folder"]
-                _start_job(_job_stems, folder, d.get("name") or os.path.basename(folder.rstrip("/\\")))
+                _start_job(_job_stems, folder, d.get("name") or os.path.basename(folder.rstrip("/\\")), bool(d.get("auto")))
                 return self._send(200, {"ok": True})
             if path == "/api/demo":
                 _start_job(_job_demo)

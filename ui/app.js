@@ -66,7 +66,7 @@ async function refreshState() {
   st.state = s;
   const sel = $("#sepMode");
   if (!sel.options.length) {
-    for (const [k, v] of Object.entries(s.models)) sel.add(new Option(v, k));
+    fillModelSelect(sel, s.models);
     sel.value = localStorage.getItem("sepMode") || "4stem";
     sel.dataset.auto = localStorage.getItem("sepMode") ? "" : "1";
   }
@@ -198,7 +198,7 @@ window.addEventListener("drop", async e => {
 });
 function S_busy() { return !$("#busy").hidden || !!st.state?.job?.running; }
 async function startStems(folder, name) {
-  try { await api.post("/api/open_stems", { folder, name }); watchJob(); } catch (e) { hideBusy(); fail(e); }
+  try { await api.post("/api/open_stems", { folder, name, auto: $("#optAutoStems").checked }); watchJob(); } catch (e) { hideBusy(); fail(e); }
 }
 $("#btnDemo").onclick = async () => { try { await api.post("/api/demo"); watchJob(); } catch (e) { fail(e); } };
 $("#btnSongs").onclick = () => { stopPreview(); $("#player").pause(); showWelcome(true); };
@@ -687,9 +687,9 @@ function showKeepPop(a, b, e) {
     } catch (err) { fail(err); }
   };
   const am = $("#altMode"), as = $("#altStem"), models = st.state?.models || {};
-  am.innerHTML = ""; as.innerHTML = "";
+  as.innerHTML = "";
   const curMode = (st.ov.meta.sep_mode || "").split("+")[0];
-  for (const [k, label] of Object.entries(models)) if (k !== curMode) am.add(new Option(label, k));
+  fillModelSelect(am, models, curMode);      // same grouping as the Split step, without the one already used
   as.add(new Option("All tracks", ""));
   for (const k of st.ov.stems) as.add(new Option(nice(k), k));
   pop.querySelector(".alt-row").hidden = !split || st.ov.meta.source === "demo";
@@ -936,13 +936,28 @@ function renderSteps() {
   $$("#versionSeg button").forEach(b => { b.disabled = b.dataset.v !== "original" && at < 1; });
   if (at < 1 && st.version !== "original") setVersion("original");
 }
+// "4 tracks · Best quality" -> grouped under "4 tracks: drums, bass, other", shown as "Best quality"
+const GROUP_NAMES = { "4 tracks": "4 tracks: drums, bass, other, vocals", "6 tracks": "6 tracks: adds guitar and piano" };
+const shortModel = label => (label.split(" · ")[1] || label);
+function fillModelSelect(sel, models, skip) {
+  sel.innerHTML = "";
+  const groups = {};
+  for (const [k, label] of Object.entries(models)) {
+    if (k === skip) continue;
+    const g = label.split(" · ")[0];
+    if (!groups[g]) { groups[g] = document.createElement("optgroup"); groups[g].label = GROUP_NAMES[g] || g; sel.append(groups[g]); }
+    groups[g].append(new Option(shortModel(label), k));
+  }
+}
 function speedTip(mode, cpu) {
   return {
-    "4stem": cpu ? "Best quality: 4 models in a row, 5-15 min per song on a CPU." : "Best quality: 4 models in a row, about a minute on a GPU.",
+    "4stem": cpu ? "Recommended. Best quality: 4 models in a row, 5-15 min per song on a CPU." : "Recommended. Best quality: 4 models in a row, about a minute on a GPU.",
     "4stem_fast": cpu ? "Fast: a few minutes per song on a CPU." : "Fast: about 4x quicker than best quality.",
     "6stem": "6 tracks: adds guitar and piano lanes, so damage is found and repaired per instrument. The piano track is less clean.",
     "6stem_best": cpu ? "6 tracks with drums, bass and vocals from the best model: 2 models in a row, slow on a CPU." : "6 tracks with drums, bass and vocals from the best model: 2 models in a row.",
-    "ensemble": "Two models averaged: least damage, slowest.",
+    "ensemble": "Two models combined: they fill each other's gaps, so least is lost under the vocals. Slowest.",
+    "hybrid": "Roformer takes the vocals out first (the cleanest removal), then the best model splits the rest. Extra download.",
+    "hybrid6": "Roformer takes the vocals out first (the cleanest removal), then the 6-track model splits the rest. Extra download.",
   }[mode] || "";
 }
 $("#btnSplit").onclick = async () => {
@@ -956,7 +971,8 @@ $("#btnSplit").onclick = async () => {
     return installModelFromStep();
   }
   try {
-    await api.post("/api/split", { mode: $("#sepMode").value || "4stem", backing: $("#optBacking").checked, drums: $("#optDrums").checked });
+    await api.post("/api/split", { mode: $("#sepMode").value || "4stem", backing: $("#optBacking").checked, drums: $("#optDrums").checked,
+                                   auto: $("#optAutoSplit").checked });
     watchJob();
   } catch (e) {
     if (e.message === "need_model") installModelFromStep();
@@ -1405,7 +1421,7 @@ $("#btnExport").onclick = () => $("#dlgExport").showModal();
 $("#dlgExport").addEventListener("close", async () => {
   const dlg = $("#dlgExport"); if (dlg.returnValue !== "ok") return;
   const f = dlg.querySelector("form");
-  const what = ["mix", "stems", "raw", "vocals", "report"].filter(n => f.elements[n].checked);
+  const what = ["mix", "stems", "raw", "vocals", "report", "samples_raw", "samples_merged"].filter(n => f.elements[n] && f.elements[n].checked);
   const format = f.elements.fmt.value;
   showBusy(0.3, "Writing files");
   try {
@@ -1586,7 +1602,7 @@ function renderExtras(s) {
   const sel = $("#sepMode");
   for (const o of sel.options) {
     if (o.value.startsWith("hybrid")) {
-      o.textContent = (s.models[o.value] || o.textContent).replace(/ \(extra download\)$/, "") + (ex.roformer?.installed ? "" : " (extra download)");
+      o.textContent = shortModel(s.models[o.value] || o.textContent).replace(/ \(extra download\)$/, "") + (ex.roformer?.installed ? "" : " (extra download)");
     }
   }
   const busy = Object.values(ex).some(e => e.installing);
@@ -1697,7 +1713,7 @@ async function openAutoBuild() {
     for (const stp of r.steps) {
       const row = document.createElement("label"); row.className = "auto-step" + (stp.on ? "" : " off");
       row.innerHTML = `<input type="checkbox" name="${stp.key}"${stp.on ? " checked" : ""}><div><b></b><span></span></div>`;
-      row.querySelector("b").textContent = stp.title + (stp.count > 1 && !["mutes", "tone", "bestof"].includes(stp.key) ? ` (${stp.count})` : "");
+      row.querySelector("b").textContent = stp.title + (stp.count > 1 && !["mutes", "tone", "bestof", "improve", "seams"].includes(stp.key) ? ` (${stp.count})` : "");
       row.querySelector("span").textContent = stp.detail;
       box.append(row);
     }
@@ -1721,3 +1737,17 @@ function showAutoReport(lines) {
   $("#dlgAutoDone").showModal();
 }
 $$("[data-auto]").forEach(b => b.onclick = openAutoBuild);
+
+// remember the two "do it all" choices
+for (const id of ["optAutoStems", "optAutoSplit"]) {
+  const el = $("#" + id); if (!el) continue;
+  try { el.checked = localStorage.getItem(id) === "1"; } catch {}
+  el.onchange = () => { try { localStorage.setItem(id, el.checked ? "1" : "0"); } catch {} };
+}
+$$("[data-export-samples]").forEach(b => b.onclick = async () => {
+  showBusy(0.3, "Saving hits, notes and loops");
+  try {
+    const r = await api.post("/api/export", { what: ["samples_raw", "samples_merged"], format: "wav", reveal: true });
+    hideBusy(); toast(`Saved ${r.files.length} sample file(s) to ${r.folder}`, { ms: 9000 });
+  } catch (e) { hideBusy(); fail(e); }
+});
