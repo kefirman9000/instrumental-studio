@@ -98,6 +98,31 @@
       <label class="check small alt-blend" data-split-only title="Mixes the other model's version half and half with the current one. Each model leaves different artifacts, so blending often hides both."><input type="checkbox" id="altBlend"><span>Blend half and half with the current split</span></label>
       <span class="pop-h" data-split-only>Stereo</span>
       <button class="small" data-act="sides" data-split-only title="Lead vocals sit in the middle of the mix, so the left-minus-right part of the original song is mostly instruments. Using it here brings back width and detail the split lost. Undo takes it back.">Use the original's stereo sides here</button>
+      <span class="pop-h" data-split-only>Lower frequencies here</span>
+      <div class="alt-row eq-row" data-split-only>
+        <select id="eqStem" aria-label="Which track"></select>
+        <select id="eqPreset" aria-label="What to lower">
+          <option value="vocal">Leftover singing (300 Hz to 3.5 kHz)</option>
+          <option value="ess">"S" and breath sounds (5 to 10 kHz)</option>
+          <option value="harsh">Harshness (2 to 5 kHz)</option>
+          <option value="mud">Mud (150 to 500 Hz)</option>
+          <option value="boom">Boom (60 to 150 Hz)</option>
+          <option value="custom">Custom range...</option>
+        </select>
+      </div>
+      <div class="alt-row eq-row" data-split-only id="eqCustom" hidden>
+        <label class="small">From <input type="number" id="eqLo" value="300" min="20" max="20000" step="10" style="width:76px"> Hz</label>
+        <label class="small">to <input type="number" id="eqHi" value="3500" min="20" max="20000" step="10" style="width:76px"> Hz</label>
+      </div>
+      <div class="alt-row eq-row" data-split-only>
+        <select id="eqMode" aria-label="How" title="Fixed cut: the whole band goes down by the amount. Follow the singer: only the frequencies the vocal is using at each moment go down, which takes out a ghost vocal and leaves the rest of the instrument alone.">
+          <option value="follow">Follow the singer</option><option value="fixed">Fixed cut</option></select>
+        <select id="eqDb" aria-label="By how much">
+          <option value="-3">-3 dB</option><option value="-6" selected>-6 dB</option><option value="-9">-9 dB</option>
+          <option value="-12">-12 dB</option><option value="-18">-18 dB</option></select>
+        <button class="small" data-act="eq">Lower</button>
+      </div>
+      <label class="check small" data-split-only title="Only where someone is singing (measured continuously), so the gaps between lines keep their full sound"><input type="checkbox" id="eqOnlyVocals" checked><span>Only while someone sings</span></label>
       <span class="pop-h" data-split-only>Mute</span>
       <div class="mute-row" id="muteRow" data-split-only></div>
       <button class="ghost small" data-mode="">Cancel</button>
@@ -165,6 +190,9 @@
       <h3 class="panel-h" style="margin-top:14px">Original stereo sides</h3>
       <p class="help">Parts that use the stereo width of the original song (its sides hold the instruments, not the lead vocal). Drag across the Sections bar to add one.</p>
       <div id="sidesList"></div>
+      <h3 class="panel-h" style="margin-top:14px">Lowered frequencies</h3>
+      <p class="help">Frequencies lowered in part of the song, for one instrument or all of them. Drag across the Sections bar and choose Lower frequencies here.</p>
+      <div id="eqList"></div>
       <h3 class="panel-h" style="margin-top:14px">Muted parts</h3>
       <p class="help">Silence everything, or one instrument, in part of the song. Drag across the Sections bar and choose Mute, or use the M buttons in the table below.</p>
       <div id="muteList"></div>

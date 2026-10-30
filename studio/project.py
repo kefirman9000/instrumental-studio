@@ -54,7 +54,7 @@ class Project:
         self.patches = {}          # id -> (lo, float16 patch[2, n])
         self.take_w = {}           # best-version edits: id -> (lo, float16 weight[n]) of what they replace
         self.history = []
-        self.mixer = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}, "keep": [], "vocal_lift": {}, "mute_ranges": [], "sides": [], "mud_cut": {}, "tone_eq": {}, "seams": []}
+        self.mixer = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}, "keep": [], "vocal_lift": {}, "mute_ranges": [], "sides": [], "mud_cut": {}, "tone_eq": {}, "seams": [], "eq_ranges": []}
         self._render_cache = {}
         self.display = {}
 
@@ -688,7 +688,7 @@ class Project:
         lift = float(self.mixer.get("vocal_lift", {}).get(k, 0.0)) if rep_ else 0.0
         cut = float(self.mixer.get("mud_cut", {}).get(k, 0.0)) if rep_ else 0.0
         if not lift and not cut:
-            return seg
+            return self._apply_eq_ranges(k, seg, a, b) if rep_ else seg
         from scipy import signal as sig
         pad = int(0.2 * self.sr)
         lo, hi = max(0, a - pad), min(y.shape[1], b + pad)
@@ -703,6 +703,64 @@ class Project:
             sos = sig.butter(2, rng, "bandpass", fs=self.sr, output="sos")
             band = sig.sosfiltfilt(sos, y[:, lo:hi], axis=1)[:, a - lo:a - lo + (b - a)].astype(np.float32)
             out = out + band * ((10 ** (db / 20) - 1) * vc)[None, :]
+        return self._apply_eq_ranges(k, out, a, b)
+
+    # ------------------------------------------------------------------ lower frequencies in part of the song
+    EQ_PRESETS = {"vocal": (300.0, 3500.0), "ess": (5000.0, 10000.0), "harsh": (2000.0, 5000.0),
+                  "mud": (150.0, 500.0), "boom": (60.0, 150.0)}
+
+    def _apply_eq_ranges(self, k, seg, a, b):
+        """Frequency cuts the person set for part of the song ("Lower frequencies here"). Two kinds:
+        fixed: a band lowered by a set amount; follow: only the frequencies the singer is using at each
+        moment, which takes out a ghost vocal while leaving the rest of the instrument alone. Faded in and
+        out over 30 ms, optionally only while someone sings."""
+        ranges = [r for r in (self.mixer.get("eq_ranges") or [])
+                  if r.get("stem") in (None, "", k) and r["start"] * self.sr < b and r["end"] * self.sr > a]
+        if not ranges:
+            return seg
+        from scipy import signal as sig
+        from scipy.ndimage import gaussian_filter
+        out = np.array(seg, np.float32, copy=True)
+        sr, ramp = self.sr, 0.03
+        nyq = sr / 2
+        for r in ranges:
+            s0, s1 = max(a, int((r["start"] - ramp) * sr)), min(b, int((r["end"] + ramp) * sr))
+            if s1 - s0 < 256:
+                continue
+            lo, hi = (self.EQ_PRESETS.get(r.get("preset")) or (float(r.get("lo", 300)), float(r.get("hi", 3500))))
+            lo, hi = max(20.0, min(lo, hi)), min(nyq * 0.95, max(lo, hi))
+            g = 10 ** (min(0.0, float(r.get("db", -6))) / 20)
+            t = np.arange(s0, s1) / sr
+            w = np.minimum(np.clip((t - r["start"] + ramp / 2) / ramp, 0, 1),
+                           np.clip((r["end"] + ramp / 2 - t) / ramp, 0, 1)).astype(np.float32)
+            if r.get("only_vocals", True):
+                w = w * self._vocal_curve(s0, s1)
+            if not w.any():
+                continue
+            x = out[:, s0 - a:s1 - a]
+            if r.get("mode") == "follow":
+                # cut each frequency by how much the singer is using it at that moment (within the band)
+                V = np.abs(stft(self.stems["vocals"][:, s0:s1].mean(0)))
+                freqs = np.fft.rfftfreq(N_FFT, 1.0 / sr)
+                band = np.clip(np.minimum((freqs - lo * 0.8) / (lo * 0.2 + 1e-9), (hi * 1.25 - freqs) / (hi * 0.25 + 1e-9)), 0, 1)
+                ref = np.percentile(V[band > 0.5], 95) + 1e-9 if (band > 0.5).any() else V.max() + 1e-9
+                use = gaussian_filter(np.clip(V / ref, 0, 1), (1.5, 1.0)) * band[:, None]
+                wf = np.interp(np.arange(V.shape[1]) * HOP, np.arange(len(w)), w)
+                G = 1 - (1 - g) * use * wf[None, :]
+                for ch in range(x.shape[0]):
+                    X = stft(x[ch])
+                    m = min(X.shape[1], G.shape[1])
+                    X[:, :m] *= G[:, :m]
+                    x[ch] = istft(X, x.shape[1])
+            else:
+                f = [0.0, lo * 0.8, lo, hi, min(hi * 1.25, nyq * 0.99), nyq]
+                gains = [1.0, 1.0, g, g, 1.0, 1.0]
+                keep = [0] + [i for i in range(1, len(f)) if f[i] > f[i - 1] + 1e-6]
+                taps = sig.firwin2(1025, [f[i] / nyq for i in keep], [gains[i] for i in keep])
+                for ch in range(x.shape[0]):
+                    filt = sig.oaconvolve(x[ch], taps, mode="same").astype(np.float32)
+                    x[ch] = x[ch] + (filt - x[ch]) * w
+            out[:, s0 - a:s1 - a] = x
         return out
 
     # ------------------------------------------------------------------ full tone match under the vocals
@@ -1658,7 +1716,7 @@ class Project:
             self._push("Levels", [])
             keep_changed = "keep" in mixer and mixer["keep"] != self.mixer.get("keep")
             for key in ("stem_gain", "mute", "solo", "section_gain", "keep", "vocal_lift", "mute_ranges", "sides", "mud_cut",
-                        "tone_eq", "seams"):
+                        "tone_eq", "seams", "eq_ranges"):
                 if key in mixer:
                     self.mixer[key] = mixer[key]
             if "keep" in mixer:
@@ -1928,6 +1986,7 @@ class Project:
         p.mixer.setdefault("mud_cut", {})
         p.mixer.setdefault("tone_eq", {})
         p.mixer.setdefault("seams", [])
+        p.mixer.setdefault("eq_ranges", [])
         p.mixer.setdefault("mute_ranges", [])
         p.mixer.setdefault("sides", [])
         for x in p.suggestions.values():

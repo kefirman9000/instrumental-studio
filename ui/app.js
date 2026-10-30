@@ -675,6 +675,21 @@ function showKeepPop(a, b, e) {
   pop.querySelectorAll("[data-split-only]").forEach(el => (el.hidden = !split));
   const detected = st.ov.stage === "detected";
   pop.querySelector('[data-act="scan"]').hidden = !detected;
+  // lower frequencies here
+  const es = $("#eqStem"); es.innerHTML = "";
+  es.add(new Option("All instruments", ""));
+  for (const k of st.ov.stems) es.add(new Option(nice(k), k));
+  $("#eqPreset").onchange = () => { $("#eqCustom").hidden = $("#eqPreset").value !== "custom"; };
+  $("#eqCustom").hidden = $("#eqPreset").value !== "custom";
+  pop.querySelector('[data-act="eq"]').onclick = () => {
+    hideKeepPop();
+    const preset = $("#eqPreset").value;
+    const r = { start: a, end: b, stem: es.value || null, mode: $("#eqMode").value, db: +$("#eqDb").value,
+                only_vocals: $("#eqOnlyVocals").checked, preset: preset === "custom" ? null : preset };
+    if (preset === "custom") { r.lo = +$("#eqLo").value || 300; r.hi = +$("#eqHi").value || 3500; }
+    setEq([...(st.ov.mixer.eq_ranges || []), r]);
+    toast("Lowered. Listen with Repaired selected; it's listed in the Levels tab, and Undo takes it back.", { ms: 6000 });
+  };
   const mr = $("#muteRow"); mr.innerHTML = "";
   for (const k of [null, ...st.ov.stems]) {
     const btn = document.createElement("button"); btn.className = "small"; btn.textContent = k ? k : "Everything";
@@ -798,6 +813,25 @@ function renderSidesList() {
     const sel = d.querySelector("select"); sel.value = (r.amount ?? 1) >= 0.75 ? "1" : "0.5";
     sel.onchange = () => setSides(list.map((x, j) => (j === i ? { ...x, amount: +sel.value } : x)));
     d.querySelector("button").onclick = () => setSides(list.filter((_, j) => j !== i));
+    w.append(d);
+  });
+}
+async function setEq(list) {
+  try { applyEdit(await api.post("/api/mixer", { eq_ranges: list })); } catch (e) { fail(e); }
+}
+const EQ_NAMES = { vocal: "leftover singing", ess: "\"s\" and breath", harsh: "harshness", mud: "mud", boom: "boom" };
+function renderEqList() {
+  const w = $("#eqList"); if (!w) return;
+  const list = st.ov.mixer.eq_ranges || [];
+  w.innerHTML = list.length ? "" : `<p class="help">Nothing lowered.</p>`;
+  list.forEach((r, i) => {
+    const d = document.createElement("div"); d.className = "keep-item";
+    d.innerHTML = `<i class="sw no_edits"></i><span></span><button class="ghost small">Remove</button>`;
+    const what = r.preset ? EQ_NAMES[r.preset] || r.preset : `${Math.round(r.lo)} Hz to ${Math.round(r.hi)} Hz`;
+    d.querySelector("span").textContent = `${r.stem ? nice(r.stem) : "All instruments"}: ${what} ${r.db} dB` +
+      `${r.mode === "follow" ? ", following the singer" : ""}${r.only_vocals === false ? "" : ", while singing"}, ${fmtP(r.start)} to ${fmtP(r.end)}`;
+    d.querySelector("span").onclick = () => seek(r.start);
+    d.querySelector("button").onclick = () => setEq(list.filter((_, j) => j !== i));
     w.append(d);
   });
 }
@@ -1027,7 +1061,7 @@ $("#btnDetect").onclick = async () => {
 
 function renderAll() {
   $("#autoCard").hidden = st.ov.stage !== "detected";
-  renderSteps(); renderTips(); renderKeepList(); renderSidesList(); renderMuteList();
+  renderSteps(); renderTips(); renderKeepList(); renderSidesList(); renderMuteList(); renderEqList();
   $("#btnUndo").disabled = !st.ov.can_undo;
   $("#btnUndo").title = st.ov.can_undo ? `Undo: ${st.ov.undo_label}` : "Nothing to undo";
   renderBadges(); renderLanes(); renderReview(); renderGrid(); renderLevels(); renderSettings();
