@@ -1,5 +1,9 @@
 # What's new
 
+## 1.22.2
+
+- **Fix: Remove vinyl crackle wasn't visible.** Its controls didn't fit in step 1 and were hidden behind step 2. They now sit on their own line under *Import*.
+
 ## 1.22.1
 
 - **Support the app.** Instrumental Studio is free and open source; if it's useful to you, you can now support it on GitHub Sponsors from the start screen or Settings (it opens in your browser). The repository page has a Sponsor button too.
