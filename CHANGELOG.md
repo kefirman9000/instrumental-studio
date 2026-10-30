@@ -1,5 +1,9 @@
 # What's new
 
+## 1.20.0
+
+- **Lower frequencies here.** Drag across part of the song and choose an instrument (or all), what to lower (leftover singing 300 Hz-3.5 kHz, "s" and breath sounds 5-10 kHz, harshness 2-5 kHz, mud 150-500 Hz, boom 60-150 Hz, or a custom range), how (**Follow the singer** lowers only the frequencies the vocal is using at each moment, which takes out a ghost vocal and leaves the rest of the instrument alone; **Fixed cut** lowers the whole band), and by how much (-3 to -18 dB). By default it only acts while someone sings. Each one is listed in the Levels tab with Remove, and Undo works.
+
 ## 1.19.0
 
 - **Learn the drum pattern** (Repairability tab, and a step in Build the best instrumental). The app learns where each drum sound (kick, snare, hi-hat...) plays in the bar, on a 16th-note grid, from the bars where nobody sings, separately for each kind of section (verses, choruses...). Under the singing, it restores a hit only when it's confident it's the right drum in that place: the pattern has that drum in that slot at least 90% of the time, the **original recording** has an attack there with that drum's sound (the vocals can take a drum out of the split, but it's still in the original), and the drum track is clearly missing it. The hit is rebuilt from a blend of that drum's cleanest hits, lined up to the attack in the original, and only what the vocals took is filled in. Each part lands in Review, checked against the original like every other fix.
