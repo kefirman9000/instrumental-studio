@@ -27,8 +27,43 @@ def home_dir():
     return os.environ.get("INSTRUMENTAL_STUDIO_HOME", os.path.join(os.path.expanduser("~"), "InstrumentalStudio"))
 
 
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def log_dir(home=None):
+    """The logs folder next to the app's start files (falls back to the projects folder if the app
+    folder can't be written to)."""
+    d = os.path.join(APP_DIR, "logs")
+    try:
+        os.makedirs(d, exist_ok=True)
+        probe = os.path.join(d, ".write-test")
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+        return d
+    except OSError:
+        d = home or _state["home"] or home_dir()
+        os.makedirs(d, exist_ok=True)
+        return d
+
+
 def log_path(home=None):
-    return os.path.join(home or _state["home"] or home_dir(), "app.log")
+    return os.path.join(log_dir(home), "app.log")
+
+
+def errors_path(home=None):
+    return os.path.join(log_dir(home), "errors.log")
+
+
+ERROR_WORDS = ("Traceback", "UNCAUGHT", "FREEZE", "failed", "skipped", "Error", "error:", "refused", "can't", "couldn't")
+
+
+def _to_errors(text):
+    try:
+        with open(errors_path(), "a", encoding="utf-8", errors="replace") as f:
+            f.write(text if text.endswith("\n") else text + "\n")
+    except OSError:
+        pass
 
 
 class _Tee:
@@ -42,6 +77,19 @@ class _Tee:
             self.f.write(s)
         except Exception:
             pass
+        # Python error reports ("Traceback ...") also go, whole, to errors.log
+        try:
+            if "Traceback (most recent call last)" in s:
+                self.tb = ""
+            if getattr(self, "tb", None) is not None:
+                self.tb += s
+                last = [l for l in self.tb.splitlines() if l.strip()]
+                if last and not last[-1].startswith((" ", "\t", "Traceback")) and len(last) > 1:
+                    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    _to_errors(f"[{stamp}]\n{self.tb}")
+                    self.tb = None
+        except Exception:
+            self.tb = None
         if self.console is not None:
             try:
                 self.console.write(s)
@@ -77,7 +125,7 @@ def setup(home=None, tag=None):
         os.makedirs(home, exist_ok=True)
         p = log_path(home)
         if os.path.exists(p) and os.path.getsize(p) > 5 * 1024 * 1024:
-            old = os.path.join(home, "app.old.log")
+            old = os.path.join(log_dir(home), "app.old.log")
             try:
                 os.replace(p, old)
             except OSError:
@@ -121,7 +169,10 @@ def line(msg):
     ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     try:
         tag = f" {_state['tag']}" if _state["tag"] else ""
-        print(f"[{ts} +{time.time() - START:7.2f}s{tag}] {msg}", file=sys.stderr, flush=True)
+        text = f"[{ts} +{time.time() - START:7.2f}s{tag}] {msg}"
+        print(text, file=sys.stderr, flush=True)
+        if any(w in msg for w in ERROR_WORDS) and "Traceback" not in msg:
+            _to_errors(datetime.datetime.now().strftime("%Y-%m-%d ") + text)
     except Exception:
         pass
 
@@ -184,8 +235,8 @@ def export_bundle(folder, extra=None):
     path = os.path.join(folder, f"InstrumentalStudio-log-{stamp}.zip")
     home = _state["home"] or home_dir()
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in ("app.log", "app.old.log"):
-            p = os.path.join(home, name)
+        for name in ("app.log", "app.old.log", "errors.log"):
+            p = os.path.join(log_dir(home), name)
             if os.path.exists(p):
                 z.write(p, name)
         z.writestr("about.txt", _about(extra))

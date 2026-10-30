@@ -107,9 +107,19 @@ _model_lock = threading.Lock()
 
 def _probe_device():
     try:
-        S.model["device"] = SEP.device_info()[1]
+        dev, name = SEP.device_info()
+        S.model["device"] = name
+        S.model["device_kind"] = dev
     except Exception:
         S.model["device"] = "unknown (couldn't check)"
+        S.model["device_kind"] = "unknown"
+    try:
+        S.model["nvidia"] = bool(INST.nvidia_cuda())
+    except Exception:
+        S.model["nvidia"] = False
+    DG.line(f"splitting runs on: {S.model['device']}" + (" (an NVIDIA card is present but not used: Settings, "
+                                                          "Use my graphics card)" if S.model["nvidia"] and
+                                                          S.model.get("device_kind") == "cpu" else ""))
 
 
 def start_model_install(force=False):
@@ -358,6 +368,64 @@ def _deep_clean(p, f0=0.0, f1=1.0):
     return ids
 
 
+def _recover(p, f0=0.0, f1=1.0):
+    """Find the instrument sound in the vocal track (one fast model run, kept with the song so it never runs
+    twice) and offer it back. Returns the new review ids."""
+    import numpy as np
+    cache = os.path.join(p.root, "stems", "_recovered.npy")
+    rec = None
+    if os.path.isfile(cache):
+        try:
+            rec = np.load(cache)
+        except Exception:
+            rec = None
+    if rec is None or rec.shape[1] != p.stems["vocals"].shape[1]:
+        if not SEP.demucs_available():
+            raise RuntimeError("Bringing back details needs the separation model.")
+        work = os.path.join(p.root, "work_recover")
+        try:
+            rec = SEP.instruments_in(p.stems["vocals"], p.sr, work,
+                                     lambda f, m: _progress(None if f is None else f, "Looking for instruments in the vocal track"),
+                                     f0, f1)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        np.save(cache, rec.astype(np.float32))
+    return p.add_recovered(rec)
+
+
+def _pre_build(p, steps, f0, f1):
+    """Model steps that run before the build itself: recover (once per song), then the optional second pass."""
+    mid = f0 + (f1 - f0) * (0.5 if "deep" in steps else 1.0)
+    if "recover" in steps:
+        try:
+            _recover(p, f0, mid)
+        except Exception as e:
+            log(f"build: recovering details skipped: {e}")
+    if "deep" in steps:
+        try:
+            _deep_clean(p, mid, f1)
+        except Exception as e:
+            log(f"build: second pass skipped: {e}")
+
+
+def _job_import_ref(src, kind, stem, name):
+    p = S.project
+    _progress(0.1, f"Reading {name}")
+    audio = load_audio(src, p.sr)[0]
+    _progress(0.4, "Lining it up with the song" if kind == "track" else "Finding that sound in the song")
+    if kind == "track":
+        ids = p.add_reference_track(audio, stem, name)
+        what = f"the {stem}"
+    else:
+        ids, what = p.add_reference_sample(audio, name)
+    p.check_ids(ids)
+    p.save()
+    S.job["result"] = {"title": "Your file is in", "new_ids": ids, "report": [
+        f"Matched \"{name}\" to {what}." if kind == "sample" else f"Lined up \"{name}\" with {what}.",
+        f"Added {len(ids)} part{'s' if len(ids) != 1 else ''} to Review to hear before applying." if ids else
+        "Nothing in the song needed it: every hit it matches is already clean."]}
+
+
 def _job_deep():
     p = S.project
     ids = _deep_clean(p, 0.02, 0.95)
@@ -371,12 +439,9 @@ def _job_deep():
 
 def _job_build(steps):
     p = S.project
-    if "deep" in steps:
-        try:
-            _deep_clean(p, 0.0, 0.4)
-        except Exception as e:
-            log(f"build: second pass skipped: {e}")
-    res = p.build_best(steps, lambda f, m: _progress(None if f is None else (0.4 + 0.6 * f if "deep" in steps else f), m))
+    pre = "deep" in steps or ("recover" in steps and not any(x.get("recover") for x in p.suggestions.values()))
+    _pre_build(p, steps, 0.0, 0.4)
+    res = p.build_best(steps, lambda f, m: _progress(None if f is None else (0.4 + 0.6 * f if pre else f), m))
     _progress(0.97, "Saving")
     p.save()
     S.job["result"] = {"report": res["report"]}
@@ -422,11 +487,7 @@ def _auto_rest(p):
     """After a split or a stem import: find the damage, then build the best instrumental with its usual steps."""
     p.detect(lambda f, m: _progress(None if f is None else 0.3 * f, f"Finding damage: {m}"))
     steps = [x["key"] for x in p.build_plan() if x["on"]]
-    if "deep" in steps:
-        try:
-            _deep_clean(p, 0.3, 0.55)
-        except Exception as e:
-            log(f"auto: second pass skipped: {e}")
+    _pre_build(p, steps, 0.3, 0.55)
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.55 + 0.42 * f, m))
     _progress(0.98, "Saving")
     p.save()
@@ -615,7 +676,7 @@ def reveal(path):
     """Open a folder in the file manager. Only folders inside the app's own folder: on Windows,
     opening a file would run it, so files are shown selected in their folder instead."""
     path = os.path.realpath(path or HOME)
-    if not _inside(path, HOME) or not os.path.exists(path):
+    if not (_inside(path, HOME) or _inside(path, DG.log_dir())) or not os.path.exists(path):
         log(f"reveal refused: {path}")
         return
     try:
@@ -916,6 +977,20 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Unknown strength.")
                 _start_job(_job_vinyl, st_)
                 return self._send(200, {"ok": True})
+            if path == "/api/gpu":
+                cuda = INST.nvidia_cuda()
+                if not cuda:
+                    return self._send(400, {"error": "No NVIDIA graphics card (or its driver) was found. The separation model "
+                                                     "can use NVIDIA cards on Windows and Linux, and Apple Silicon Macs; "
+                                                     "other cards run on the processor. If you have an NVIDIA card, update "
+                                                     "its driver from nvidia.com and try again."})
+                if S.model.get("device_kind") == "cuda":
+                    return self._send(200, {"ok": True, "message": f"Already using your graphics card: {S.model.get('device')}."})
+                SEP._DEVICE = None
+                start_model_install(force=True)          # the plan picks the graphics-card build for this driver
+                return self._send(200, {"ok": True, "message": f"Setting up the separation model for your NVIDIA card "
+                                                             f"(CUDA {cuda[0]}.{cuda[1]}). It downloads once; watch the "
+                                                             f"model light."})
             if path == "/api/deep":
                 if self._proj().stage != "detected":
                     raise ValueError("Find damage first (step 3).")
@@ -940,6 +1015,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not steps:
                     return self._send(400, {"error": "Choose at least one step."})
                 _start_job(_job_build, steps)
+                return self._send(200, {"ok": True})
+            if path == "/api/import_ref":
+                src = os.path.realpath(str(d.get("path") or ""))
+                if not src.startswith(os.path.realpath(UPLOADS) + os.sep) or not os.path.isfile(src):
+                    return self._send(400, {"error": "That file isn't available."})
+                kind = "sample" if d.get("kind") == "sample" else "track"
+                stem = str(d.get("stem") or "")
+                if kind == "track" and stem not in self._proj().instruments:
+                    return self._send(400, {"error": "Choose which instrument it is."})
+                _start_job(_job_import_ref, src, kind, stem, os.path.basename(str(d.get("name") or src))[:80])
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
                 folder = d["folder"]
@@ -995,7 +1080,7 @@ class Handler(BaseHTTPRequestHandler):
                 extra = {"App version": __version__, "Model": {k: v for k, v in S.model.items() if k != "plan"},
                          "Song open": S.project.meta.get("name") if S.project else None,
                          "Songs saved": len(list_projects()), "Safe mode": getattr(S, "safe", False)}
-                path_ = DG.export_bundle(os.path.join(HOME, "logs"), extra)
+                path_ = DG.export_bundle(DG.log_dir(), extra)
                 if d.get("reveal", True):
                     reveal(path_)
                 return self._send(200, {"ok": True, "path": path_})

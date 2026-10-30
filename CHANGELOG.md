@@ -1,5 +1,16 @@
 # What's new
 
+## 1.23.0
+
+- **Fix: Repaired didn't play after a split** (since 1.21). Rendering crashed whenever a frequency cut was in place. Every release is now tested end to end on the demo song before it's published, so a break like this can't ship again.
+- **Faster:** lowering frequencies (follow and pitch modes) is about 8 times faster, the quality scores and leftover map about 10 times, export about twice as fast.
+- **Bring back lost details.** Synths, effects and small parts the split filed as "vocals" are found with one quick model run on the vocal track (once per song) and brought back where they don't move like the singer. A new Build step, on by default.
+- **Add a clean track or sample** (step 4). An official stem or session track of one instrument is lined up with the song and offered section by section; a clean hit or note is matched to the sound it is in the song and used to rebuild that sound's damaged and missing hits.
+- **Better samples.** Musical 4- and 2-bar loops of each section kind (from the finished instrumental and each instrument, named with section and tempo), only the hits and notes that are a real part of the song, and only riffs that repeat.
+- **Fewer vocal-remover passes.** The second vocal-removal pass is now off by default in Build; the focus is on rebuilding from what the split gave.
+- **Use my graphics card** in Settings: installs the NVIDIA (CUDA) version of the separation model when you have an NVIDIA card. The setup check warns when one isn't being used.
+- **Logs next to the app:** a *logs* folder beside the start files, with *app.log* and *errors.log* (only the problems).
+
 ## 1.22.6
 
 - **No Roformer unless you ask for it.** The second vocal-removal pass (and Build the best instrumental, which runs it) now uses the faster standard model; Roformer was used automatically whenever it was installed, which is much slower. Turn it back on in Settings with *Use Roformer for extra passes*. The suggestion to try a different model also stops recommending Roformer splits unless that's on, and the Roformer split options are marked *slow*. Roformer splits you pick yourself work as before.

@@ -8,7 +8,7 @@ import time
 import numpy as np
 
 from . import analysis as A
-from .audio import EPS, HOP, N_FFT, load_audio, save_audio, stft, log
+from .audio import EPS, HOP, N_FFT, load_audio, save_audio, stft, istft, log
 from .repair import (match_window, refine_lag, repair_window, bleed_window, smooth_window, ess_window,
                      MARGIN, XFADE, _window_weight)
 from .audio import segment
@@ -108,12 +108,16 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
-        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail"):
+        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache"):
             self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
             np.save(os.path.join(self.root, "stems", k + ".npy"), v)
         np.save(os.path.join(self.root, "stems", "_original.npy"), self.original)
+        try:
+            os.remove(os.path.join(self.root, "stems", "_recovered.npy"))     # belongs to the old vocal track
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------ analysis
     def analyze(self, progress=lambda f, m: None):
@@ -680,7 +684,17 @@ class Project:
 
     def shaped_stem(self, k, a=0, b=None, version="repaired"):
         """Rendered stem for [a, b) including the full tone match, the 'fill under the vocals' lift and the
-        'clear the mud under the vocals' cut, if set. All act only under the singing."""
+        'clear the mud under the vocals' cut, and frequency cuts, if set. All act only under the singing.
+        The whole-song result is kept until the instrument or those settings change."""
+        if version == "repaired" and a == 0 and (b is None or b >= self.stems[k].shape[1]):
+            m = self.mixer
+            extra = json.dumps([m.get("tone_eq", {}).get(k), m.get("vocal_lift", {}).get(k), m.get("mud_cut", {}).get(k),
+                                [r for r in (m.get("eq_ranges") or []) if r.get("stem") in (None, "", k)],
+                                m.get("keep", []), m.get("seams", [])], sort_keys=True)
+            return self._stem_cached("shaped", k, extra, lambda: self._shaped(k, 0, None, version))
+        return self._shaped(k, a, b, version)
+
+    def _shaped(self, k, a=0, b=None, version="repaired"):
         rep_ = version == "repaired"
         y = self._toned(k) if rep_ and self.mixer.get("tone_eq", {}).get(k) else self.render_stem(k, version)
         b = y.shape[1] if b is None else b
@@ -717,23 +731,32 @@ class Project:
         Ev = VF.band_energy(self.stems["vocals"].mean(0), self.B)
         nf = min(Es.shape[1], Ev.shape[1])
         vb = (np.asarray(self.centers) >= 250) & (np.asarray(self.centers) <= 5000)
-        Ls, Lv = np.log(Es[vb, :nf] + 1e-10), np.log(Ev[vb, :nf] + 1e-10)
-        tot_s = Es[:, :nf].sum(0) + 1e-12
-        voc = self._vocal_curve(0, nf * HOP)[::HOP][:nf]
+        X, Y = np.log(Es[vb, :nf] + 1e-10), np.log(Ev[vb, :nf] + 1e-10)
+        nb = X.shape[0]
+        # per-frame sums, then running sums: the correlation over any window of frames in O(1)
+        cs = lambda a: np.r_[0.0, np.cumsum(a)]
+        Sx, Sy, Sxx, Syy, Sxy = (cs(X.sum(0)), cs(Y.sum(0)), cs((X * X).sum(0)), cs((Y * Y).sum(0)), cs((X * Y).sum(0)))
+        share_s = cs(Es[vb, :nf].sum(0))
+        tot_s = cs(Es[:, :nf].sum(0))
+        voc = cs(self._vocal_curve(0, nf * HOP)[::HOP][:nf])
         fps = self.sr / HOP
-        win, hop = int(0.75 * fps), int(fps / self.MAP_RATE)
+        win, hop = int(0.75 * fps), max(1, int(fps / self.MAP_RATE))
         out = []
         for c in range(0, nf, hop):
             a, b = max(0, c - win // 2), min(nf, c + win // 2)
-            if b - a < 8 or float(voc[a:b].mean()) < 0.2:
+            m = (b - a) * nb
+            if b - a < 8 or (voc[b] - voc[a]) / (b - a) < 0.2:
                 out.append(0.0)
                 continue
-            x, z = Ls[:, a:b].ravel(), Lv[:, a:b].ravel()
-            if x.std() < 1e-3 or z.std() < 1e-3:
+            sx, sy = Sx[b] - Sx[a], Sy[b] - Sy[a]
+            vx = (Sxx[b] - Sxx[a]) - sx * sx / m
+            vy = (Syy[b] - Syy[a]) - sy * sy / m
+            cv = (Sxy[b] - Sxy[a]) - sx * sy / m
+            if vx <= 1e-9 or vy <= 1e-9:
                 out.append(0.0)
                 continue
-            r = float(np.corrcoef(x, z)[0, 1])
-            share = float(Es[vb, a:b].sum() / tot_s[a:b].sum())          # how much of it is in the vocal range
+            r = cv / np.sqrt(vx * vy)
+            share = (share_s[b] - share_s[a]) / ((tot_s[b] - tot_s[a]) + 1e-12)
             out.append(round(float(np.clip((r - 0.35) / 0.4, 0, 1) * np.clip(share * 1.5, 0, 1)), 2))
         return out
 
@@ -848,6 +871,214 @@ class Project:
                     ids.append(rid)
             return ids
 
+    # ------------------------------------------------------------------ recover what the split put in the vocals
+    def _recover_target(self):
+        for k in ("other", "piano", "guitar"):
+            if k in self.instruments:
+                return k
+        return next((k for k in self.instruments if k not in NOT_REPAIRED and k not in self.PERCUSSIVE), None)
+
+    def add_recovered(self, rec):
+        """`rec`: the non-vocal sound a model found inside the vocal track (synths, effects, guitar licks the split
+        filed as "vocals"). Offer it back, per section, in bars where it doesn't move like the singer. Returns ids."""
+        with self.lock:
+            k = self._recover_target()
+            if k is None:
+                return []
+            n = self.stems[k].shape[1]
+            rec = np.asarray(rec, np.float32)[:, :n]
+            vb = (np.asarray(self.centers) >= 250) & (np.asarray(self.centers) <= 5000)
+            w = np.zeros(n, np.float32)
+            inst_level = float((self.inst_sum[:, :n] ** 2).mean()) + 1e-12
+            for wi, (s0, L) in enumerate(self.windows):
+                a, b = self._window_samples(s0, L)
+                b = min(b, n)
+                if b - a < self.sr // 4:
+                    continue
+                seg = rec[:, a:b]
+                if float((seg ** 2).mean()) < 1e-4 * inst_level:
+                    continue                                       # nothing there worth bringing back
+                Er = VF.band_energy(seg.mean(0), self.B)[vb]
+                Ev = VF.band_energy(self.stems["vocals"][:, a:b].mean(0), self.B)[vb]
+                x, y = np.log(Er + 1e-10).ravel(), np.log(Ev + 1e-10).ravel()
+                if x.std() > 1e-3 and y.std() > 1e-3 and np.corrcoef(x, y)[0, 1] > 0.6:
+                    continue                                       # moves like the voice: not an instrument
+                w[a:b] = 1
+            if not w.any():
+                return []
+            from scipy.ndimage import uniform_filter1d
+            w = uniform_filter1d(w, int(0.03 * self.sr))
+            ids = []
+            for si, sec in enumerate(self.sections):
+                a, b = int(sec["start"] * self.sr), min(n, int(sec["end"] * self.sr))
+                if b <= a or not w[a:b].any():
+                    continue
+                patch = rec[:, a:b] * w[None, a:b]
+                if float((patch ** 2).mean()) < 1e-4 * inst_level:
+                    continue
+                rid = f"rc_{si}"
+                if rid in self.suggestions and self.suggestions[rid]["status"] != "pending":
+                    continue                                       # already decided: leave it
+                self.suggestions[rid] = {
+                    "id": rid, "type": "rebuild", "stem": k, "status": "pending", "start": sec["start"], "end": sec["end"],
+                    "section": si, "conf": 0.9, "severity": 0.0, "donors": [], "recover": True,
+                    "note": "Brings back sounds the split put in the vocal track (synths, effects, small details), only "
+                            "where they don't move like the singer"}
+                self.patches[rid] = (a, patch.astype(np.float16))
+                ids.append(rid)
+            self.check_ids(ids)
+            return ids
+
+    # ------------------------------------------------------------------ your own clean tracks and samples
+    def add_reference_track(self, audio, k, name):
+        """A clean recording of one instrument from this song (an official stem, a session file...): line it up
+        with the song, match its level, and offer it for that instrument, section by section. Returns ids."""
+        from scipy import signal as sig
+        with self.lock:
+            if k not in self.stems:
+                raise ValueError(f"No {k} track in this song.")
+            sr, n = self.sr, self.original.shape[1]
+            audio = np.asarray(audio, np.float32)
+            if audio.shape[0] == 1:
+                audio = np.repeat(audio, 2, axis=0)
+            # line up: attack envelopes at 1 kHz, cross-correlated against the original song
+            ea = VF.onset_env(audio.mean(0), sr)
+            eo = VF.onset_env(self.stems[k].mean(0), sr)
+            if len(ea) < 200 or len(eo) < 200:
+                raise ValueError("That file is too short to line up with the song.")
+            xc = sig.fftconvolve(eo, ea[::-1], mode="full")
+            lag_ms = int(np.argmax(xc)) - (len(ea) - 1)          # where the file starts in the song, in ms
+            peak = float(xc.max())
+            o0, o1 = max(0, lag_ms), min(len(eo), lag_ms + len(ea))
+            sa = ea[o0 - lag_ms:o1 - lag_ms]
+            score = peak / (np.linalg.norm(eo[o0:o1]) * np.linalg.norm(sa) + 1e-9)
+            if score < 0.3:
+                raise ValueError(f"Couldn't line \"{name}\" up with the {k} in this song (match {score:.0%}). Is it from "
+                                 f"this recording, at the same speed?")
+            off = int(round(lag_ms * sr / 1000))
+            ref = np.zeros((2, n), np.float32)
+            s0, s1 = max(0, off), min(n, off + audio.shape[1])
+            ref[:, s0:s1] = audio[:, s0 - off:s1 - off]
+            # refine to the sample (within +-5 ms) on the first strong part
+            a = s0 + int(0.5 * sr)
+            if a + sr < s1:
+                sh = __import__("studio.hits", fromlist=["align"]).align(self.stems[k][:, a:a + sr].mean(0), ref[:, a:a + sr].mean(0),
+                                                                         int(0.005 * sr))
+                ref = np.roll(ref, -sh, axis=1)
+            ids = []
+            raw = self.stems[k]
+            for si, sec in enumerate(self.sections):
+                a, b = int(sec["start"] * sr), min(n, int(sec["end"] * sr))
+                rs = ref[:, a:b]
+                if b - a < sr // 2 or float((rs ** 2).mean()) < 1e-8:
+                    continue
+                # level: match the instrument where nobody sings (else the whole section)
+                vc = self._vocal_curve(a, b) < 0.1
+                m = vc if vc.sum() > sr // 4 else np.ones(b - a, bool)
+                g = np.sqrt(float((raw[:, a:b][:, m] ** 2).mean()) / (float((rs[:, m] ** 2).mean()) + 1e-12))
+                g = float(np.clip(g, 0.1, 10))
+                lo, hi = max(0, a - XFADE), min(n, b + XFADE)
+                t = np.arange(lo, hi) / sr
+                ramp = 0.02
+                W = np.minimum(np.clip((t - sec["start"] + ramp / 2) / ramp, 0, 1),
+                               np.clip((sec["end"] + ramp / 2 - t) / ramp, 0, 1)).astype(np.float32)
+                rid = f"ref_{k}_{si}"
+                self.suggestions[rid] = {
+                    "id": rid, "type": "alt", "stem": k, "status": "pending", "start": sec["start"], "end": sec["end"],
+                    "section": si, "conf": round(float(score), 2), "severity": 0.0, "strength": 1.0, "donors": [],
+                    "alt_mode": "imported", "blend": 0.0, "reference": name,
+                    "note": f"Uses your imported \"{name}\" for the {k} here (lined up with the song, level-matched)"}
+                self.patches[rid] = (lo, (W[None, :] * (ref[:, lo:hi] * g - raw[:, lo:hi])).astype(np.float16))
+                self.take_w[rid] = (lo, W.astype(np.float16))
+                ids.append(rid)
+            return ids
+
+    def add_reference_sample(self, audio, name):
+        """A clean one-shot (one drum hit or one note): find the repeated sound in the song it is, and rebuild that
+        sound's damaged hits (and the ones the pattern says the vocals took) from it. Returns (ids, what)."""
+        with self.lock:
+            sr = self.sr
+            smp = np.asarray(audio, np.float32)
+            if smp.shape[0] == 1:
+                smp = np.repeat(smp, 2, axis=0)
+            on = HT.onsets(smp.mean(0), sr)
+            st = int(on[0]) if len(on) else int(np.argmax(np.abs(smp.mean(0)) > 0.1 * np.abs(smp).max()))
+            smp = smp[:, max(0, st - int(0.003 * sr)):]
+            B, _ = HT._bands(sr)
+            F, _ = HT._hit_features(smp.mean(0), np.array([int(0.003 * sr)]), sr, B)
+            f = F[0] - F[0].mean()
+            best = None
+            for k in self.instruments:
+                if k not in self.PERCUSSIVE and not self._tonal(k):
+                    continue
+                try:
+                    sd = self._sounds(k)
+                except Exception:
+                    continue
+                for snd in sd["sounds"]:
+                    sh = sd["F"][snd.get("members") or [snd["best"]]].mean(0)
+                    sh = sh - sh.mean()
+                    cos = float(f @ sh / (np.linalg.norm(f) * np.linalg.norm(sh) + 1e-12))
+                    if best is None or cos > best[0]:
+                        best = (cos, k, snd)
+            if best is None or best[0] < 0.75:
+                raise ValueError(f"\"{name}\" doesn't sound like any of the repeated hits or notes in this song "
+                                 f"(closest match {0 if best is None else best[0]:.0%}).")
+            cos, k, snd = best
+            sd = self._sounds(k)
+            raw = self.stems[k]
+            n = raw.shape[1]
+            L = int(min(smp.shape[1], (0.35 if k in self.PERCUSSIVE else 0.5) * sr))
+            pad = int(sr)
+            # the sample sits after the song in an extended copy, so the repair engine can borrow from it
+            ext = np.concatenate([raw, np.zeros((2, pad), np.float32), smp[:, :L + 4096]], axis=1)
+            vext = np.concatenate([self.stems["vocals"], np.zeros((2, ext.shape[1] - n), np.float32)], axis=1)
+            iext = np.concatenate([self.inst_sum, np.zeros((2, ext.shape[1] - n), np.float32)], axis=1)
+            sp = n + pad
+            pre = int(0.003 * sr)
+            targets = [int(sd["pos"][i]) for i in snd["damaged"]]
+            try:
+                targets += self.find_pattern_hits().get((k, snd["id"]), [])
+            except Exception:
+                pass
+            by_sec = {}
+            for q in sorted(set(targets)):
+                by_sec.setdefault(self._section_of(q / sr), []).append(q)
+            ids = []
+            for si, qs in by_sec.items():
+                if si is None:
+                    continue
+                sec = self.sections[si]
+                a, b = max(0, int(sec["start"] * sr) - 2048), min(n, int(sec["end"] * sr) + int(0.4 * sr))
+                patch = np.zeros((2, b - a), np.float32)
+                used = 0
+                for q in qs:
+                    Lq = min(L, int(0.25 * sr))
+                    if q - pre - MARGIN < a or q + Lq + MARGIN > b:
+                        continue
+                    shf = HT.align(ext[:, sp:sp + pre + Lq].mean(0), self.original[:, q - pre:q + Lq].mean(0), int(0.002 * sr))
+                    res = repair_window(ext, vext, iext, q - pre, q + Lq, [(sp + pre - q) - shf], 1.0, 1.0,
+                                        self.B, self.centers, sr, self._level_floor(k))
+                    if res["severity"] < 0.02:
+                        continue
+                    lo, pp = res["lo"], res["patch"]
+                    o0, o1 = max(lo, a), min(lo + pp.shape[1], b)
+                    patch[:, o0 - a:o1 - a] += pp[:, o0 - lo:o1 - lo]
+                    used += 1
+                if not used:
+                    continue
+                rid = f"smp_{k}_{snd['id']}_{si}"
+                self.suggestions[rid] = {
+                    "id": rid, "type": "hits", "stem": k, "sound": snd["id"], "status": "pending", "pattern": True,
+                    "start": sec["start"], "end": sec["end"], "section": si, "conf": round(cos, 2), "severity": 0.0,
+                    "strength": 1.0, "donors": [], "reference": name,
+                    "note": f"Rebuilds {used} {snd['name']} hit{'s' if used != 1 else ''} from your sample \"{name}\" "
+                            f"({cos:.0%} match), lined up with the original"}
+                self.patches[rid] = (a, patch.astype(np.float16))
+                ids.append(rid)
+            self.check_ids(ids)
+            return ids, f"the {snd['name']} on the {k} ({cos:.0%} match)"
+
     # ------------------------------------------------------------------ the singer's pitch
     def _vocal_f0(self, V, sr):
         """Fundamental frequency of the singing per STFT frame of a vocal magnitude spectrum V (bins, frames),
@@ -892,19 +1123,24 @@ class Project:
                 f0[i], voiced[i] = hf, hv
         bw = sr / N_FFT
         nb, nf = V.shape
-        freqs = np.arange(nb)[:, None] * bw
-        cut = np.zeros((nb, nf))
+        cut = np.zeros((nb, nf), np.float32)
         vmax = V.max(0) + 1e-9
+        cols = np.arange(nf)
         for h in range(1, 25):
             fh = f0 * h
             if (fh > hi * 1.25).all():
                 break
             sigma = np.maximum(1.2 * bw, 0.015 * fh)
-            shape = np.exp(-0.5 * ((freqs - fh[None, :]) / sigma[None, :]) ** 2)
-            bi = np.clip(np.round(fh / bw).astype(int), 0, nb - 1)
-            strength = np.sqrt(np.clip(V[bi, np.arange(nf)] / vmax, 0, 1))
-            inband = ((fh >= lo * 0.8) & (fh <= hi * 1.25)).astype(float)
-            cut = np.maximum(cut, shape * (strength * inband * voiced)[None, :])
+            c = np.round(fh / bw).astype(int)
+            strength = np.sqrt(np.clip(V[np.clip(c, 0, nb - 1), cols] / vmax, 0, 1))
+            amt = strength * ((fh >= lo * 0.8) & (fh <= hi * 1.25)) * voiced
+            for d in range(-4, 5):                     # only the few bins around each harmonic
+                idx = c + d
+                ok = (idx >= 0) & (idx < nb) & (amt > 0)
+                if not ok.any():
+                    continue
+                val = np.exp(-0.5 * ((idx[ok] * bw - fh[ok]) / sigma[ok]) ** 2) * amt[ok]
+                cut[idx[ok], cols[ok]] = np.maximum(cut[idx[ok], cols[ok]], val)
         return 1 - (1 - g) * cut
 
     # ------------------------------------------------------------------ lower frequencies in part of the song
@@ -950,12 +1186,19 @@ class Project:
                 side = (x[0] - x[1]) * 0.5
                 x = ((x[0] + x[1]) * 0.5)[None, :].copy()
             if r.get("mode") == "pitch":
-                # notch exactly the notes the singer is singing (and their overtones), nothing in between
-                V = np.abs(stft(self.stems["vocals"][:, s0:s1].mean(0)))
-                plo = 80.0 if r.get("preset") in (None, "vocal") else lo
-                G = self._pitch_gain(V, sr, g, plo, hi)
-                wf = np.interp(np.arange(V.shape[1]) * HOP, np.arange(len(w)), w)
-                G = 1 - (1 - G) * wf[None, :]
+                # notch exactly the notes the singer is singing (and their overtones), nothing in between.
+                # It depends only on the singing, so it's worked out once per range and kept.
+                gcache = self.__dict__.setdefault("_eq_gain_cache", {})
+                gkey = ("pitch", json.dumps(r, sort_keys=True), s0, s1)
+                if gkey not in gcache:
+                    V = np.abs(stft(self.stems["vocals"][:, s0:s1].mean(0)))
+                    plo = 80.0 if r.get("preset") in (None, "vocal") else lo
+                    G = self._pitch_gain(V, sr, g, plo, hi)
+                    wf = np.interp(np.arange(V.shape[1]) * HOP, np.arange(len(w)), w)
+                    gcache[gkey] = (1 - (1 - G) * wf[None, :]).astype(np.float32)
+                    if len(gcache) > 64:
+                        gcache.pop(next(iter(gcache)))
+                G = gcache[gkey]
                 for ch in range(x.shape[0]):
                     X = stft(x[ch])
                     m = min(X.shape[1], G.shape[1])
@@ -963,13 +1206,19 @@ class Project:
                     x[ch] = istft(X, x.shape[1])
             elif r.get("mode") == "follow":
                 # cut each frequency by how much the singer is using it at that moment (within the band)
-                V = np.abs(stft(self.stems["vocals"][:, s0:s1].mean(0)))
-                freqs = np.fft.rfftfreq(N_FFT, 1.0 / sr)
-                band = np.clip(np.minimum((freqs - lo * 0.8) / (lo * 0.2 + 1e-9), (hi * 1.25 - freqs) / (hi * 0.25 + 1e-9)), 0, 1)
-                ref = np.percentile(V[band > 0.5], 95) + 1e-9 if (band > 0.5).any() else V.max() + 1e-9
-                use = gaussian_filter(np.clip(V / ref, 0, 1), (1.5, 1.0)) * band[:, None]
-                wf = np.interp(np.arange(V.shape[1]) * HOP, np.arange(len(w)), w)
-                G = 1 - (1 - g) * use * wf[None, :]
+                gcache = self.__dict__.setdefault("_eq_gain_cache", {})
+                gkey = ("follow", json.dumps(r, sort_keys=True), s0, s1)
+                if gkey not in gcache:
+                    V = np.abs(stft(self.stems["vocals"][:, s0:s1].mean(0)))
+                    freqs = np.fft.rfftfreq(N_FFT, 1.0 / sr)
+                    band = np.clip(np.minimum((freqs - lo * 0.8) / (lo * 0.2 + 1e-9), (hi * 1.25 - freqs) / (hi * 0.25 + 1e-9)), 0, 1)
+                    ref = np.percentile(V[band > 0.5], 95) + 1e-9 if (band > 0.5).any() else V.max() + 1e-9
+                    use = gaussian_filter(np.clip(V / ref, 0, 1), (1.5, 1.0)) * band[:, None]
+                    wf = np.interp(np.arange(V.shape[1]) * HOP, np.arange(len(w)), w)
+                    gcache[gkey] = (1 - (1 - g) * use * wf[None, :]).astype(np.float32)
+                    if len(gcache) > 64:
+                        gcache.pop(next(iter(gcache)))
+                G = gcache[gkey]
                 for ch in range(x.shape[0]):
                     X = stft(x[ch])
                     m = min(X.shape[1], G.shape[1])
@@ -1267,7 +1516,7 @@ class Project:
                 res = self._run_repair(sug["stem"], sug["beat"], sug["beats"], donors, sug["conf"], strength)
                 self._store_patch(sid, sug["stem"], res)
                 sug["added_db"] = res["added_db"]
-            elif sug["type"] == "rebuild":
+            elif sug["type"] == "rebuild" and "beat" in sug and sug.get("donors"):
                 F, C, R = self.stem_feats[sug["stem"]]
                 donors = [{"beat": d["beat"], "dist": 1 - d["match"], "overlap": d["vocal_overlap"]} for d in sug["donors"]]
                 b0, b1 = self.beats[sug["beat"]], self.beats[sug["beat"] + sug["beats"]]
@@ -2813,20 +3062,93 @@ class Project:
         pk = float(np.abs(y).max())
         return y * (0.89 / pk) if pk > 1e-6 else y          # -1 dB peak
 
+    SAMPLE_MIN_COUNT = 6       # a hit or note must repeat this often to count as a real part of the song
+    SAMPLE_PER_STEM = 6        # at most this many hit/note samples per instrument (the most prominent ones)
+
+    def _phrase_loops(self, bars=4):
+        """For each kind of section (Verse, Chorus, ...): the cleanest `bars`-bar phrase of it, starting on a bar,
+        where the least singing was and the music is at its usual level. [(kind, a, b, t)] in samples."""
+        full = max((L for _, L in self.windows), default=0)
+        by_kind = {}
+        for si, sec in enumerate(self.sections):
+            kind = sec.get("base") or "".join(c for c in sec["name"] if not c.isdigit()).strip() or "Part"
+            by_kind.setdefault(kind, []).append(si)
+        level = (self.inst_sum ** 2).mean(0)
+        out = []
+        for kind, sis in by_kind.items():
+            best = None
+            for si in sis:
+                sec = self.sections[si]
+                ws = [w for w in range(sec.get("start_bar", 0), sec.get("end_bar", 0)) if self.windows[w][1] == full]
+                for j in range(len(ws) - bars + 1):
+                    run = ws[j:j + bars]
+                    if run[-1] - run[0] != bars - 1:
+                        continue
+                    s0 = self.windows[run[0]][0]
+                    s1 = self.windows[run[-1]][0] + full
+                    a, b = int(self.beats[s0] * HOP), int(self.beats[s1] * HOP)
+                    voc = float(np.asarray(self.VA[s0:s1]).mean()) if len(self.VA) else 0.0
+                    en = float(level[a:b].mean())
+                    score = voc - 0.05 * np.log(en + 1e-12)          # least singing first, then fuller sound
+                    if best is None or score < best[0]:
+                        best = (score, a, b, self.beat_times[s0])
+            if best:
+                out.append((kind, best[1], best[2], best[3]))
+        return out
+
     def export_samples(self, folder, raw=True, merged=True, fmt="wav"):
-        """Write the song's reusable pieces: every repeated drum hit and note (its cleanest copy, and a
-        merge of its cleanest copies) and every repeated riff or loop (same two), plus the cleanest bars
-        of each drum track. Taken from the split, before any repairs. Returns the files written."""
+        """Write the song's reusable pieces, with context:
+        - Loops: for every kind of section, its cleanest 4-bar and 2-bar phrase, starting on the bar, from the
+          finished (repaired) instrumental and from each instrument, named with the section and tempo.
+        - Hits and notes: only sounds that are a real part of the song (repeat often, are among the loudest on
+          their track), cleanest copy and a merge of the cleanest copies.
+        - Riffs: patterns that repeat at least 4 times. Returns the files written."""
         import re as _re
         safe = lambda t: _re.sub(r'[\\/:*?"<>|]+', "-", t).strip() or "sample"
         written = []
 
-        def put(sub, name, y):
+        def put(sub, name, y, shape=True):
             d = os.path.join(folder, safe(sub))
             os.makedirs(d, exist_ok=True)
             p = os.path.join(d, safe(name) + "." + fmt)
-            save_audio(p, self._sample_ready(y), self.sr, bits=24 if fmt == "wav" else 32)
+            y = self._sample_ready(y) if shape else np.asarray(y, np.float32)
+            save_audio(p, y, self.sr, bits=24 if fmt == "wav" else 32)
             written.append(p)
+
+        bt = np.diff(np.asarray(self.beat_times, float))
+        bpm = int(round(60.0 / float(np.median(bt)))) if len(bt) else 0
+        tempo = f" {bpm} BPM" if bpm else ""
+        ts = lambda t: f"{int(t // 60)}m{t % 60:04.1f}s"
+
+        def loop_ready(y):
+            """Loops keep their level relation and get only tiny edge fades, so they cycle without clicks."""
+            y = np.asarray(y, np.float32).copy()
+            f = min(y.shape[1] // 8, int(0.004 * self.sr))
+            if f:
+                y[:, :f] *= np.linspace(0, 1, f, dtype=np.float32)
+                y[:, -f:] *= np.linspace(1, 0, f, dtype=np.float32)
+            return y
+
+        # 1. musical loops of each section kind
+        if raw:
+            try:
+                full = self.mix("repaired")
+                pk = float(np.abs(full).max()) + 1e-9
+                g = 0.89 / pk if pk > 0.89 else 1.0
+                tracks = {k: self.render_stem(k) for k in self.instruments}
+                for bars in (4, 2):
+                    for kind, a, b, t in self._phrase_loops(bars):
+                        base = f"{kind} - {bars} bars{tempo} (from {ts(t)})"
+                        put("Loops - full instrumental", base, loop_ready(full[:, a:b] * g), shape=False)
+                        for k, y in tracks.items():
+                            seg = y[:, a:b]
+                            if float((seg ** 2).mean()) < 1e-7:
+                                continue                          # this instrument doesn't play there
+                            put(f"Loops - {k}", base, loop_ready(seg * g), shape=False)
+            except Exception as e:
+                log(f"samples: loops skipped: {e}")
+
+        # 2. prominent hits and notes
         pre = int(0.005 * self.sr)
         for k in self.instruments:
             perc = k in self.PERCUSSIVE
@@ -2838,16 +3160,24 @@ class Project:
                 log(f"samples: hits skipped for {k}: {e}")
                 continue
             x = self.stems[k]
-            for snd in sd["sounds"]:
+            cand = [snd for snd in sd["sounds"] if snd["count"] >= self.SAMPLE_MIN_COUNT]
+            if not cand:
+                continue
+            lvl = {snd["id"]: float(np.median(sd["lv"][snd["members"]])) for snd in cand}
+            top = max(lvl.values())
+            cand = [snd for snd in cand if lvl[snd["id"]] >= top - np.log(10 ** 1.8)]    # within 18 dB of the loudest
+            cand.sort(key=lambda snd: -(np.log(snd["count"]) + 0.5 * (lvl[snd["id"]] - top)))
+            for rank, snd in enumerate(cand[:self.SAMPLE_PER_STEM]):
                 ranked = snd.get("ranked") or [snd["best"]]
                 p0 = int(sd["pos"][ranked[0]])
                 L = int(min(sd["next"][ranked[0]] - p0, (1.5 if perc else 2.0) * self.sr))
                 if p0 - pre < 0 or L < int(0.03 * self.sr):
                     continue
                 best = x[:, p0 - pre:p0 + L]
-                label = f"{snd['name']} ({snd['count']}x)"
+                secn = self.sections[self._section_of(p0 / self.sr)]["name"] if self.sections else ""
+                label = f"{rank + 1:02d} {snd['name']} - played {snd['count']}x" + (f" (cleanest in {secn})" if secn else "")
                 if raw:
-                    put(f"{k}", f"{label} - cleanest", best)
+                    put(f"Hits - {k}", f"{label} - cleanest", best)
                 if merged and len(ranked) >= 2:
                     clips = [best]
                     for j in ranked[1:self.BLEND_HITS]:
@@ -2859,16 +3189,22 @@ class Project:
                         if q0 >= 0 and q0 + best.shape[1] <= x.shape[1]:
                             clips.append(x[:, q0:q0 + best.shape[1]])
                     if len(clips) >= 2:
-                        put(f"{k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
-        # loops and riffs that repeat
-        for gi, g in enumerate(self.best_bars()):
+                        put(f"Hits - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
+
+        # 3. riffs that really repeat
+        per = {}
+        for g in sorted(self.best_bars(), key=lambda g: -g["count"]):
+            if g["count"] < 4 or per.get(g["stem"], 0) >= 4:
+                continue
+            per[g["stem"]] = per.get(g["stem"], 0) + 1
             k, members = g["stem"], g.get("members") or [g["best"]]
             s0, L = self.windows[members[0]]
             a, b = self._window_samples(s0, L)
             best = self.stems[k][:, a:b]
-            label = f"loop {gi + 1:02d} at {int(g['best_time'] // 60)}m{g['best_time'] % 60:04.1f}s ({g['count']}x)"
+            secn = self.sections[self._section_of(a / self.sr)]["name"] if self.sections else ""
+            label = f"riff {per[k]} - repeats {g['count']}x{tempo} ({secn}, {ts(g['best_time'])})"
             if raw:
-                put(f"{k} loops", f"{label} - cleanest", best)
+                put(f"Riffs - {k}", f"{label} - cleanest", best)
             if merged and len(members) >= 2:
                 clips = [best]
                 for v in members[1:self.BLEND_HITS]:
@@ -2880,25 +3216,12 @@ class Project:
                     xi = np.linspace(0, c.shape[1] - 1, best.shape[1])   # same length as the cleanest bar
                     clips.append(np.stack([np.interp(xi, np.arange(c.shape[1]), c[ch]) for ch in range(c.shape[0])]).astype(np.float32))
                 if len(clips) >= 2:
-                    put(f"{k} loops", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
-        # drum tracks: their cleanest whole bars
-        if raw:
-            for k in [x for x in self.instruments if x in self.PERCUSSIVE]:
-                try:
-                    info = [(self._bar_cover(k, w)[0], w) for w in range(len(self.windows))]
-                except Exception:
-                    continue
-                loud = [w for c_, w in sorted(info) if self.windows[w][1] == max(L for _, L in self.windows)][:3]
-                for r_, w in enumerate(loud):
-                    s0, L = self.windows[w]
-                    a, b = self._window_samples(s0, L)
-                    t = self.beat_times[s0]
-                    put(f"{k} loops", f"cleanest bar {r_ + 1} at {int(t // 60)}m{t % 60:04.1f}s", self.stems[k][:, a:b])
+                    put(f"Riffs - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
         return written
 
     # ------------------------------------------------------------------ build the best instrumental
-    AUTO_STEPS = ("keep", "bestof", "versions", "bars", "hits", "pattern", "repairs", "deep", "leftovers", "clicks",
-                  "improve", "mutes", "notch", "tone", "seams")
+    AUTO_STEPS = ("keep", "bestof", "versions", "bars", "hits", "pattern", "repairs", "recover", "deep", "leftovers",
+                  "clicks", "improve", "mutes", "notch", "tone", "seams")
 
     def _free_sections(self):
         """Sections with no singing: the original recording already is a clean instrumental there."""
@@ -2942,9 +3265,13 @@ class Project:
             ("repairs", "Apply the repairs with a close match",
              "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
              len([x for x in pend(("repair",)) if x.get("recommended")])),
+            ("recover", "Bring back details the split put in the vocal track",
+             "Synths, effects and small parts often get filed as \"vocals\". One quick model run on the vocal track finds "
+             "them (done once per song) and brings them back where they don't move like the singer.",
+             1 if self._recover_target() else 0),
             ("deep", "Second vocal-removal pass on the instruments",
-             "Runs the vocal model again on each instrument (not the drums) and removes what it finds, only where it moves "
-             "like the singer. Takes a few minutes.", len([k for k in self.instruments if k not in NOT_REPAIRED and k not in self.PERCUSSIVE])),
+             "Runs the vocal model again on each instrument (not the drums). Off by default: slow, and the notches below "
+             "usually do enough.", len([k for k in self.instruments if k not in NOT_REPAIRED and k not in self.PERCUSSIVE])),
             ("leftovers", "Remove leftover singing and \"s\" sounds", "From the instruments.", len(pend(("bleed", "ess")))),
             ("clicks", "Fix clicks and dropouts", "A few milliseconds each.", len(pend(("glitch",)))),
             ("improve", "Improve weak sections", "Every section and instrument scoring under 75 tries the alternatives (each other "
@@ -2961,7 +3288,7 @@ class Project:
                                           "switch would be heard.", 1),
         ]
         return [{"key": k, "title": t, "detail": d, "count": int(c),
-                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes()))} for k, t, d, c in steps]
+                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k != "deep"} for k, t, d, c in steps]
 
     def build_best(self, steps=None, progress=lambda f, m: None):
         """Work through every kind of fix in order, choose one where they overlap, check everything against
@@ -3080,6 +3407,8 @@ class Project:
                 reps_on = active("repair")
                 pick("hits", lambda x: not drum(x) and not x.get("pattern") and not covered(x)
                      and not any(ov(y, x) for y in reps_on.get(x["stem"], ())))
+            if "recover" in steps:
+                pick("rebuild", lambda x: x.get("recover"))
             if "leftovers" in steps:
                 for i, x in S.items():
                     if x["type"] in ("bleed", "ess") and x["status"] == "pending" and not inside_kept(x):
@@ -3183,10 +3512,14 @@ class Project:
             for i in accept:
                 if S[i]["status"] == "accepted":
                     n_by[S[i]["type"]] = n_by.get(S[i]["type"], 0) + 1
-            names = {"alt": "best-of-models take", "take": "best version", "bars": "repeated bar fix", "hits": "hit/note-start rebuild",
-                     "repair": "repair", "bleed": "leftover-singing cleanup", "ess": "\"s\" sound removal", "glitch": "click fix"}
+            names = {"alt": ("best-of-models take", "best-of-models takes"), "take": ("best version", "best versions"),
+                     "bars": ("repeated-bar fix", "repeated-bar fixes"), "hits": ("hit/note rebuild", "hit/note rebuilds"),
+                     "repair": ("repair", "repairs"), "bleed": ("leftover-singing cleanup", "leftover-singing cleanups"),
+                     "ess": ("\"s\" sound removal", "\"s\" sound removals"), "glitch": ("click fix", "click fixes"),
+                     "rebuild": ("recovered or rebuilt part", "recovered or rebuilt parts")}
             for t, n in n_by.items():
-                report.append(f"Applied {n} {names.get(t, t)}{'s' if n != 1 else ''}")
+                one, many = names.get(t, (t, t + "s"))
+                report.append(f"Applied {n} {one if n == 1 else many}")
             if keep:
                 report.append(f"Original recording kept in {len(keep)} part{'s' if len(keep) != 1 else ''} without singing")
             if mutes:
@@ -3196,7 +3529,7 @@ class Project:
                 report.append(f"Notched the singer's notes in {notched} stretch{'es' if notched != 1 else ''} where leftover "
                               f"singing remained (centre only, -9 dB); listed in the Levels tab")
             for k, (hi_, lo_) in toned.items():
-                report.append(f"Matched the {k}'s tone under the vocals (from {lo_:+.1f} to {hi_:+.1f} dB across the range)")
+                report.append(f"Matched the tone of the {k} under the vocals (from {lo_:+.1f} to {hi_:+.1f} dB across the range)")
             sm = [x for x in self.mixer.get("seams", []) if x.get("fade", 0) > 0.05]
             if "seams" in steps and sm:
                 report.append(f"Lengthened {len(sm)} crossfade{'s' if len(sm) != 1 else ''} where the original recording takes over")
