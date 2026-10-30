@@ -167,6 +167,10 @@ Drag across a part that sounds glitchy or artifacted and choose **Clean up this 
 
 When an instrument plays the same part more than once, the **Best versions** list (Repairability tab) offers its cleanest take for the other times, matched bar by bar to the beat and level, so the part sounds the same throughout. You can pick a different take from the list, and each one goes to Review first.
 
+### Lower frequencies in part of the song
+
+Drag across the Sections bar and choose **Lower frequencies here** to take down a ghost vocal, sibilance, harshness, mud or boom in just that part, for one instrument or all. **Follow the singer** lowers only the frequencies the vocal is using at each moment; **Fixed cut** lowers the whole band. Listed in the Levels tab.
+
 ### Keep parts as they are
 
 ![Parts of the song marked to keep: the intro and outro use the original recording, and one part is left without repairs](docs/screenshots/kept-parts.png)
