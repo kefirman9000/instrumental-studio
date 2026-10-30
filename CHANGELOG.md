@@ -1,5 +1,11 @@
 # What's new
 
+## 1.23.3
+
+- **Use my graphics card now says what card you have.** The app lists the graphics cards in the computer (in Settings and in the log). If it's an NVIDIA card whose driver isn't answering, it says to reinstall the driver. If it's AMD or Intel, it says plainly that the separation model can't use it on Windows, instead of a vague message.
+- **Finds NVIDIA drivers in more places** (newer drivers sometimes keep their tools only in the Windows driver store).
+- The log now records which app folder is running, and what the graphics card button found.
+
 ## 1.23.2
 
 - **Fix: Use my graphics card stopped right away ("Stopped.").** Pressing Stop at any earlier point left a flag set, and the next model download obeyed it as soon as it started. Downloads now start fresh. If the switch was stopped partway, the model shows as not installed; click **Use my graphics card** (or Download) again and it finishes.

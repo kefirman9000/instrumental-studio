@@ -149,7 +149,8 @@ def setup(home=None, tag=None):
             f"UNCAUGHT ERROR in thread {getattr(a.thread, 'name', '?')}:\n"
             f"{''.join(traceback.format_exception(a.exc_type, a.exc_value, a.exc_traceback))}")
     line("=" * 70)
-    line(f"Instrumental Studio starting  |  {platform.platform()}  |  Python {sys.version.split()[0]}  |  {sys.executable}")
+    line(f"Instrumental Studio starting  |  {platform.platform()}  |  Python {sys.version.split()[0]}  |  {sys.executable}"
+         f"  |  app folder {APP_DIR}")
     threading.Thread(target=_heartbeat, name="freeze-watch", daemon=True).start()
     return f
 

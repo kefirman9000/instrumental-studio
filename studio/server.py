@@ -118,6 +118,12 @@ def _probe_device():
         S.model["nvidia"] = bool(INST.nvidia_cuda())
     except Exception:
         S.model["nvidia"] = False
+    try:
+        S.model["gpus"] = INST.gpu_names()
+        DG.line(f"graphics cards: {', '.join(S.model['gpus']) or 'none found'}"
+                f"{'' if S.model['nvidia'] else ' (no working NVIDIA driver)'}")
+    except Exception:
+        S.model["gpus"] = []
     DG.line(f"splitting runs on: {S.model['device']}" + (" (an NVIDIA card is present but not used: Settings, "
                                                           "Use my graphics card)" if S.model["nvidia"] and
                                                           S.model.get("device_kind") == "cpu" else ""))
@@ -993,6 +999,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if path == "/api/gpu":
                 ok, why = INST.gpu_ready()
+                DG.line(f"graphics card button: {'ready' if ok else why}")
                 if not ok or sys.platform == "darwin":
                     return self._send(400 if not ok else 200, {"error": why} if not ok else {"ok": True, "message": why})
                 cuda = INST.nvidia_cuda()
