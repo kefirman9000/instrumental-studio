@@ -396,7 +396,7 @@ def _job_full(mode, opts):
 
 # ------------------------------------------------------------------ vinyl crackle
 FRESH_MIXER = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}, "keep": [], "vocal_lift": {},
-               "mute_ranges": [], "sides": [], "mud_cut": {}, "tone_eq": {}, "seams": []}
+               "mute_ranges": [], "sides": [], "mud_cut": {}, "tone_eq": {}, "seams": [], "eq_ranges": []}
 
 
 def _use_recording(p, audio, sr, source, raw, vinyl):
