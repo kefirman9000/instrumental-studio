@@ -166,6 +166,10 @@ Kept parts are hatched on the timeline and listed in the **Levels** tab, where y
 - **Watery sound**: separation can leave a warbling, watery sound under the vocals. Drag across that part of the Sections bar and choose **Smooth watery sound here**. You get one fix per instrument and bar to listen to before applying.
 - **Mute**: drag across a part and choose **Mute**, either **Everything** or one instrument, or click **M** next to an instrument in a section in the Levels tab. Muted parts are listed in the Levels tab. If an instrument is mostly leftover singing in a section, the suggestions offer to mute it there.
 
+### Double-check against the original
+
+The original recording is the one thing that's certainly right, so every fix is checked against it: everything a fix adds must really be in the song at that moment, and its hits must land on the original's beat. A fix borrowed from the wrong part (the backing guitar standing in for the lead, say) or lined up to a slightly wrong beat fails, is never applied by **Apply** or **Apply all**, and is listed under **Doesn't fit** in Review. **Check now** in the suggestions re-checks everything, including where the beat the app found wobbles.
+
 ### Make the fixed parts match the rest
 
 The top of the **Review** tab lists suggestions for keeping the repaired parts high quality and consistent with the rest of the song, each with a one-click button you can undo:
@@ -204,6 +208,9 @@ The **Levels** tab shows how loud every instrument is in every section. Type a n
 | Esc | Stop the preview |
 
 ## Updates
+
+**Without opening the app:** double-click **Update Instrumental Studio (Windows).bat** or **Update Instrumental Studio (Mac).command** in the app folder (Linux: `./update.sh`). It shows what's new and asks before installing. Close the app first if it's open.
+
 
 ![The update settings, with a button to check for updates and a checkbox to install them automatically](docs/screenshots/updates.png)
 

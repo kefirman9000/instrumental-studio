@@ -1,5 +1,16 @@
 # What's new
 
+## 1.14.0
+
+- **Double-check against the original.** Every fix is now checked against the original recording: everything it adds must really be in the song at that moment, and its hits must land on the original's beat. This catches the two problems that slipped through before: drums borrowed from a bar where the beat was found slightly off (they flam or land late), and the backing guitar standing in for the lead (or a different part or note). Fixes that don't fit lose their Recommended mark, are never applied by **Apply** or **Apply all** (they wait in Review), and are listed under the new **Doesn't fit** filter. A suggestion takes them all out in one click, and **Check now** re-checks everything, including the beat grid itself.
+- **Clear the mud.** The suggestions now measure how much extra low-mid (150 to 500 Hz) each instrument has under the vocals next to the same part where nobody sings, and offer a cut of just that much, only there.
+- **Best of several models, bar by bar.** Once you have another model's split (from **Try another model here**), one click scores every bar of every instrument in each split against the original (sound the original doesn't have, leftover singing, missing level) and builds each instrument from the cleanest one in each bar. One item per instrument lands in Review.
+- **Sharper note starts.** Best hits now also covers guitar, piano, bass and other: notes and chords the song repeats get their smeared attacks rebuilt from clean copies (just the attack), with Apply, Blend and Add to review like drum hits.
+- **Clean score per section.** **Score how clean each section is** (Repairability tab) gives every section a 0 to 100 score, before repairs and now.
+- **Verified updates.** Each release now publishes a checksum, and the app refuses to install a download that doesn't match it. (This protects updates from 1.14 onwards.)
+- **Update without opening the app.** Double-click **Update Instrumental Studio (Windows).bat**, **Update Instrumental Studio (Mac).command**, or run `./update.sh`.
+- **Opening songs no longer looks stuck.** The suggestions list re-measured every instrument after every change; those measurements are now kept until that instrument changes, so big songs (6 tracks, split drums) open and respond much faster. A suggestion that fails to compute is skipped instead of stopping the song from opening, and the Songs list no longer re-reads every project on each refresh.
+
 ## 1.13.0
 
 - **Blend the cleanest drum hits.** Each drum sound in the Repairability tab now has a **Blend** button next to **Apply**. Instead of filling in from the single cleanest hit, it uses the 5 cleanest together: each is lined up and level-matched, and only what they have in common is kept, so a cymbal wash or a bit of leftover singing in any one of them drops out. The attack stays as sharp as the cleanest hit's. **Blend all** (Best hits) and **Blend all hits** / **Apply all, blend hits** (at the top) do every sound at once. Blending a sound that was already applied the other way switches it over; Undo switches it back.

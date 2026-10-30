@@ -385,19 +385,32 @@ def _job_demo():
     S.project = p
 
 
+_project_meta = {}      # project.json path -> (modified time, listing row); the files can be large
+
+
 def list_projects():
+    """Rows for the Songs list. Asked for on every status poll, so each project.json (which holds every
+    repair and can be megabytes) is only read again when it has changed."""
     out = []
     if os.path.isdir(PROJECTS):
         for d in sorted(os.listdir(PROJECTS)):
             pj = os.path.join(PROJECTS, d, "project.json")
-            if os.path.exists(pj):
-                try:
-                    with open(pj) as f:
-                        meta = json.load(f)["meta"]
-                    out.append({"id": d, "name": meta.get("name", d), "duration": meta.get("duration"),
-                                "modified": os.path.getmtime(pj)})
-                except Exception:
-                    pass
+            try:
+                mt = os.path.getmtime(pj)
+            except OSError:
+                continue
+            hit = _project_meta.get(pj)
+            if hit and hit[0] == mt:
+                out.append(hit[1])
+                continue
+            try:
+                with open(pj) as f:
+                    meta = json.load(f)["meta"]
+                row = {"id": d, "name": meta.get("name", d), "duration": meta.get("duration"), "modified": mt}
+                _project_meta[pj] = (mt, row)
+                out.append(row)
+            except Exception:
+                pass
     return sorted(out, key=lambda x: -x["modified"])
 
 
@@ -758,11 +771,13 @@ class Handler(BaseHTTPRequestHandler):
                     ids = [p.make_bars(d["stem"], int(d["best"]), [int(v) for v in d["damaged"]])]
                 else:
                     ids = p.clean_up(float(d["start"]), float(d["end"]))
+                p.check_ids(ids)
                 res = self._edited()
                 res["new_ids"] = ids
                 return self._send(200, res)
             elif path == "/api/take":
                 sid = p.make_take(d["stem"], int(d["section"]), int(d["source"]))
+                p.check_ids([sid])
                 res = self._edited()
                 res["new_ids"] = [sid]
                 return self._send(200, res)
@@ -770,6 +785,7 @@ class Handler(BaseHTTPRequestHandler):
                 ids = p.rebuild_range(float(d["start"]), float(d["end"]), d.get("stem") or None)
                 if not ids:
                     return self._send(400, {"error": "Nothing in that part matches anywhere else in the song closely enough to rebuild from. Try a longer part, or another instrument."})
+                p.check_ids(ids)
                 res = self._edited()
                 res["new_ids"] = ids
                 return self._send(200, res)
@@ -778,6 +794,18 @@ class Handler(BaseHTTPRequestHandler):
                 res = self._edited()
                 res["new_ids"] = ids
                 return self._send(200, res)
+            elif path == "/api/verify":
+                flagged = p.verify_all()
+                res = self._edited()
+                res["flagged"] = flagged
+                return self._send(200, res)
+            elif path == "/api/best_of":
+                ids = p.best_of_models()
+                res = self._edited()
+                res["new_ids"] = ids
+                return self._send(200, res)
+            elif path == "/api/quality":
+                p.quality()
             elif path == "/api/rename_section":
                 p.rename_section(d["index"], d["name"])
             elif path == "/api/export":
