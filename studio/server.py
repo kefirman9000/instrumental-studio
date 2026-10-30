@@ -459,7 +459,7 @@ def _use_recording(p, audio, sr, source, raw, vinyl):
         if k in ("_render_cache",):
             p._render_cache = {}
         elif k in ("_sounds_cache", "_dscale", "_guard", "_metric_cache", "_alt_cache", "_render_gen", "stem_feats",
-                   "stem_env", "inst_sum"):
+                   "stem_env", "inst_sum", "_tail"):
             p.__dict__.pop(k, None)
     for k in ("sep_mode", "separation", "analyzed", "quality", "quality_before", "verified", "grid_drift"):
         p.meta.pop(k, None)

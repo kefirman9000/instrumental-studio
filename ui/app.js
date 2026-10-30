@@ -510,6 +510,7 @@ function renderLane(k) {
   }
   drawKept(ctx, w, h, true);
   drawMuted(ctx, w, h, k);
+  drawLeftover(ctx, w, h, k);
   if (st.picking && st.picking.stem === k && st.hoverT != null) {
     const sug = st.ov.suggestions.find(s => s.id === st.picking.id);
     const x0 = tToX(st.hoverT), x1 = tToX(st.hoverT + (sug.end - sug.start));
@@ -685,7 +686,8 @@ function showKeepPop(a, b, e) {
     hideKeepPop();
     const preset = $("#eqPreset").value;
     const r = { start: a, end: b, stem: es.value || null, mode: $("#eqMode").value, db: +$("#eqDb").value,
-                only_vocals: $("#eqOnlyVocals").checked, preset: preset === "custom" ? null : preset };
+                only_vocals: $("#eqOnlyVocals").checked, tails: $("#eqTails").checked, centre: $("#eqCentre").checked,
+                preset: preset === "custom" ? null : preset };
     if (preset === "custom") { r.lo = +$("#eqLo").value || 300; r.hi = +$("#eqHi").value || 3500; }
     setEq([...(st.ov.mixer.eq_ranges || []), r]);
     toast("Lowered. Listen with Repaired selected; it's listed in the Levels tab, and Undo takes it back.", { ms: 6000 });
@@ -829,7 +831,8 @@ function renderEqList() {
     d.innerHTML = `<i class="sw no_edits"></i><span></span><button class="ghost small">Remove</button>`;
     const what = r.preset ? EQ_NAMES[r.preset] || r.preset : `${Math.round(r.lo)} Hz to ${Math.round(r.hi)} Hz`;
     d.querySelector("span").textContent = `${r.stem ? nice(r.stem) : "All instruments"}: ${r.mode === "pitch" ? "the singer's notes" : what} ${r.db} dB` +
-      `${r.mode === "follow" ? ", following the singer" : ""}${r.only_vocals === false ? "" : ", while singing"}, ${fmtP(r.start)} to ${fmtP(r.end)}`;
+      `${r.mode === "follow" ? ", following the singer" : ""}${r.only_vocals === false ? "" : ", while singing"}` +
+      `${r.centre ? ", centre only" : ""}${r.auto ? " (Build)" : ""}, ${fmtP(r.start)} to ${fmtP(r.end)}`;
     d.querySelector("span").onclick = () => seek(r.start);
     d.querySelector("button").onclick = () => setEq(list.filter((_, j) => j !== i));
     w.append(d);
@@ -849,6 +852,19 @@ function renderMuteList() {
     d.querySelector("button").onclick = () => setMutes(list.filter((_, j) => j !== i));
     w.append(d);
   });
+}
+// pink marks along the top of a lane where the instrument still moves like the singer
+let showLeftover = (() => { try { return localStorage.getItem("showLeftover") !== "0"; } catch { return true; } })();
+function drawLeftover(ctx, w, h, stem) {
+  if (!showLeftover) return;
+  const vals = (st.ov.leftover_map || {})[stem], rate = st.ov.map_rate || 4;
+  if (!vals) return;
+  for (let i = 0; i < vals.length; i++) {
+    const v = vals[i]; if (v < 0.15) continue;
+    const x0 = tToX(i / rate), x1 = tToX((i + 1) / rate); if (x1 <= 0 || x0 >= w) continue;
+    ctx.fillStyle = `rgba(232, 92, 196, ${Math.min(1, 0.25 + 0.75 * v)})`;
+    ctx.fillRect(x0, 0, Math.max(1, x1 - x0), 5);
+  }
 }
 function drawMuted(ctx, w, h, stem) {
   for (const r of st.ov.mixer.mute_ranges || []) {
@@ -1408,7 +1424,22 @@ function renderGrid() {
     html += `${qcell(i)}</tr>`;
   });
   html += `</tbody></table><div class="grid-key"><span style="color:var(--ok)">Good source found</span><span style="color:#e3c46f">Partial match</span><span style="color:var(--damage)">No good source</span><span style="color:var(--repair)">Repaired</span></div>`;
+  if (Q && (Q.weak_bars || []).length) {
+    html += `<h3 class="panel-h" style="margin-top:14px">Weakest bars</h3><p class="help">The bars with singing that score lowest, so one bad bar isn't hidden in a section's average. Listen, rebuild it, or notch the singer there.</p><div id="weakBars"></div>`;
+  }
   w.innerHTML = html;
+  const wbBox = $("#weakBars");
+  if (wbBox) for (const b of Q.weak_bars) {
+    const d = document.createElement("div"); d.className = "keep-item";
+    d.innerHTML = `<i class="sw no_edits"></i><span></span><button class="ghost small">Listen</button><button class="ghost small">Rebuild</button><button class="ghost small">Notch here</button>`;
+    d.querySelector("span").textContent = `${nice(b.stem)} at ${fmtP(b.start)}: ${b.score}`;
+    const [li, rb, nt] = d.querySelectorAll("button");
+    li.onclick = () => { seek(b.start); player.play().catch(() => {}); };
+    rb.onclick = () => addFixes("/api/rebuild", { start: b.start, end: b.end, stem: b.stem }, false);
+    nt.onclick = () => setEq([...(st.ov.mixer.eq_ranges || []), { start: b.start, end: b.end, stem: b.stem, mode: "pitch", db: -9,
+                                                                 only_vocals: true, tails: true, centre: true, preset: "vocal" }]);
+    wbBox.append(d);
+  }
   const qb = $("#btnQuality"); if (qb) { qb.hidden = ov.stage !== "detected"; qb.textContent = Q ? "Score again" : "Score how clean each section is"; }
   w.querySelectorAll("td:not(.q)").forEach(td => td.onclick = () => {
     const sec = td.dataset.sec != null ? +td.dataset.sec : null; st.filter = "all"; setScope({ section: sec, stem: td.dataset.stem });
@@ -1481,7 +1512,7 @@ $("#btnExport").onclick = () => $("#dlgExport").showModal();
 $("#dlgExport").addEventListener("close", async () => {
   const dlg = $("#dlgExport"); if (dlg.returnValue !== "ok") return;
   const f = dlg.querySelector("form");
-  const what = ["mix", "stems", "raw", "vocals", "report", "samples_raw", "samples_merged"].filter(n => f.elements[n] && f.elements[n].checked);
+  const what = ["mix", "stems", "raw", "vocals", "report", "samples_raw", "samples_merged", "tempo", "drum_midi"].filter(n => f.elements[n] && f.elements[n].checked);
   const format = f.elements.fmt.value;
   showBusy(0.3, "Writing files");
   try {
@@ -1841,3 +1872,6 @@ $("#btnPattern").onclick = async () => {
       { ms: 9000, action: ["Show in Review", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
   } catch (e) { hideBusy(); fail(e); }
 };
+
+$("#showLeftover").checked = showLeftover;
+$("#showLeftover").onchange = e => { showLeftover = e.target.checked; try { localStorage.setItem("showLeftover", showLeftover ? "1" : "0"); } catch {} renderAll(); };
