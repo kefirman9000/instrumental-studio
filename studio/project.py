@@ -1222,6 +1222,7 @@ class Project:
                       else f"repeated note {chr(65 + len(sounds) % 26)}")
                 sounds.append({"id": ci, "name": nm, "count": len(c),
                                "clean": len(clean), "damaged": [int(i) for i in damaged], "best": ranked[0],
+                               "members": [int(i) for i in c],
                                "ranked": ranked})
             cache[k] = {"pos": pos, "next": np.r_[pos[1:], x.shape[0]] if len(pos) else pos, "F": F, "lv": lv,
                         "sounds": sounds}
@@ -1246,7 +1247,7 @@ class Project:
                 t_best = float(sd["pos"][snd["best"]] / self.sr)
                 secs = sorted({self._section_of(sd["pos"][i] / self.sr) for i in snd["damaged"]})
                 existing = [x for x in self.suggestions.values() if x["type"] == "hits" and x["stem"] == k
-                            and x.get("sound") == snd["id"]]
+                            and x.get("sound") == snd["id"] and not x.get("pattern")]
                 # show the version that's in use (applied, else waiting, else rejected)
                 rank = {"accepted": 0, "pending": 1}
                 existing.sort(key=lambda x: rank.get(x["status"], 2))
@@ -2026,6 +2027,228 @@ class Project:
         lens = np.maximum(np.diff(idx), 1)
         return 10 * np.log10(sums / lens + 1e-12)
 
+    # ------------------------------------------------------------------ learn the drum pattern
+    SLOTS_PER_BEAT = 4          # a 16th-note grid
+    PATTERN_SURE = 0.9          # the pattern must have this sound in this slot this often to act on it
+
+    def _slot_of(self, t):
+        """(bar index, slot in the bar, distance in beats) for time t, on the 16th-note grid."""
+        bt = self.beat_times
+        j = int(np.searchsorted(bt, t, side="right")) - 1
+        if j < 0 or j >= len(bt) - 1:
+            return None
+        frac = (t - bt[j]) / max(bt[j + 1] - bt[j], 1e-6)
+        sub = int(round(frac * self.SLOTS_PER_BEAT))
+        off = abs(frac * self.SLOTS_PER_BEAT - sub) / self.SLOTS_PER_BEAT
+        if sub == self.SLOTS_PER_BEAT:
+            j, sub = j + 1, 0
+        for wi, (s0, L) in enumerate(self.windows):
+            if s0 <= j < s0 + L:
+                return wi, (j - s0) * self.SLOTS_PER_BEAT + sub, off
+        return None
+
+    def _slot_time(self, wi, slot):
+        s0, L = self.windows[wi]
+        j = s0 + slot // self.SLOTS_PER_BEAT
+        if j + 1 >= len(self.beat_times):
+            return None
+        sub = slot % self.SLOTS_PER_BEAT
+        return self.beat_times[j] + (self.beat_times[j + 1] - self.beat_times[j]) * sub / self.SLOTS_PER_BEAT
+
+    @staticmethod
+    def _section_kind(name):
+        import re as _re
+        return _re.sub(r"[\s\d]+$", "", name or "").strip().lower() or "part"
+
+    def learn_patterns(self):
+        """For every repeated drum sound: how often it plays in each 16th-note slot of the bar, learned from
+        the bars where nobody sings, per kind of section (verses, choruses...) and for the whole song."""
+        out = {}
+        bar_len = max((L for _, L in self.windows), default=4)
+        va = np.asarray(self.VA)
+        bar_sec = {}
+        for wi, (s0, L) in enumerate(self.windows):
+            t = self.beat_times[s0] if s0 < len(self.beat_times) else 0
+            si = self._section_of(t)
+            bar_sec[wi] = (si, self._section_kind(self.sections[si]["name"]) if si is not None and si < len(self.sections) else "part")
+        for k in [x for x in self.instruments if x in self.PERCUSSIVE]:
+            try:
+                sd = self._sounds(k)
+            except Exception as e:
+                log(f"pattern: {k} skipped: {e}")
+                continue
+            for snd in sd["sounds"]:
+                slots_by_bar = {}
+                for i in snd.get("members", []):
+                    so = self._slot_of(sd["pos"][i] / self.sr)
+                    if so and so[2] < 0.25 / self.SLOTS_PER_BEAT:       # close to the grid
+                        slots_by_bar.setdefault(so[0], set()).add(so[1])
+                # reference bars: full-length, nobody singing, this sound plays at least once
+                ref = [wi for wi, (s0, L) in enumerate(self.windows)
+                       if L == bar_len and wi in slots_by_bar and float(va[s0:s0 + L].mean() if L else 1) < 0.1]
+                if len(ref) < 4:
+                    continue
+                def probs(bars):
+                    c = np.zeros(bar_len * self.SLOTS_PER_BEAT)
+                    for wi in bars:
+                        for sl in slots_by_bar[wi]:
+                            if sl < len(c):
+                                c[sl] += 1
+                    return c / max(1, len(bars))
+                by_kind = {}
+                for kind in {bar_sec[w][1] for w in ref}:
+                    bars = [w for w in ref if bar_sec[w][1] == kind]
+                    if len(bars) >= 4:
+                        by_kind[kind] = probs(bars).tolist()
+                out[(k, snd["id"])] = {"song": probs(ref).tolist(), "kinds": by_kind, "bars": slots_by_bar,
+                                       "name": snd["name"], "bar_sec": bar_sec, "bar_len": bar_len}
+        return out
+
+    def _evidence(self, p, shape, band_w, sr):
+        """Does the original recording have an attack at sample p with this sound's profile? Returns the
+        exact attack position (sample) or None."""
+        B, _ = HT._bands(sr)
+        n = int(0.06 * sr)
+        x = self.original.mean(0)
+        search = int(0.02 * sr)
+        if p - search - n < 0 or p + search + n >= len(x):
+            return None
+        hop = max(32, int(0.002 * sr))
+        best, best_q = None, 0.0
+        win = np.hanning(2048).astype(np.float32)
+        def bands(a):
+            seg = x[a:a + 2048]
+            if len(seg) < 2048:
+                return None
+            return B @ (np.abs(np.fft.rfft(seg * win)) ** 2)
+        for q in range(p - search, p + search, hop):
+            eb, ea = bands(q - 2048), bands(q)
+            if eb is None or ea is None:
+                continue
+            inc = np.maximum(ea - eb, 0)
+            strength = float((inc * band_w).sum() / ((eb * band_w).sum() + 1e-12))
+            if strength > best_q:
+                best_q, best = strength, (q, inc)
+        if best is None or best_q < 1.0:            # the sound's bands must at least double
+            return None
+        q, inc = best
+        z = np.log(inc + 1e-12)
+        z = z - z.mean()
+        sh = shape - shape.mean()
+        cos = float(z @ sh / (np.linalg.norm(z) * np.linalg.norm(sh) + 1e-12))
+        return q if cos >= 0.6 else None
+
+    def find_pattern_hits(self):
+        """Hits the learned pattern is sure belong under the singing, that the drum track is missing and that
+        the original recording does have there. Returns {(stem, sound): [sample positions]}."""
+        if self.stage != "detected" or self.original is None:
+            return {}
+        pats = self.learn_patterns()
+        va = np.asarray(self.VA)
+        found = {}
+        for (k, sid), P in pats.items():
+            sd = self._sounds(k)
+            snd = next(x for x in sd["sounds"] if x["id"] == sid)
+            shape = sd["F"][snd["members"]].mean(0) if snd.get("members") else sd["F"][snd["best"]]
+            w = np.exp(shape - shape.max())
+            band_w = w / (w.sum() + 1e-12)
+            lv_ref = float(np.median(sd["lv"][[i for i in snd["members"] if i not in snd["damaged"]] or snd["members"]]))
+            x = self.stems[k].mean(0)
+            B, _ = HT._bands(self.sr)
+            have = {so[:2] for so in (self._slot_of(t / self.sr) for t in sd["pos"]) if so}
+            hits = []
+            for wi, (s0, L) in enumerate(self.windows):
+                if L != P["bar_len"] or float(va[s0:s0 + L].mean() if L else 0) < 0.3:
+                    continue                                  # only bars under the singing
+                kind = P["bar_sec"][wi][1]
+                prob = P["kinds"].get(kind, P["song"])
+                for sl, pr in enumerate(prob):
+                    if pr < self.PATTERN_SURE or (wi, sl) in have:
+                        continue
+                    t = self._slot_time(wi, sl)
+                    if t is None:
+                        continue
+                    p = int(t * self.sr)
+                    # the drum track is clearly missing it (well under its usual level for this sound)
+                    _, lvs = HT._hit_features(x, np.array([p]), self.sr, B)
+                    if float(lvs[0]) > lv_ref - np.log(4):        # within ~6 dB: it's there already
+                        continue
+                    q = self._evidence(p, shape, band_w, self.sr)
+                    if q is not None:
+                        hits.append(q)
+            if hits:
+                found[(k, sid)] = sorted(set(hits))
+        return found
+
+    def make_pattern_hits(self):
+        """Restore the hits find_pattern_hits is confident about, from a blend of that sound's cleanest
+        hits lined up to the attack in the original; only what the vocals took is filled in. One review
+        item per drum sound and section. Returns the new ids."""
+        with self.lock:
+            found = self.find_pattern_hits()
+            ids = []
+            pre = int(0.003 * self.sr)
+            for (k, sid), positions in found.items():
+                sd = self._sounds(k)
+                snd = next(x for x in sd["sounds"] if x["id"] == sid)
+                raw = self.stems[k]
+                n = raw.shape[1]
+                src = []
+                for j in (snd.get("ranked") or [snd["best"]])[:self.BLEND_HITS]:
+                    pj = int(sd["pos"][j])
+                    ln = int(min(sd["next"][j] - pj, 0.25 * self.sr))
+                    if pj - pre >= 0 and ln >= int(0.03 * self.sr):
+                        src.append((pj, ln))
+                if not src:
+                    continue
+                L = min(ln for _, ln in src)
+                by_sec = {}
+                for q in positions:
+                    by_sec.setdefault(self._section_of(q / self.sr), []).append(q)
+                for si, qs in by_sec.items():
+                    if si is None:
+                        continue
+                    sec = self.sections[si]
+                    a, b = max(0, int(sec["start"] * self.sr) - 2048), min(n, int(sec["end"] * self.sr) + int(0.4 * self.sr))
+                    patch = np.zeros((2, b - a), np.float32)
+                    used = 0
+                    for q in qs:
+                        if q - pre - MARGIN < a or q + L + MARGIN > b:
+                            continue
+                        tgt = self.original[:, q - pre:q + L].mean(0)        # line up with the attack in the original
+                        lags = []
+                        for sp, _ in src:
+                            if abs(sp - q) < L + pre:
+                                continue
+                            sh = HT.align(raw[:, sp - pre:sp + L].mean(0), tgt, int(0.002 * self.sr))
+                            lags.append((sp - q) - sh)
+                        if not lags:
+                            continue
+                        res = repair_window(raw, self.stems["vocals"], self.inst_sum, q - pre, q + L, lags, 1.0, 1.0,
+                                            self.B, self.centers, self.sr, self._level_floor(k))
+                        if res["severity"] < 0.02:
+                            continue
+                        lo, pp = res["lo"], res["patch"]
+                        o0, o1 = max(lo, a), min(lo + pp.shape[1], b)
+                        patch[:, o0 - a:o1 - a] += pp[:, o0 - lo:o1 - lo]
+                        used += 1
+                    if not used:
+                        continue
+                    rid = f"p_{k}_{sid}_{si}"
+                    self.suggestions[rid] = {
+                        "id": rid, "type": "hits", "stem": k, "sound": sid, "status": "pending", "pattern": True,
+                        "start": sec["start"], "end": sec["end"], "section": si, "conf": 1.0, "severity": 0.0,
+                        "strength": 1.0, "blend": len(src) > 1,
+                        "donors": [{"beat": 0, "start": pj / self.sr, "end": (pj + L) / self.sr,
+                                    "section": self._section_of(pj / self.sr), "match": 1.0, "vocal_overlap": 0.0} for pj, _ in src],
+                        "note": f"Restores {used} {snd['name']} hit{'s' if used != 1 else ''} the drum pattern says belong here "
+                                f"(the original recording has them; the vocals took them out of the drum track), "
+                                f"from a blend of the {len(src)} cleanest"}
+                    self.patches[rid] = (a, patch.astype(np.float16))
+                    ids.append(rid)
+            self.check_ids(ids)
+            return ids
+
     # ------------------------------------------------------------------ auto-improve weak sections
     def _seg_score(self, y, a, b):
         """Badness of one stretch of one instrument against the original (lower is cleaner) and its level."""
@@ -2242,8 +2465,8 @@ class Project:
         return written
 
     # ------------------------------------------------------------------ build the best instrumental
-    AUTO_STEPS = ("keep", "bestof", "versions", "bars", "hits", "repairs", "leftovers", "clicks", "improve", "mutes",
-                  "tone", "seams")
+    AUTO_STEPS = ("keep", "bestof", "versions", "bars", "hits", "pattern", "repairs", "leftovers", "clicks", "improve",
+                  "mutes", "tone", "seams")
 
     def _free_sections(self):
         """Sections with no singing: the original recording already is a clean instrumental there."""
@@ -2281,6 +2504,9 @@ class Project:
             ("hits", "Rebuild drum hits and note starts from a blend of their cleanest copies",
              "Drums: used instead of ordinary repairs on the same hits, so nothing is filled in twice.",
              len(hits)),
+            ("pattern", "Learn the drum pattern and restore hits the vocals took",
+             "Only where the pattern is near-certain a hit belongs, the original recording has that drum's attack there, and "
+             "the drum track is missing it.", len([x for x in self.instruments if x in self.PERCUSSIVE])),
             ("repairs", "Apply the repairs with a close match",
              "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
              len([x for x in pend(("repair",)) if x.get("recommended")])),
@@ -2356,6 +2582,12 @@ class Project:
                             self.make_hits(hh["stem"], hh["sound"], blend=hh.get("blend_n", 0) >= 3)
                         except Exception as e:
                             log(f"build: hits skipped: {e}")
+            if "pattern" in steps:
+                progress(0.35, "Learning the drum pattern")
+                try:
+                    self.make_pattern_hits()
+                except Exception as e:
+                    log(f"build: drum pattern skipped: {e}")
             del self.history[h0:]              # one undo step for all of it (recorded below)
 
             # -- check everything against the original
@@ -2399,14 +2631,16 @@ class Project:
                 pick("bars", lambda x: not covered(x))
             drum = lambda x: x["stem"] in self.PERCUSSIVE
             if "hits" in steps:
-                pick("hits", lambda x: drum(x) and not covered(x))
+                pick("hits", lambda x: drum(x) and not x.get("pattern") and not covered(x))
+            if "pattern" in steps:
+                pick("hits", lambda x: x.get("pattern") and not covered(x))
             if "repairs" in steps:
                 hits_on = active("hits")
                 drum_hits = lambda x: drum(x) and any(ov(y, x) for y in hits_on.get(x["stem"], ()))
                 pick("repair", lambda x: x.get("recommended") and not covered(x) and not drum_hits(x))
             if "hits" in steps:                              # note starts only where no repair fills that part
                 reps_on = active("repair")
-                pick("hits", lambda x: not drum(x) and not covered(x)
+                pick("hits", lambda x: not drum(x) and not x.get("pattern") and not covered(x)
                      and not any(ov(y, x) for y in reps_on.get(x["stem"], ())))
             if "leftovers" in steps:
                 for i, x in S.items():
