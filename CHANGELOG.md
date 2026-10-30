@@ -1,5 +1,9 @@
 # What's new
 
+## 1.19.0
+
+- **Learn the drum pattern** (Repairability tab, and a step in Build the best instrumental). The app learns where each drum sound (kick, snare, hi-hat...) plays in the bar, on a 16th-note grid, from the bars where nobody sings, separately for each kind of section (verses, choruses...). Under the singing, it restores a hit only when it's confident it's the right drum in that place: the pattern has that drum in that slot at least 90% of the time, the **original recording** has an attack there with that drum's sound (the vocals can take a drum out of the split, but it's still in the original), and the drum track is clearly missing it. The hit is rebuilt from a blend of that drum's cleanest hits, lined up to the attack in the original, and only what the vocals took is filled in. Each part lands in Review, checked against the original like every other fix.
+
 ## 1.18.0
 
 - **Remove vinyl crackle** (step 1, Import). For vinyl rips: finds the clicks and crackle and rebuilds each from the sound on both sides, so tones carry straight through. **Light** takes only obvious clicks, **Normal** clicks and crackle, **Strong** fainter crackle too. Drum hits, consonants and other real sharp sounds are left alone. Best done before splitting, so the crackle never reaches the instruments; if the song is already split, it's split again with the same settings afterwards. The untouched recording is kept: **Undo crackle removal** brings it back, and choosing another strength always starts from the untouched recording.
