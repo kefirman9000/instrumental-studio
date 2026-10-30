@@ -1786,3 +1786,16 @@ $("#btnVinylUndo").onclick = async () => {
     showBusy(0.02, "Restoring the untouched recording"); watchJob();
   } catch (e) { fail(e); }
 };
+
+/* ---------- learn the drum pattern */
+$("#btnPattern").onclick = async () => {
+  showBusy(0.3, "Learning the drum pattern");
+  try {
+    const r = await api.post("/api/pattern", {});
+    hideBusy(); await applyEdit(r);
+    const n = r.new_ids.length;
+    if (!n) return toast("No missing hits the pattern is sure about: the drums under the vocals already match it, or the original doesn't have them.", { ms: 9000 });
+    toast(`Found hits the vocals took in ${n} part${n === 1 ? "" : "s"}. They're in Review to hear before applying.`,
+      { ms: 9000, action: ["Show in Review", () => { st.filter = "takes"; st.scope = null; select(r.new_ids[0]); }] });
+  } catch (e) { hideBusy(); fail(e); }
+};
