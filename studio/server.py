@@ -506,6 +506,17 @@ def _job_vinyl(strength):
     S.job["result"] = {"report": lines, "title": "Vinyl crackle removed"}
 
 
+def _job_declick_stems(strength):
+    p = S.project
+    ids = p.declick_stems(strength, lambda f, m: _progress(0.02 + 0.93 * f, m))
+    p.save()
+    S.job["result"] = {"title": "Crackle found in the instruments", "new_ids": ids,
+                       "report": [f"Found vinyl clicks and crackle in {len(ids)} part{'s' if len(ids) != 1 else ''} of the "
+                                  f"instruments ({strength}). They're in Review under Clicks and smoothing, to hear before "
+                                  f"applying; Build the best instrumental applies them too."] if ids else
+                                 ["No vinyl clicks or crackle found in the instruments at this strength."]}
+
+
 def _job_vinyl_undo():
     p = S.project
     raw = p.meta.get("source_raw")
@@ -908,6 +919,14 @@ class Handler(BaseHTTPRequestHandler):
                 if self._proj().stage != "detected":
                     raise ValueError("Find damage first (step 3).")
                 _start_job(_job_deep)
+                return self._send(200, {"ok": True})
+            if path == "/api/vinyl/stems":
+                if not self._proj().instruments:
+                    raise ValueError("Split the song first.")
+                st_ = d.get("strength", "normal")
+                if st_ not in ("light", "normal", "strong"):
+                    raise ValueError("Unknown strength.")
+                _start_job(_job_declick_stems, st_)
                 return self._send(200, {"ok": True})
             if path == "/api/vinyl/undo":
                 self._proj()
