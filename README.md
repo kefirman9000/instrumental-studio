@@ -269,7 +269,8 @@ On the built-in demo, where the undamaged instruments are known, the piano's spe
 
 | Path | What's there |
 |---|---|
-| `app.py` | Starts the server and opens the window |
+| `app.py` | The window: starts the engine and opens the window (nothing heavy runs here, so it never freezes) |
+| `studio/engine_main.py` | The engine: the local server and all audio work, in its own process |
 | `studio/` | Separation, analysis, repair, projects, local server, updater |
 | `ui/` | The interface (HTML, CSS, JavaScript) |
 | `tests/` | Engine test with a known answer, and an interface check |
