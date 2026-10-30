@@ -233,6 +233,10 @@ The **Levels** tab shows how loud every instrument is in every section. Type a n
 | Shift + scroll | Move along the timeline |
 | Esc | Stop the preview |
 
+## Support Instrumental Studio
+
+Instrumental Studio is free and open source. If it saves you time or you've made something you're happy with, you can support its development on **[GitHub Sponsors](https://github.com/sponsors/kefirman9000)**. It helps keep new features and fixes coming. Starring the repository and reporting problems (with **Export log**) help too.
+
 ## Updates
 
 **Without opening the app:** double-click **Update Instrumental Studio (Windows).bat** or **Update Instrumental Studio (Mac).command** in the app folder (Linux: `./update.sh`). It shows what's new and asks before installing. Close the app first if it's open.
