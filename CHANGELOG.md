@@ -1,5 +1,10 @@
 # What's new
 
+## 1.30.9
+
+- **Fix: the Grid window opened empty.** Its drawing code clashed with another part of the app, so the grid of hits never appeared.
+- Step 4 no longer has its own clean stems button squeezed over its title; use **+ Clean stems / samples** above the tracks (or drag files onto the window).
+
 ## 1.30.8
 
 - **Less noise under the instruments.**
