@@ -680,6 +680,35 @@ def _job_extract(path, project_id, kind, mode):
         "instrument, and the drum one-shots. The song is open behind this, if you want to fix it up too."]}
 
 
+def _job_clean(rebuild_drums=True):
+    """One click: the cleanest instrumental the app can make, rebuilt from the song's own best material.
+    Every build step (except the slow extra model passes), drums played again from merged clean samples at
+    every hit, odd hits repaired by their place in the bar, damaged notes rebuilt as notes, loops replayed
+    from clean copies, smart cleanup, and the original wherever nobody sings. One Undo takes the build back."""
+    p = S.project
+    if p.stage != "detected":
+        p.detect(lambda f, m: _progress(None if f is None else 0.15 * f, f"Finding damage: {m}"))
+    report = []
+    if rebuild_drums:
+        dur = p.original.shape[1] / p.sr
+        for k in [x for x in p.instruments if x in p.PERCUSSIVE]:
+            _progress(0.17, f"Rebuilding the {k} from its cleanest hits")
+            try:
+                n_odd = p.drum_repair_odd(k)
+                p.drum_edit(k, {"rebuild": {"start": 0.0, "end": dur}})
+                report.append(f"The {k} is played again from merged clean samples at every hit"
+                              + (f" ({n_odd} odd hit{'s' if n_odd != 1 else ''} put right by their place in the bar)" if n_odd else ""))
+            except Exception as e:
+                log(f"clean instrumental: drum rebuild skipped for {k}: {e}")
+    plan = {x["key"]: x for x in p.build_plan()}
+    steps = [k for k, x in plan.items() if x["count"] and k not in ("deep", "recover")]
+    _pre_build(p, steps, 0.2, 0.3)
+    res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.3 + 0.67 * f, m))
+    _progress(0.98, "Saving")
+    p.save()
+    S.job["result"] = {"title": "Your clean instrumental is built", "report": report + res["report"]}
+
+
 def _job_full(mode, opts):
     """One click for a song: split it, find the damage, build the best instrumental."""
     _job_split(mode, opts)
@@ -1221,6 +1250,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if path == "/api/auto/plan":
                 return self._send(200, {"steps": self._proj().build_plan()})
+            if path == "/api/clean_instrumental":
+                if self._proj().stage not in ("split", "detected"):
+                    return self._send(400, {"error": "Split the song first (step 2)."})
+                _start_job(_job_clean, bool(d.get("drums", True)))
+                return self._send(200, {"ok": True})
             if path == "/api/auto/build":
                 steps = [x for x in (d.get("steps") or []) if x in self._proj().AUTO_STEPS]
                 if not steps:
