@@ -67,6 +67,7 @@
       <div class="spacer"></div>
       <label class="zoom">Zoom <input type="range" id="zoom" min="0" max="100" value="0"></label>
       <button class="ghost small" id="btnFit">Fit song</button>
+      <button class="small" id="btnRefOpen2" hidden title="Clean stems, loops or samples from this song to guide the repairs (or just drag the files onto the window)">+ Clean stems / samples</button>
     </div>
     <div class="lanes" id="lanes">
       <div class="lane ruler-lane"><div class="lane-head"><span class="dim">Sections</span></div><canvas id="ruler"></canvas></div>
@@ -403,6 +404,7 @@
 <dialog id="dlgRef">
   <form method="dialog">
     <h2>Add clean tracks or a sample</h2>
+    <p class="dim small">Tip: you can also drag files straight onto the app window, or onto this window to add more.</p>
     <p>Use clean parts of this song to guide the repairs: official stems or session tracks (bass, drums, anything you have), loops and samples the song uses, or one clean hit or note. The app works out which instrument each is and where it goes; loops are placed everywhere they play. Tracks are lined up with the song automatically and level-matched, kept with the song, and every other fix on that instrument is checked against them.</p>
     <label class="ref-row">What are they
       <select id="refKind" aria-label="What the files are">
