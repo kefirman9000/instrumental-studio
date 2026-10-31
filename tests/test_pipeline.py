@@ -69,6 +69,20 @@ def main():
             return sum(1 for i in others if p.flagged(i))
         r = step("check other fixes against the clean track", checked)
         print(f"       {r} flagged")
+    def ident():
+        k = next(k for k in p.instruments if k in clean)
+        got = p.identify_track(clean[k])
+        assert got[0] == k, f"identified {got} for {k}"
+        return got
+    print(f"       {step('auto-detect a clean track', ident)}")
+    k_loop = next((k for k in p.instruments if k in clean and k not in p.PERCUSSIVE), None)
+    if k_loop:
+        def loop():
+            s0, L = next(w for w in p.windows if w[1] == max(x[1] for x in p.windows))
+            a, b = p._window_samples(s0 + 8, L * 2) if s0 + 8 + 2 * L < len(p.beats) else p._window_samples(s0, L * 2)
+            return p.add_reference_loop(clean[k_loop][:, a:b], "loop.wav", "vocals")
+        r = step("place a clean loop where it plays", loop)
+        print(f"       {r and (len(r[0]), r[1])}")
     drum = next((k for k in p.instruments if k in p.PERCUSSIVE), None)
     if drum:
         def sample():
@@ -93,6 +107,9 @@ def main():
             y = p.mix("repaired")
             assert np.all(np.isfinite(y)), "non-finite audio"
         step(f"lower frequencies ({mode})", eq)
+    def acap():
+        return len(p.vocal_only_runs(False)), len(p.vocal_only_runs(True))
+    print(f"       {step('find the a cappella parts (careful, aggressive)', acap)}")
     step("seams", p.find_seams)
     step("quality scores", p.quality)
     step("leftover map", lambda: p.leftover_map(lazy=False))

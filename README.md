@@ -112,6 +112,7 @@ Export can add a **tempo map and section markers** (a MIDI tempo map that follow
 
 Have official stems, session tracks or a clean sample of something in the song? In step 4, **Add clean stems or a sample…**:
 - **Clean tracks** (several at once: bass, drums, anything) are matched to instruments by file name, lined up with the song automatically and level-matched. Use each **where the singing damaged it** or for **the whole track**. They come before every other fix on that instrument, and every other fix there is checked against them (fixes that add sound your track doesn't have go to *Doesn't fit*). Build the best instrumental uses them first.
+- **Work it out for me** decides for each file: a full track (instrument auto-detected), a loop or sample (placed everywhere it plays in the song), or a one-shot.
 - **One hit or note** (a drum sample, a synth stab) is matched to the repeated sound it is in the song, and that sound's damaged hits, and the ones the pattern says the vocals took, are rebuilt from it.
 
 Everything goes to Review first.
