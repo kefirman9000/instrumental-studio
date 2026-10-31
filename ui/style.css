@@ -355,3 +355,5 @@ label.check input { margin-top: 3px; }
 .hscroll { flex: none; margin-left: 168px; height: 16px; overflow-x: auto; overflow-y: hidden; border-top: 1px solid var(--line); background: var(--bg2); }
 .hscroll > div { height: 1px; }
 .lanes.panning, .lanes.panning canvas { cursor: grabbing; }
+.auto-details { margin: 8px 0 4px; }
+.auto-details > summary { cursor: pointer; color: var(--dim, #999); margin-bottom: 8px; }

@@ -417,8 +417,8 @@
 <dialog id="dlgAuto">
   <form method="dialog">
     <h2>Build the best instrumental</h2>
-    <p>Each step runs in this order. Where fixes overlap, one is chosen; anything that doesn't line up with the original is left out. It all becomes one step: Undo takes it back.</p>
-    <div id="autoSteps"></div>
+    <p>Goes through every option and settles it: the original recording wherever nobody sings (whole parts and the gaps between vocal lines), your clean tracks, the cleanest takes and rebuilt parts everywhere else. Where options overlap or contradict, one is chosen; anything that doesn't line up with the original is left out, and no part may end up sounding worse than before. Building again starts fresh (your own decisions stay). It all becomes one step: Undo takes it back.</p>
+    <details class="auto-details"><summary>Change what it does</summary><div id="autoSteps"></div></details>
     <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button value="ok" class="primary">Build</button></div>
   </form>
 </dialog>
@@ -427,7 +427,7 @@
     <h2 id="autoDoneTitle">Built</h2>
     <ul id="autoReport"></ul>
     <p class="dim small">Play it with Repaired selected. Undo (Ctrl+Z) takes the whole build back in one step.</p>
-    <div class="dlg-actions"><button value="ok" class="primary">OK</button></div>
+    <div class="dlg-actions"><button value="ok" class="ghost">Listen first</button><button type="button" class="primary" id="btnAutoExport">Export…</button></div>
   </form>
 </dialog>
 <dialog id="dlgReset">
