@@ -108,7 +108,7 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
-        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples"):
+        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples", "_ref_dis"):
             self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
@@ -1199,6 +1199,11 @@ class Project:
             if a + sr < s1:
                 sh = HT.align(self.stems[k][:, a:a + sr].mean(0), ref[:, a:a + sr].mean(0), int(0.005 * sr))
                 ref = np.roll(ref, -sh, axis=1)
+            drift = 0.0
+            try:
+                ref, drift = self._fix_drift(ref, k)
+            except Exception as e:
+                log(f"drift check skipped: {e}")
             raw = self.stems[k]
             vq = self._vocal_curve(0, n) < 0.1          # one overall level, matched where nobody sings
             mq = vq if vq.sum() > sr else np.ones(n, bool)
@@ -1214,7 +1219,8 @@ class Project:
             mode = "damaged" if use == "vocals" else "stem"
             self.meta.setdefault("refs", {})[k] = {
                 "name": name, "match": round(float(score), 2), "use": use, "gain_db": 0.0, "nudge_ms": 0.0,
-                "mute": False, "sections": {str(si): mode for si in range(len(self.sections))}, "paint": []}
+                "mute": False, "sections": {str(si): mode for si in range(len(self.sections))}, "paint": [],
+                "tone_match": True, "drift": round(drift, 2)}
             return self._rebuild_ref(k, "pending")
 
     def _ref_weight(self, k, cfg):
@@ -1245,6 +1251,101 @@ class Project:
                 W[a:b] = 1.0 if r.get("on") else 0.0
         from scipy.ndimage import uniform_filter1d
         return np.clip(uniform_filter1d(W, ramp), 0, 1).astype(np.float32)   # short crossfades at every change
+
+    def _ref_offsets(self, ref, k, step=20.0):
+        """How far your clean track sits from the split at points through the song: [(time, ms)] (later = +)."""
+        from scipy import signal as sig
+        sr = self.sr
+        eo = VF.onset_env(self.stems[k].mean(0), sr)
+        er = VF.onset_env(np.asarray(ref, np.float32).mean(0), sr)
+        out = []
+        win, lag = int(8000), 60
+        for c in range(win, min(len(eo), len(er)) - win, int(step * 1000)):
+            a, b = eo[c - win // 2:c + win // 2], er[c - win // 2 - lag:c + win // 2 + lag]
+            if a.std() < 1e-6 or b.std() < 1e-6:
+                continue
+            xc = sig.correlate(b, a, mode="valid")
+            if len(xc) != 2 * lag + 1 or xc.max() <= 0:
+                continue
+            out.append((c / 1000.0, float(np.argmax(xc) - lag)))
+        return out
+
+    def ref_find_timing(self, k):
+        """The timing nudge (ms) that lines your clean track up best (median over the song)."""
+        cfg = self.meta["refs"][k]
+        old = cfg.get("nudge_ms", 0)
+        cfg["nudge_ms"] = 0
+        try:
+            offs = self._ref_offsets(self.ref_audio(k), k)
+        finally:
+            cfg["nudge_ms"] = old
+        return float(-np.median([o for _, o in offs])) if offs else 0.0
+
+    def _fix_drift(self, ref, k):
+        """A stem from a slightly different master can run a little fast or slow: fit the offsets along the song
+        and stretch it to match, when the drift is clear (more than 4 ms end to end, and steady)."""
+        offs = self._ref_offsets(ref, k)
+        if len(offs) < 4:
+            return ref, 0.0
+        t = np.array([a for a, _ in offs]); o = np.array([b for _, b in offs])
+        A = np.vstack([t, np.ones_like(t)]).T
+        (slope, icpt), res, *_ = np.linalg.lstsq(A, o, rcond=None)
+        span = slope * (t.max() - t.min())
+        resid = o - (slope * t + icpt)
+        if abs(span) < 4 or np.std(resid) > max(3.0, abs(span) / 3):
+            return ref, 0.0
+        n = ref.shape[1]
+        tt = np.arange(n) / self.sr
+        src = (tt + (slope * tt + icpt) / 1000.0) * self.sr          # where each output sample comes from
+        out = np.stack([np.interp(src, np.arange(n), ref[c], left=0, right=0) for c in range(ref.shape[0])]).astype(np.float32)
+        return out, float(slope * 1000)          # ms per 1000 s, roughly ppm
+
+    def _tone_matched(self, rs, raw_seg, mask):
+        """Your stem's tone matched to the split's where nobody sings (smooth EQ, within +-9 dB)."""
+        if mask.sum() < self.sr // 4:
+            return rs
+        Er = np.abs(stft(rs.mean(0)[mask])) ** 2
+        Es = np.abs(stft(raw_seg.mean(0)[mask])) ** 2
+        g = np.sqrt((Es.mean(1) + 1e-10) / (Er.mean(1) + 1e-10))
+        from scipy.ndimage import uniform_filter1d
+        g = np.exp(uniform_filter1d(np.log(np.clip(g, 10 ** (-9 / 20), 10 ** (9 / 20))), 24))
+        g = g / np.exp(np.mean(np.log(g)))                 # tone only; the level is matched separately
+        out = np.empty_like(rs)
+        for c in range(rs.shape[0]):
+            out[c] = istft(stft(rs[c]) * g[:, None], rs.shape[1])
+        return out
+
+    def ref_disagree(self, k):
+        """Where your clean track and the split play different things (notes, a missing part), where the split
+        is reliable (no singing): [[start, end]]."""
+        cfg = self.meta["refs"][k]
+        key = (k, cfg.get("nudge_ms"), cfg.get("gain_db"))
+        cache = self.__dict__.setdefault("_ref_dis", {})
+        if key in cache:
+            return cache[key]
+        ref = self.ref_audio(k)
+        Cr, Cs = self._beat_chroma(ref), self._beat_chroma(self.stems[k])
+        va = np.asarray(self.VA, float) if len(self.VA) else np.zeros(len(Cr))
+        cum = lambda y: np.r_[0, np.cumsum(np.asarray(y, np.float64).mean(0) ** 2)]
+        bt = (np.asarray(self.beats, int) * HOP).clip(0, ref.shape[1])
+        Er, Es = np.diff(cum(ref)[bt]), np.diff(cum(self.stems[k])[bt])
+        floor = 1e-4 * max(float(np.median(Er[Er > 0])) if np.any(Er > 0) else 1, 1e-12)
+        bad = []
+        for j in range(min(len(Cr), len(Cs), len(Er))):
+            if j < len(va) and va[j] > 0.15:
+                continue
+            if (Er[j] > floor) != (Es[j] > floor) or (Er[j] > floor and float(Cr[j] @ Cs[j]) < 0.55):
+                bad.append(j)
+        out, j0 = [], None
+        for i, j in enumerate(bad):
+            if j0 is None:
+                j0 = j
+            if i + 1 == len(bad) or bad[i + 1] != j + 1:
+                if j + 1 - j0 >= 2:
+                    out.append([round(self.beat_times[j0], 2), round(self.beat_times[min(j + 1, len(self.beat_times) - 1)], 2)])
+                j0 = None
+        cache[key] = out
+        return out
 
     def ref_audio(self, k):
         """Your clean track as it's used: lined up, level, timing nudge applied."""
@@ -1288,6 +1389,13 @@ class Project:
                 continue
             vc = self._vocal_curve(a, b) < 0.1            # level: match the instrument where nobody sings
             m = vc if vc.sum() > sr // 4 else np.ones(b - a, bool)
+            if cfg.get("tone_match", True):
+                try:
+                    seg = self._tone_matched(ref[:, lo:hi], raw[:, lo:hi], np.r_[np.zeros(a - lo, bool), m, np.zeros(hi - b, bool)])
+                    ref[:, lo:hi] = seg
+                    rs = ref[:, a:b]
+                except Exception as e:
+                    log(f"tone match skipped: {e}")
             gl = float(10 ** (float(cfg.get("gain_db", 0)) / 20))      # your level setting rides on top of the match
             g = float(np.clip(np.sqrt(float((raw[:, a:b][:, m] ** 2).mean()) / (float(((rs / gl)[:, m] ** 2).mean()) + 1e-12)), 0.25, 4))
             mode = (cfg.get("sections") or {}).get(str(si), "damaged")
@@ -1316,6 +1424,9 @@ class Project:
             cfg = (self.meta.get("refs") or {}).get(k)
             if cfg is None:
                 raise ValueError(f"No clean {k} track.")
+            if ch.get("auto_timing"):
+                ch = {**ch, "nudge_ms": self.ref_find_timing(k)}
+            self._push(f"Your clean {k} track", [i for i in self.suggestions if i.startswith(f"ref_{k}_")])
             for si, mode in (ch.get("sections") or {}).items():
                 if mode in self.REF_MODES:
                     cfg.setdefault("sections", {})[str(si)] = mode
@@ -1345,6 +1456,8 @@ class Project:
                 cfg["nudge_ms"] = float(np.clip(float(ch["nudge_ms"]), -100, 100))
             if "mute" in ch:
                 cfg["mute"] = bool(ch["mute"])
+            if "tone_match" in ch:
+                cfg["tone_match"] = bool(ch["tone_match"])
             return self._rebuild_ref(k, "accepted")
 
     def ref_lanes(self):
@@ -1365,7 +1478,12 @@ class Project:
                         c0 = lo // step
                         seg = w[:m * step].reshape(m, step).mean(1)
                         use[c0:c0 + m] = np.maximum(use[c0:c0 + m], seg[:max(0, cols - c0)])
-            out[k] = {**cfg, "rate": rate, "used": [round(float(v), 2) for v in use]}
+            try:
+                dis = self.ref_disagree(k)
+            except Exception as e:
+                log(f"disagreement check skipped for {k}: {e}")
+                dis = []
+            out[k] = {**cfg, "rate": rate, "used": [round(float(v), 2) for v in use], "disagree": dis}
         return out
 
     # ------------------------------------------------------------------ drum hits you can see and edit
@@ -1378,6 +1496,12 @@ class Project:
         if k not in self.stems:
             raise ValueError(f"No {k} track.")
         x = self.stems[k].mean(0)
+        if k not in self.PERCUSSIVE:
+            try:
+                cache[k] = self._note_map(k, x)
+                return cache[k]
+            except Exception as e:
+                log(f"note rows skipped for {k}: {e}")
         pos, clusters, F, lv, centers = HT.find_sounds(x, self.sr, min_count=3)
         rows, seen, hits = [], {}, []
         order = sorted(range(len(clusters)), key=lambda ci: -len(clusters[ci]))[:10]
@@ -1393,6 +1517,52 @@ class Project:
         cache[k] = {"rows": rows, "hits": hits, "_pos": pos, "_clusters": clusters, "_F": F, "_lv": lv}
         return cache[k]
 
+    NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+    def _note_map(self, k, x):
+        """Pitched track: every note start and its pitch (harmonic product spectrum over the first 120 ms),
+        rows = the notes it plays, high to low, like a piano roll."""
+        sr = self.sr
+        pos = HT.onsets(x, sr)
+        if len(pos) < 4:
+            raise ValueError("too few notes")
+        N = 8192
+        f = np.fft.rfftfreq(N, 1 / sr)
+        win = np.hanning(int(0.12 * sr))
+        lo_hz, hi_hz = (30, 400) if k == "bass" else (60, 1500)
+        notes, lvs = [], []
+        for p in pos:
+            seg = x[int(p) + int(0.01 * sr):int(p) + int(0.01 * sr) + len(win)]
+            if len(seg) < len(win):
+                notes.append(-1); lvs.append(-30.0); continue
+            S = np.abs(np.fft.rfft(seg * win, N))
+            hps = S.copy()
+            for h in (2, 3, 4):
+                d = S[::h]
+                hps[:len(d)] *= d
+            band = (f >= lo_hz) & (f <= hi_hz)
+            j = int(np.argmax(np.where(band, hps, 0)))
+            if j <= 0:
+                notes.append(-1); lvs.append(-30.0); continue
+            notes.append(int(round(69 + 12 * np.log2(f[j] / 440.0))))
+            lvs.append(float(np.log(np.mean(seg ** 2) + 1e-12)))
+        notes, lvs = np.array(notes), np.array(lvs)
+        counts = {}
+        for m in notes[notes > 0]:
+            counts[int(m)] = counts.get(int(m), 0) + 1
+        keep = sorted([m for m, c in counts.items() if c >= 2], key=lambda m: -counts[m])[:24]
+        keep.sort(reverse=True)
+        rows, hits, clusters = [], [], []
+        top = float(lvs.max()) if len(lvs) else 0.0
+        for m in keep:
+            idx = np.flatnonzero(notes == m)
+            clusters.append(idx)
+            rows.append({"id": len(rows), "name": f"{self.NOTE_NAMES[m % 12]}{m // 12 - 1}", "count": int(len(idx)), "midi": int(m)})
+            for i in idx:
+                hits.append([round(float(pos[i]) / sr, 4), len(rows) - 1, round(float(np.clip(np.exp((lvs[i] - top) / 2), 0, 1)), 3)])
+        hits.sort()
+        return {"rows": rows, "hits": hits, "_pos": pos, "_clusters": clusters, "_F": None, "_lv": lvs}
+
     def _drum_sample(self, k, sid):
         """The cleanest version of one drum sound: its clean hits (least singing), lined up and merged.
         Returns (audio (2, n) starting 3 ms before the attack, its level)."""
@@ -1404,6 +1574,24 @@ class Project:
         x = self.stems[k]
         sr = self.sr
         pre = int(0.003 * sr)
+        choice = (((self.mixer.get("drum_edits") or {}).get(k) or {}).get("samples") or {}).get(str(sid))
+        if choice and choice.get("mode") == "file":
+            try:
+                y = np.load(os.path.join(self.root, "stems", f"_drum_{k}_{sid}.npy")).astype(np.float32)
+                cache[(k, sid)] = (y, float(np.median(lv[c])))
+                return cache[(k, sid)]
+            except OSError:
+                pass
+        if choice and choice.get("mode") == "hit":       # one particular hit you picked
+            i = int(np.argmin(np.abs(pos / sr - float(choice.get("t", 0)))))
+            nx = int(pos[i + 1]) if i + 1 < len(pos) else x.shape[1]
+            L = int(np.clip(nx - int(pos[i]), 0.06 * sr, 0.6 * sr))
+            p0 = max(0, int(pos[i]) - pre)
+            y = np.asarray(x[:, p0:p0 + L + pre], np.float32).copy()
+            f = min(int(0.02 * sr), y.shape[1] // 4)
+            y[:, -f:] *= np.linspace(1, 0, f, dtype=np.float32)
+            cache[(k, sid)] = (y, float(lv[i]))
+            return cache[(k, sid)]
         nxt = {int(p): int(q) for p, q in zip(pos, np.r_[pos[1:], x.shape[1]])}
         gaps = [nxt[int(pos[i])] - int(pos[i]) for i in c]
         L = int(np.clip(np.median(gaps) if gaps else 0.3 * sr, 0.06 * sr, 0.6 * sr))
@@ -1438,7 +1626,11 @@ class Project:
         """Edit the hits of drum track k. ch: add {t, s} | remove_add t | off t | on t | rebuild {start, end} |
         unrebuild {start, end} | clear {start, end} (your edits there)."""
         with self.lock:
+            if not ch.get("_no_undo"):
+                self._push(f"Grid: {k}", [])
             e = self.mixer.setdefault("drum_edits", {}).setdefault(k, {"add": [], "off": [], "rebuild": []})
+            for key_ in ("vel", "move", "samples"):
+                e.setdefault(key_, [] if key_ != "samples" else {})
             near = lambda a, b: abs(float(a) - float(b)) < 0.012
             if ch.get("add"):
                 a = ch["add"]
@@ -1458,21 +1650,141 @@ class Project:
             if ch.get("unrebuild"):
                 r = ch["unrebuild"]
                 e["rebuild"] = [q for q in e["rebuild"] if q["end"] <= r["start"] or q["start"] >= r["end"]]
+            if ch.get("vel"):                              # louder or softer: {t, v} (detected or added hit)
+                t, v = float(ch["vel"]["t"]), float(np.clip(float(ch["vel"]["v"]), 0.05, 2.5))
+                hit = False
+                for x in e["add"]:
+                    if near(x["t"], t):
+                        x["v"] = round(v, 2)
+                        hit = True
+                if not hit:
+                    e["vel"] = [x for x in e["vel"] if not near(x["t"], t)] + ([{"t": round(t, 4), "v": round(v, 2)}] if abs(v - 1) > 0.02 else [])
+            if ch.get("paste"):                            # copied hits over these bars: replaces what's there
+                r = ch["paste"]
+                dm = self.drum_map(k)
+                for t, _, _ in dm["hits"]:
+                    if r["start"] <= t < r["end"] and not any(near(t, o) for o in e["off"]):
+                        e["off"].append(round(t, 4))
+                e["add"] = [x for x in e["add"] if not (r["start"] <= x["t"] < r["end"])]
+                e["add"] += [{"t": round(float(h["t"]), 4), "s": int(h["s"]), "v": float(h.get("v", 1.0))} for h in r.get("hits", [])
+                             if r["start"] <= float(h["t"]) < r["end"]]
+                e["rebuild"] = [q for q in e["rebuild"] if q["end"] <= r["start"] or q["start"] >= r["end"]]
+                e["rebuild"].append({"start": round(float(r["start"]), 3), "end": round(float(r["end"]), 3)})
+            if ch.get("tighten"):                          # pull hits toward the grid by `amount` (0..1), rebuilt
+                r = ch["tighten"]
+                amt = float(np.clip(float(r.get("amount", 0.5)), 0, 1))
+                bt = np.asarray(self.beat_times, float)
+                q16 = np.concatenate([np.linspace(bt[j], bt[j + 1], 5)[:-1] for j in range(len(bt) - 1)]) if len(bt) > 1 else bt
+                dm = self.drum_map(k)
+                e["move"] = [x for x in e["move"] if not (r["start"] <= x["t"] < r["end"])]
+                for t, _, _ in dm["hits"]:
+                    if r["start"] <= t < r["end"] and len(q16):
+                        g = float(q16[int(np.argmin(np.abs(q16 - t)))])
+                        if abs(g - t) > 0.002:
+                            e["move"].append({"t": round(t, 4), "to": round(t + amt * (g - t), 4)})
+                for x in e["add"]:
+                    if r["start"] <= x["t"] < r["end"] and len(q16):
+                        g = float(q16[int(np.argmin(np.abs(q16 - x["t"])))])
+                        x["t"] = round(x["t"] + amt * (g - x["t"]), 4)
+                e["rebuild"] = [q for q in e["rebuild"] if q["end"] <= r["start"] or q["start"] >= r["end"]]
+                e["rebuild"].append({"start": round(float(r["start"]), 3), "end": round(float(r["end"]), 3)})
+            if ch.get("sample"):                           # which sound plays a row: merge | hit | file
+                sm = ch["sample"]
+                if sm.get("mode") in (None, "merge"):
+                    e["samples"].pop(str(sm["s"]), None)
+                else:
+                    e["samples"][str(sm["s"])] = {kk: sm[kk] for kk in ("mode", "t", "name") if kk in sm}
+                self.__dict__.get("_drum_samples", {}).pop((k, int(sm["s"])), None)
             if ch.get("clear"):
                 r = ch["clear"]
                 inside = lambda t: r["start"] <= float(t) < r["end"]
                 e["add"] = [x for x in e["add"] if not inside(x["t"])]
                 e["off"] = [t for t in e["off"] if not inside(t)]
+                e["vel"] = [x for x in e["vel"] if not inside(x["t"])]
+                e["move"] = [x for x in e["move"] if not inside(x["t"])]
                 e["rebuild"] = [q for q in e["rebuild"] if q["end"] <= r["start"] or q["start"] >= r["end"]]
-            if not (e["add"] or e["off"] or e["rebuild"]):
+            if not (e["add"] or e["off"] or e["rebuild"] or e["vel"] or e["move"] or e["samples"]):
                 self.mixer["drum_edits"].pop(k, None)
             self._render_cache.pop(("stem", k), None)
             self._render_cache.pop("mix", None)
             return self.drum_edits(k)
 
+    def drum_load_sample(self, k, sid, audio, name):
+        """Your own one-shot for one row of the grid."""
+        y = np.asarray(audio, np.float32)
+        if y.shape[0] == 1:
+            y = np.repeat(y, 2, axis=0)
+        on = HT.onsets(y.mean(0), self.sr)
+        st_ = max(0, int(on[0]) - int(0.003 * self.sr)) if len(on) else 0
+        y = y[:, st_:st_ + int(1.0 * self.sr)]
+        dm = self.drum_map(k)
+        c = dm["_clusters"][sid]
+        ref = np.sqrt(np.mean([np.mean(self.stems[k][:, int(p):int(p) + int(0.05 * self.sr)] ** 2) for p in dm["_pos"][c][:20]]) + 1e-12)
+        y *= float(ref / (np.sqrt(np.mean(y[:, :int(0.05 * self.sr)] ** 2)) + 1e-9))
+        np.save(os.path.join(self.root, "stems", f"_drum_{k}_{sid}.npy"), y.astype(np.float32))
+        return self.drum_edit(k, {"sample": {"s": sid, "mode": "file", "name": name}})
+
+    def drum_midi_export(self, k, path):
+        """The grid's hits (with your edits) as a MIDI file on the song's tempo map."""
+        from . import midi as MI
+        dm, e = self.drum_map(k), self.drum_edits(k)
+        offs = e.get("off", [])
+        vel = {round(x["t"], 3): x["v"] for x in e.get("vel", [])}
+        gm = lambda nm: (36 if "kick" in nm else 38 if "snare" in nm or "clap" in nm else 42 if "hat" in nm
+                         else 49 if "cymbal" in nm or "crash" in nm or "ride" in nm else 45 if "tom" in nm else 39)
+        note_of = {}
+        for r in dm["rows"]:
+            note_of[r["id"]] = r.get("midi") or gm(r["name"].lower())
+        notes = []
+        for t, sid, lv in dm["hits"]:
+            if any(abs(t - o) < 0.012 for o in offs):
+                continue
+            v = vel.get(round(t, 3), 1.0)
+            notes.append((t, note_of.get(sid, 39), int(np.clip(40 + 87 * lv * v, 1, 127)), 0.1))
+        for ad in e.get("add", []):
+            notes.append((ad["t"], note_of.get(ad["s"], 39), int(np.clip(100 * ad.get("v", 1.0), 1, 127)), 0.1))
+        ch = 9 if k in self.PERCUSSIVE else 0
+        MI.write(path, self.beat_times, markers=[(sc["start"], sc["name"]) for sc in self.sections],
+                 tracks=[(k, ch, sorted(notes))], name=f"{self.meta.get('name', 'song')} - {k}")
+        return path
+
+    def drum_midi_import(self, k, data):
+        """Play a MIDI file's notes with this track's own clean sounds: drums by General MIDI note, pitched
+        instruments by note. Replaces what's in the bars the file covers. Returns how many notes were used."""
+        from . import midi as MI
+        notes = MI.read_notes(data)
+        if not notes:
+            raise ValueError("No notes in that MIDI file.")
+        dm = self.drum_map(k)
+        gm_name = lambda n: ("kick" if n in (35, 36) else "snare" if n in (37, 38, 39, 40) else "hat" if n in (42, 44, 46)
+                             else "cymbal" if n in (49, 51, 52, 53, 55, 57, 59) else "tom" if n in (41, 43, 45, 47, 48, 50) else "")
+        hits = []
+        for t, n, v in notes:
+            sid = None
+            for r in dm["rows"]:
+                if r.get("midi") is not None:
+                    if r["midi"] == n:
+                        sid = r["id"]
+                elif gm_name(n) and gm_name(n) in r["name"].lower():
+                    sid = r["id"]
+                if sid is not None:
+                    break
+            if sid is not None:
+                hits.append({"t": t, "s": sid, "v": round(max(0.1, v / 100), 2)})
+        if not hits:
+            raise ValueError("None of the file's notes match a sound on this track.")
+        a, b = min(h["t"] for h in hits), max(h["t"] for h in hits) + 0.25
+        bt = np.asarray(self.beat_times, float)
+        bars = [self.beat_times[s0] for s0, L in self.windows]
+        a = max([x for x in bars if x <= a] or [0.0])
+        b = min([x for x in bars if x >= b] or [float(self.meta.get("duration", b))])
+        self.drum_edit(k, {"paste": {"start": a, "end": b, "hits": hits}})
+        return len(hits)
+
     def drum_fill_pattern(self, k, start, end):
         """Add the hits the learned pattern is sure belong in [start, end) and the track is missing."""
         found = self.find_pattern_hits()
+        self._push(f"Grid: {k} pattern", [])
         n = 0
         for (kk, sid), ps in found.items():
             if kk != k:
@@ -1480,7 +1792,7 @@ class Project:
             for p in ps:
                 t = p / self.sr
                 if start <= t < end:
-                    self.drum_edit(k, {"add": {"t": t, "s": sid}})
+                    self.drum_edit(k, {"add": {"t": t, "s": sid}, "_no_undo": True})
                     n += 1
         return n
 
@@ -1509,19 +1821,43 @@ class Project:
                 out[:, a0:a1] += smp[:, a0 - a:a1 - a] * gain
         y = y.copy()
         nxt = np.r_[pos[1:], n] if len(pos) else pos
-        for t in e.get("off", []):                   # take a hit out: silence from its attack to the next hit
-            if not len(pos):
-                break
-            i = int(np.argmin(np.abs(pos / sr - t)))
+        def take_out(i, amount=1.0):
+            """Remove (part of) one hit's sound, not everything under it: its clean sample, lined up and
+            level-matched, is subtracted frequency by frequency, so a cymbal ringing underneath stays."""
             p = int(pos[i])
-            a, b = max(0, p - pre), min(n, int(nxt[i]), p + int(0.4 * sr))
-            r = min(int(0.004 * sr), (b - a) // 4)
-            w = np.ones(b - a, np.float32)
-            if r:
-                w[:r] = np.linspace(1, 0, r)
-                w[-r:] = np.linspace(0, 1, r)
-            y[:, a:b] *= (1 - w)[None, :] if r else 0
+            ci, lv = lvl_of.get(p, (None, None))
+            a, b = max(0, p - pre), min(n, int(nxt[i]) + int(0.05 * sr), p + int(0.6 * sr))
+            if ci is None or b - a < 256:
+                return
+            try:
+                smp, slv = self._drum_sample(k, ci)
+            except Exception:
+                return
+            L = min(b - a, smp.shape[1])
+            sh = HT.align(smp[:, :L].mean(0), y[:, a:a + L].mean(0), int(0.003 * sr))
+            a2 = int(np.clip(a - sh, 0, n - L))
+            g = float(np.clip(np.exp((lv - slv) / 2), 0.1, 4)) * amount
+            for c in range(y.shape[0]):
+                Y = stft(y[c, a2:a2 + L])
+                S = np.abs(stft(smp[c, :L] * g))
+                mag = np.maximum(np.abs(Y) - S, (0.05 if amount >= 1 else 0.3) * np.abs(Y))
+                y[c, a2:a2 + L] = istft(mag * np.exp(1j * np.angle(Y)), L)
         offs = e.get("off", [])
+        moves = {round(x["t"], 3): x["to"] for x in e.get("move", [])}
+        vels = {round(x["t"], 3): x["v"] for x in e.get("vel", [])}
+        in_rebuild = lambda t: any(q["start"] <= t < q["end"] for q in e.get("rebuild", []))
+        for t in offs:
+            if len(pos) and not in_rebuild(t):
+                take_out(int(np.argmin(np.abs(pos / sr - t))))
+        for tk, v in vels.items():                   # louder or softer detected hits
+            if not len(pos) or in_rebuild(tk):
+                continue
+            i = int(np.argmin(np.abs(pos / sr - tk)))
+            if v < 1:
+                take_out(i, 1 - v)
+            elif int(pos[i]) in lvl_of:
+                ci, lv = lvl_of[int(pos[i])]
+                place(y, pos[i] / sr, ci, v - 1, lv)
         for q in e.get("rebuild", []):               # these bars made again from clean samples, hit by hit
             a, b = max(0, int(q["start"] * sr)), min(n, int(q["end"] * sr))
             if b - a < 64:
@@ -1531,7 +1867,7 @@ class Project:
                 t = p / sr
                 if q["start"] <= t < q["end"] and not any(abs(t - o) < 0.012 for o in offs) and int(p) in lvl_of:
                     ci, lv = lvl_of[int(p)]
-                    place(synth, t, ci, 1.0, lv)
+                    place(synth, moves.get(round(t, 3), t), ci, vels.get(round(t, 3), 1.0), lv)
             for ad in e.get("add", []):
                 if q["start"] <= ad["t"] < q["end"]:
                     place(synth, ad["t"], ad["s"], ad.get("v", 1.0))
@@ -2031,10 +2367,11 @@ class Project:
     # ------------------------------------------------------------------ edits
     def _snapshot(self, ids):
         return [{"id": i, "sug": json.loads(json.dumps(self.suggestions[i])),
-                 "patch": self.patches.get(i)} for i in ids if i in self.suggestions]
+                 "patch": self.patches.get(i), "take_w": self.take_w.get(i)} for i in ids if i in self.suggestions]
 
     def _push(self, label, ids):
-        self.history.append({"label": label, "items": self._snapshot(ids), "mixer": json.loads(json.dumps(self.mixer))})
+        self.history.append({"label": label, "items": self._snapshot(ids), "mixer": json.loads(json.dumps(self.mixer)),
+                             "refs": json.loads(json.dumps(self.meta.get("refs") or {}))})
         self.history = self.history[-200:]
 
     def set_status(self, ids, status, label=None):
@@ -2948,7 +3285,16 @@ class Project:
                 return None
             h = self.history.pop()
             keep_changed = h["mixer"].get("keep") != self.mixer.get("keep")
+            drums_changed = h["mixer"].get("drum_edits") != self.mixer.get("drum_edits")
             self.mixer = h["mixer"]
+            if "refs" in h and h["refs"] != (self.meta.get("refs") or {}):
+                for k_ in set(h["refs"]) | set(self.meta.get("refs") or {}):
+                    self.display.get("raw", {}).pop(f"ref:{k_}", None)
+                    self._render_cache.pop(("stem", k_), None)
+                self.meta["refs"] = h["refs"]
+            if drums_changed:
+                for k_ in self.instruments:
+                    self._render_cache.pop(("stem", k_), None)
             if keep_changed:
                 for k in self.instruments:
                     self._render_cache.pop(("stem", k), None)
@@ -2963,6 +3309,8 @@ class Project:
                 self.suggestions[it["id"]] = it["sug"]
                 if it["patch"] is not None:
                     self.patches[it["id"]] = it["patch"]
+                if it.get("take_w") is not None:
+                    self.take_w[it["id"]] = it["take_w"]
                 self._invalidate(it["sug"]["stem"], it["id"])
             self._compute_grid()
             return h["label"]
@@ -4688,7 +5036,7 @@ class Project:
                 self.meta["quality_before"] = score("raw")[0]
             now, cells = score("repaired")
             # bar by bar, for the bars with singing: the weakest ones, so one bad bar isn't averaged away
-            weak = []
+            weak, bar_scores = [], {}
             for k in self.instruments:
                 if k in NOT_REPAIRED:
                     continue
@@ -4704,9 +5052,10 @@ class Project:
                         continue
                     qv = VF.clean_score(*VF.clean_terms(e, Eo[:, f0_:f1_], Ev[:, f0_:f1_], vf[f0_:f1_], vb))
                     weak.append({"stem": k, "start": a_ / self.sr, "end": b_ / self.sr, "score": int(qv)})
+                    bar_scores.setdefault(k, []).append([round(a_ / self.sr, 2), round(b_ / self.sr, 2), int(qv)])
             weak.sort(key=lambda x: x["score"])
             self.meta["quality"] = {"before": self.meta["quality_before"], "now": now, "cells": cells,
-                                    "weak_bars": [x for x in weak if x["score"] < 70][:15],
+                                    "weak_bars": [x for x in weak if x["score"] < 70][:15], "bar_scores": bar_scores,
                                     "at": time.time(), "applied": self._applied_count()}
             return self.meta["quality"]
 
