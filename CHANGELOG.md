@@ -1,5 +1,10 @@
 # What's new
 
+## 1.39.0
+
+- **Smarter merging of hits, notes, loops and samples.** Every copy is scored by how far it strays from what the copies agree on (singing, noise or a different strike all show up). Copies clearly worse than the best are left out; when the cleanest copy is clearly the best, it's used on its own, untouched. Otherwise only the good copies are merged, the better ones counting more, and the **attack stays the cleanest copy's**, so drums keep their snap (only the body and decay are merged).
+- Exported samples say what was done: "cleanest copy (the others were worse)" or "merged from 4 good copies".
+
 ## 1.38.0
 
 **Fewer, clearer tools** (nothing you've done to a song is lost):
