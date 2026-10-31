@@ -359,3 +359,17 @@ label.check input { margin-top: 3px; }
 .auto-details > summary { cursor: pointer; color: var(--dim, #999); margin-bottom: 8px; }
 .auto-stems { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 6px; background: rgba(127,127,127,.08); }
 .auto-stems span { flex: 1 1 260px; }
+.ref-lane { height: 64px; }
+.ref-lane .lane-head { background: color-mix(in srgb, var(--bg2) 85%, #6dbf8c 15%); font-weight: 500; gap: 3px; padding: 5px 10px; }
+.ref-lane .link { color: #6dbf8c; font-weight: 700; }
+.ref-lane .nm { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ref-lane .gain { font-size: 11px; }
+.ref-menu { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 4px; padding: 10px; min-width: 240px; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px #0008; }
+.ref-menu button { text-align: left; }
+.ref-menu button.on { outline: 2px solid #6dbf8c; }
+.grid-dlg { width: min(1280px, 96vw); max-width: 96vw; }
+.grid-top, .grid-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.grid-top h2 { margin: 0 10px 0 0; }
+.grid-top .spacer, .grid-actions .spacer { flex: 1; }
+#gridCanvas { width: 100%; display: block; margin: 8px 0; border-radius: 6px; cursor: pointer; }
+.ms .grid-btn { width: auto; padding: 0 6px; }

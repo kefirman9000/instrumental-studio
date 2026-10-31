@@ -275,7 +275,8 @@ async function openWorkspace(loading) {
   $("#workspace").hidden = false; $("#transport").hidden = false; $("#btnExport").disabled = false;
   $("#songName").textContent = st.ov.meta.name || "";
   buildLanes();
-  await loadSpectros(st.ov.stems.length ? st.ov.stems.concat(["vocals"]) : ["original"], ["raw", "after", "damage"]);
+  await loadSpectros((st.ov.stems.length ? st.ov.stems.concat(["vocals"]) : ["original"])
+    .concat(Object.keys(st.ov.ref_lanes || {}).map(k => "ref:" + k)), ["raw", "after", "damage"]);
   fitView();
   setVersion(st.version, true);
   renderAll();
@@ -284,15 +285,15 @@ async function openWorkspace(loading) {
 async function loadSpectros(stems, kinds) {
   const { cols, rows } = st.ov.display;
   await Promise.all(stems.flatMap(k => kinds.map(async kind => {
-    if ((k === "vocals" || k === "original") && kind !== "raw") return;
-    const buf = new Uint8Array(await (await fetch(`/api/spectro?stem=${k}&kind=${kind}&r=${st.rev}`, { headers: authed })).arrayBuffer());
+    if ((k === "vocals" || k === "original" || k.startsWith("ref:")) && kind !== "raw") return;
+    const buf = new Uint8Array(await (await fetch(`/api/spectro?stem=${encodeURIComponent(k)}&kind=${kind}&r=${st.rev}`, { headers: authed })).arrayBuffer());
     (st.specs[k] ||= {})[kind + "Data"] = buf;
   })));
   for (const k of stems) {
     const s = st.specs[k];
     for (const kind of ["raw", "after", "damage"]) s[kind] = s[kind] || null;
     s.raw = paintSpec(s.rawData, cols, rows, null);
-    if (k !== "vocals" && k !== "original") {
+    if (k !== "vocals" && k !== "original" && !k.startsWith("ref:")) {
       s.damage = paintSpec(s.rawData, cols, rows, { overlay: s.damageData, color: [229, 82, 122] });
       s.after = paintSpec(s.afterData, cols, rows, { fillFrom: s.rawData, color: [240, 176, 74] });
     }
@@ -349,7 +350,7 @@ function buildLanes() {
     lane.innerHTML = `
       <div class="lane-head">
         <div class="head-row"><span class="dot" style="background:${st.ov.colors[k] || "#888"}"></span><span class="nm"></span>
-          <div class="ms"><button class="m" title="Mute">M</button><button class="s" title="Solo">S</button></div></div>
+          <div class="ms"><button class="grid-btn" title="Edit the hits and notes on a beat grid (like a step sequencer): add, remove, rebuild bars from clean samples">Grid</button><button class="m" title="Mute">M</button><button class="s" title="Solo">S</button></div></div>
         <label class="gain">Level <input type="range" min="-24" max="12" step="0.5" value="0"><output>0 dB</output></label>
         <div class="badges"></div>
       </div><canvas></canvas>`;
@@ -366,7 +367,9 @@ function buildLanes() {
     const cv = lane.querySelector("canvas");
     cv.addEventListener("click", e => laneClick(e, k));
     cv.addEventListener("mousemove", e => laneHover(e, k));
+    lane.querySelector(".grid-btn").onclick = () => openGrid(k);
     wrap.append(lane);
+    if ((st.ov.ref_lanes || {})[k]) wrap.append(buildRefLane(k));
   }
   const ruler = $("#ruler");
   ruler.onmousedown = e => { st.drag = { t0: xToTime(e, ruler), t1: xToTime(e, ruler), moved: false }; hideKeepPop(); };
@@ -530,8 +533,251 @@ function renderLanes() {
   if (!st.ov) return;
   renderRuler(); if (st.ov.stems.length) renderVox();
   for (const k of (st.ov.stems.length ? st.ov.stems : ["original"])) renderLane(k);
+  for (const k of Object.keys(st.ov.ref_lanes || {})) renderRefLane(k);
   movePlayhead();
   syncHScroll();
+}
+
+/* ---------- the grid: hits and notes on the song's own beat, like a step sequencer */
+const ROW_COLORS = ["#ff8f5a", "#6dbf8c", "#58c6d6", "#f0b04a", "#b9a5ff", "#e5527a", "#9fc4ff", "#d36a9a", "#c8e06b", "#e7b0d0"];
+async function openGrid(k) {
+  try {
+    const g = await api.get(`/api/drums?stem=${encodeURIComponent(k)}`, 120000);
+    const t = Math.max(st.view.start, Math.min(player.currentTime || 0, st.view.start + viewSec()));
+    let b0 = 0; g.bars.forEach((bt, i) => { if (bt <= t + 0.01) b0 = i; });
+    st.grid = { k, g, b0, nb: +$("#gridBars").value };
+    $("#gridTitle").textContent = `Grid: ${nice(k[0].toUpperCase() + k.slice(1))}`;
+    $("#gridPattern").hidden = !["drums", "kick", "snare", "toms", "cymbals", "bass"].includes(k);
+    if (!g.rows.length) { toast("No repeated hits or notes found on this track to put on a grid."); return; }
+    $("#dlgGrid").showModal();
+    renderGrid();
+  } catch (e) { fail(e); }
+}
+function gridRange() {
+  const { g, b0, nb } = st.grid, dur = st.ov.meta.duration;
+  const a = g.bars[b0] ?? 0, b = g.bars[b0 + nb] ?? dur;
+  return [a, b];
+}
+// time <-> beat number along the song's own beats, so the grid is perfectly even even if the tempo drifts
+function tToBeat(t, bt) {
+  if (t <= bt[0]) return (t - bt[0]) / ((bt[1] - bt[0]) || 0.5);
+  let lo = 0, hi = bt.length - 1;
+  if (t >= bt[hi]) return hi + (t - bt[hi]) / ((bt[hi] - bt[hi - 1]) || 0.5);
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (bt[m] <= t) lo = m; else hi = m; }
+  return lo + (t - bt[lo]) / (bt[lo + 1] - bt[lo]);
+}
+function beatToT(x, bt) {
+  const j = Math.max(0, Math.min(bt.length - 2, Math.floor(x)));
+  return bt[j] + (x - j) * (bt[j + 1] - bt[j]);
+}
+function gridGeom() {
+  const cv = $("#gridCanvas"), { g } = st.grid, [a, b] = gridRange(), bt = g.beats;
+  const ba = tToBeat(a, bt), bb = tToBeat(b, bt);
+  const labelW = 120, rowH = 26, w = cv.clientWidth, h = g.rows.length * rowH + 22;
+  return { cv, g, a, b, bt, ba, bb, labelW, rowH, w, h, xOf: beat => labelW + (beat - ba) / (bb - ba) * (w - labelW) };
+}
+function gridEdits() { return (st.ov.mixer.drum_edits || {})[st.grid.k] || { add: [], off: [], rebuild: [] }; }
+function renderGrid() {
+  if (!st.grid) return;
+  const G = gridGeom(), { cv, g, a, b, bt, ba, bb, labelW, rowH, xOf } = G;
+  cv.style.height = G.h + "px";
+  const [ctx, w, h] = prepCanvas(cv), e = gridEdits();
+  ctx.fillStyle = "#151922"; ctx.fillRect(0, 0, w, h);
+  const top = 22;
+  // rebuilt bars
+  for (const q of e.rebuild || []) {
+    const x0 = Math.max(labelW, xOf(tToBeat(q.start, bt))), x1 = Math.min(w, xOf(tToBeat(q.end, bt)));
+    if (x1 > x0) { ctx.fillStyle = "#6dbf8c22"; ctx.fillRect(x0, top, x1 - x0, h - top); }
+  }
+  // grid: bars, beats, 16ths
+  for (let s = Math.ceil(ba * 4); s <= Math.floor(bb * 4); s++) {
+    const x = xOf(s / 4), beat = s % 4 === 0, bar = g.bars.some(t => Math.abs(tToBeat(t, bt) - s / 4) < 0.01);
+    ctx.fillStyle = bar ? "#ffffff70" : beat ? "#ffffff30" : "#ffffff12"; ctx.fillRect(x, top, 1, h - top);
+    if (bar) { ctx.fillStyle = "#ffffffa0"; ctx.font = "600 10px system-ui"; ctx.fillText(fmtP(beatToT(s / 4, bt)), x + 3, 14); }
+  }
+  // rows
+  g.rows.forEach((r, ri) => {
+    const y = top + ri * rowH;
+    ctx.fillStyle = ri % 2 ? "#ffffff06" : "#ffffff0d"; ctx.fillRect(labelW, y, w - labelW, rowH);
+    ctx.fillStyle = ROW_COLORS[ri % ROW_COLORS.length]; ctx.fillRect(6, y + 8, 9, 9);
+    ctx.fillStyle = "#e8eaf0"; ctx.font = "12px system-ui"; ctx.fillText(nice(r.name), 20, y + 17);
+  });
+  const cellW = Math.max(4, (xOf(ba + 0.25) - xOf(ba)) - 2);
+  const off = t => (e.off || []).some(o => Math.abs(o - t) < 0.012);
+  const rowIdx = id => g.rows.findIndex(r => r.id === id);
+  for (const [t, id, lv] of g.hits) {
+    if (t < a - 0.02 || t >= b) continue;
+    const ri = rowIdx(id); if (ri < 0) continue;
+    const beat = tToBeat(t, bt), snapped = Math.round(beat * 4) / 4, y = top + ri * rowH;
+    const x = xOf(snapped) + 1, col = ROW_COLORS[ri % ROW_COLORS.length];
+    if (off(t)) {
+      ctx.strokeStyle = "#e5527a"; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 4, cellW - 2, rowH - 8);
+      ctx.beginPath(); ctx.moveTo(x + 4, y + 7); ctx.lineTo(x + cellW - 4, y + rowH - 7); ctx.moveTo(x + cellW - 4, y + 7); ctx.lineTo(x + 4, y + rowH - 7); ctx.stroke();
+    } else {
+      ctx.globalAlpha = 0.35 + 0.65 * lv; ctx.fillStyle = col; ctx.fillRect(x, y + 4, cellW, rowH - 8); ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = "#ffffffc0"; ctx.fillRect(xOf(beat), y + rowH - 4, 1.5, 3);     // exact timing tick
+  }
+  for (const ad of e.add || []) {
+    if (ad.t < a - 0.02 || ad.t >= b) continue;
+    const ri = rowIdx(ad.s); if (ri < 0) continue;
+    const x = xOf(Math.round(tToBeat(ad.t, bt) * 4) / 4) + 1, y = top + ri * rowH;
+    ctx.fillStyle = "#6dbf8c"; ctx.fillRect(x, y + 4, cellW, rowH - 8);
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 4.5, cellW - 1, rowH - 9);
+  }
+  // playhead
+  const pt = player.currentTime || 0;
+  if (pt >= a && pt < b) { ctx.fillStyle = "#ffffff"; ctx.fillRect(xOf(tToBeat(pt, bt)), top, 1.5, h - top); }
+  const bars = g.bars.length;
+  $("#gridWhere").textContent = `bars ${st.grid.b0 + 1}-${Math.min(bars, st.grid.b0 + st.grid.nb)} of ${bars}`;
+}
+async function gridPost(path, body) {
+  try { const r = await api.post(path, body); await applyEdit(r); renderGrid(); return r; } catch (e) { fail(e); }
+}
+$("#gridCanvas").oncontextmenu = e => e.preventDefault();
+$("#gridCanvas").onmousedown = e => {
+  if (!st.grid) return;
+  const G = gridGeom(), r = G.cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top - 22;
+  if (x < G.labelW || y < 0) return;
+  const ri = Math.floor(y / G.rowH), row = G.g.rows[ri]; if (!row) return;
+  const beat = G.ba + (x - G.labelW) / (G.w - G.labelW) * (G.bb - G.ba);
+  const snap = $("#gridSnap").checked, stepB = Math.floor(beat * 4) / 4;
+  const half = (beatToT(stepB + 0.25, G.bt) - beatToT(stepB, G.bt));
+  const cellT0 = beatToT(stepB, G.bt), cellT1 = cellT0 + half;
+  const e2 = gridEdits(), k = st.grid.k;
+  const hit = G.g.hits.find(([t, id]) => id === row.id && t >= cellT0 - half / 2 && t < cellT1 - half / 2 + half / 2 + 0.001
+    && Math.abs(Math.round(tToBeat(t, G.bt) * 4) / 4 - stepB) < 0.01);
+  const added = (e2.add || []).find(ad => ad.s === row.id && Math.abs(Math.round(tToBeat(ad.t, G.bt) * 4) / 4 - stepB) < 0.01);
+  if (e.button === 2) { if (added) gridPost("/api/drums/edit", { stem: k, change: { remove_add: added.t } }); return; }
+  if (hit) {
+    const isOff = (e2.off || []).some(o => Math.abs(o - hit[0]) < 0.012);
+    gridPost("/api/drums/edit", { stem: k, change: isOff ? { on: hit[0] } : { off: hit[0] } });
+  } else if (added) {
+    gridPost("/api/drums/edit", { stem: k, change: { remove_add: added.t } });
+  } else {
+    const t = snap ? cellT0 : beatToT(beat, G.bt);
+    gridPost("/api/drums/edit", { stem: k, change: { add: { t, s: row.id } } });
+  }
+};
+$("#gridPrev").onclick = () => { st.grid.b0 = Math.max(0, st.grid.b0 - st.grid.nb); renderGrid(); };
+$("#gridNext").onclick = () => { st.grid.b0 = Math.min(Math.max(0, st.grid.g.bars.length - 1), st.grid.b0 + st.grid.nb); renderGrid(); };
+$("#gridBars").onchange = () => { if (st.grid) { st.grid.nb = +$("#gridBars").value; renderGrid(); } };
+$("#gridSnap").onchange = () => renderGrid();
+$("#gridPlay").onclick = () => { const [a] = gridRange(); seek(a); player.play().catch(() => {}); };
+$("#gridRebuild").onclick = () => { const [a, b] = gridRange(); gridPost("/api/drums/edit", { stem: st.grid.k, change: { rebuild: { start: a, end: b } } }); };
+$("#gridUnrebuild").onclick = () => { const [a, b] = gridRange(); gridPost("/api/drums/edit", { stem: st.grid.k, change: { unrebuild: { start: a, end: b } } }); };
+$("#gridClear").onclick = () => { const [a, b] = gridRange(); gridPost("/api/drums/edit", { stem: st.grid.k, change: { clear: { start: a, end: b } } }); };
+$("#gridPattern").onclick = async () => {
+  const [a, b] = gridRange();
+  const r = await gridPost("/api/drums/pattern", { stem: st.grid.k, start: a, end: b });
+  if (r) toast(r.added ? `Added ${r.added} hit${r.added === 1 ? "" : "s"} the pattern was sure about.` : "The pattern found nothing missing in these bars.");
+};
+(function gridLoop() { if (st.grid && $("#dlgGrid").open && !player.paused) renderGrid(); requestAnimationFrame(gridLoop); })();
+
+/* ---------- your clean tracks: their own lanes, under the instrument they feed */
+const REF_MODE_NAMES = { damaged: "Where the singing damaged it", stem: "Your stem (the whole part)", mix: "Mix (half and half)", split: "The split (not your stem)" };
+function buildRefLane(k) {
+  const r = st.ov.ref_lanes[k];
+  const lane = document.createElement("div"); lane.className = "lane ref-lane"; lane.dataset.ref = k;
+  lane.innerHTML = `
+    <div class="lane-head">
+      <div class="head-row"><span class="link" title="Feeds the ${nice(k)} lane above">↳</span><span class="nm"></span>
+        <div class="ms"><button class="m" title="Leave it out everywhere (mute)">M</button><button class="s" title="Hear only your clean track">S</button><button class="x" title="Stop using this clean track">×</button></div></div>
+      <label class="gain">Level <input type="range" class="rg" min="-24" max="12" step="0.5"><output></output></label>
+      <label class="gain">Timing <input type="number" class="rn" min="-100" max="100" step="1" style="width:56px"> ms</label>
+    </div><canvas></canvas>`;
+  lane.querySelector(".nm").textContent = `Your clean ${nice(k)}`;
+  lane.querySelector(".nm").title = `${r.name} (${Math.round((r.match || 0) * 100)}% match). Drag on the lane to use it there, Alt + drag (or right-drag) to leave it out; click a section to choose for the whole part.`;
+  const rg = lane.querySelector(".rg"), out = lane.querySelector("output"), rn = lane.querySelector(".rn");
+  rg.value = r.gain_db || 0; out.textContent = `${(+rg.value).toFixed(1)} dB`; rn.value = r.nudge_ms || 0;
+  rg.oninput = () => { out.textContent = `${(+rg.value).toFixed(1)} dB`; };
+  rg.onchange = () => refEdit(k, { gain_db: +rg.value }, true);
+  rg.ondblclick = () => { rg.value = 0; rg.oninput(); rg.onchange(); };
+  rn.onchange = () => refEdit(k, { nudge_ms: +rn.value }, true);
+  const bm = lane.querySelector(".m"), bs = lane.querySelector(".s");
+  bm.classList.toggle("on", !!r.mute); bs.classList.toggle("on", st.refSolo === k);
+  bm.onclick = () => refEdit(k, { mute: !r.mute });
+  bs.onclick = () => { st.refSolo = st.refSolo === k ? null : k; bs.classList.toggle("on", st.refSolo === k); reloadAudio();
+    toast(st.refSolo ? `Playing only your clean ${nice(k)}. Press S again to go back.` : "Back to the full mix."); };
+  lane.querySelector(".x").onclick = async () => {
+    try { await api.post("/api/ref_remove", { stem: k }); await openWorkspace(); toast(`Stopped using your clean ${nice(k)} track. Undo brings its parts back.`); }
+    catch (e) { fail(e); }
+  };
+  const cv = lane.querySelector("canvas");
+  cv.oncontextmenu = e => e.preventDefault();
+  cv.onmousedown = e => {
+    if (e.button === 1 || spaceDown) return;
+    const on = !(e.altKey || e.button === 2), t0 = clamp(xToTime(e, cv), 0, st.ov.meta.duration);
+    st.refDrag = { k, t0, t1: t0, on, moved: false };
+    const move = ev => { const d = st.refDrag; if (!d) return; d.t1 = clamp(xToTime(ev, cv), 0, st.ov.meta.duration);
+      if (Math.abs(d.t1 - d.t0) * st.view.pps > 4) d.moved = true; renderRefLane(k); };
+    const up = ev => {
+      window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
+      const d = st.refDrag; st.refDrag = null; if (!d) return;
+      if (d.moved) { refEdit(k, { paint: { start: Math.min(d.t0, d.t1), end: Math.max(d.t0, d.t1), on: d.on } }); return; }
+      const si = st.ov.sections.findIndex(s => d.t0 >= s.start && d.t0 < s.end);
+      if (si >= 0) refSectionMenu(k, si, ev); else renderRefLane(k);
+    };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  };
+  return lane;
+}
+function refSectionMenu(k, si, e) {
+  document.querySelectorAll(".ref-menu").forEach(m => m.remove());
+  const r = st.ov.ref_lanes[k], cur = (r.sections || {})[si] || "damaged", sec = st.ov.sections[si];
+  const m = document.createElement("div"); m.className = "ref-menu";
+  m.innerHTML = `<b></b>` + Object.entries(REF_MODE_NAMES).map(([v, t]) => `<button data-v="${v}" class="${v === cur ? "on" : ""}">${t}</button>`).join("")
+    + (r.paint && r.paint.length ? `<button data-v="clear" class="ghost">Clear what I painted (everywhere)</button>` : "");
+  m.querySelector("b").textContent = `${sec.name}: use`;
+  m.style.left = Math.min(e.clientX, window.innerWidth - 260) + "px"; m.style.top = Math.min(e.clientY, window.innerHeight - 220) + "px";
+  m.querySelectorAll("button").forEach(b => b.onclick = () => {
+    m.remove();
+    if (b.dataset.v === "clear") refEdit(k, { clear_paint: true });
+    else refEdit(k, { sections: { [si]: b.dataset.v } });
+  });
+  document.body.append(m);
+  setTimeout(() => document.addEventListener("mousedown", function off(ev) { if (!m.contains(ev.target)) { m.remove(); document.removeEventListener("mousedown", off); } }), 0);
+}
+async function refEdit(k, change, respec) {
+  try {
+    const r = await api.post("/api/ref_edit", { stem: k, change });
+    if (respec) await loadSpectros(["ref:" + k], ["raw"]);
+    await applyEdit(r);
+  } catch (e) { fail(e); }
+}
+function renderRefLane(k) {
+  const lane = $(`.ref-lane[data-ref="${k}"]`); if (!lane || !st.ov.ref_lanes?.[k]) return;
+  const r = st.ov.ref_lanes[k];
+  const cv = lane.querySelector("canvas"); const [ctx, w, h] = prepCanvas(cv);
+  const spec = st.specs["ref:" + k]?.raw, fps = st.ov.display.fps;
+  ctx.fillStyle = "#151922"; ctx.fillRect(0, 0, w, h);
+  if (spec) { ctx.globalAlpha = r.mute ? 0.35 : 0.85; ctx.drawImage(spec, st.view.start * fps, 0, viewSec() * fps, spec.height, 0, 0, w, h); ctx.globalAlpha = 1; }
+  // where it's used: green, as strong as it's used
+  const used = r.used || [], rate = r.rate || 10;
+  const i0 = Math.max(0, Math.floor(st.view.start * rate)), i1 = Math.min(used.length, Math.ceil((st.view.start + viewSec()) * rate) + 1);
+  for (let i = i0; i < i1; i++) {
+    if (used[i] <= 0.02) continue;
+    const x0 = tToX(i / rate), x1 = tToX((i + 1) / rate);
+    ctx.fillStyle = `rgba(109,191,140,${0.18 + 0.42 * used[i]})`; ctx.fillRect(x0, 0, x1 - x0 + 0.5, h);
+  }
+  // sections and their choice
+  ctx.font = "600 10px system-ui";
+  st.ov.sections.forEach((s, si) => {
+    const x0 = tToX(s.start), x1 = tToX(s.end); if (x1 < 0 || x0 > w) return;
+    ctx.fillStyle = "#ffffff26"; ctx.fillRect(x0, 0, 1, h);
+    const mode = (r.sections || {})[si] || "damaged";
+    if (x1 - x0 > 60) { ctx.fillStyle = "#ffffffb0"; ctx.fillText({ damaged: "where damaged", stem: "your stem", mix: "mix", split: "split" }[mode], Math.max(x0, 0) + 4, h - 5); }
+  });
+  for (const p of r.paint || []) {               // painted strokes: a line along the top
+    const x0 = tToX(p.start), x1 = tToX(p.end); if (x1 < 0 || x0 > w) continue;
+    ctx.fillStyle = p.on ? "#6dbf8c" : "#e5527a"; ctx.fillRect(x0, 0, x1 - x0, 3);
+  }
+  const d = st.refDrag;
+  if (d && d.k === k && d.moved) {
+    const x0 = tToX(Math.min(d.t0, d.t1)), x1 = tToX(Math.max(d.t0, d.t1));
+    ctx.fillStyle = d.on ? "#6dbf8c55" : "#e5527a55"; ctx.fillRect(x0, 0, x1 - x0, h);
+  }
+  drawKept(ctx, w, h, false);
 }
 // the scrollbar under the lanes: as wide as the whole song at this zoom, kept in step with the view
 let hsFromCode = false;
@@ -603,7 +849,7 @@ function setVersion(v, force) {
 }
 function reloadAudio() {
   const t = player.currentTime || 0, wasPlaying = !player.paused;
-  player.src = `/api/audio?version=${st.version}&rev=${st.rev}`;
+  player.src = `/api/audio?version=${st.version}&rev=${st.rev}` + (st.refSolo ? `&ref=${encodeURIComponent(st.refSolo)}` : "");
   // Nothing is fetched until it plays (preload="none"): the app used to render the whole mix when a song
   // opened and after every edit, even if you never pressed play. The position is kept for when you do.
   try { player.currentTime = t; } catch {}
