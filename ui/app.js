@@ -193,11 +193,14 @@ $("#btnExGo").onclick = async () => {
   if (nat) { const p = await nat.choose_song(); if (p) runExtract({ path: p, kind, mode }); return; }
   $("#exFile").click();
 };
-$("#exFile").onchange = async e => {
-  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+async function extractFile(f) {
   try { showBusy(0.01, "Copying the song into the app"); const j = await upload(f, "song" + Date.now());
     runExtract({ path: j.path, kind: $("#exKind").value, mode: $("#exMode").value }); } catch (err) { hideBusy(); fail(err); }
-};
+}
+$("#exFile").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) extractFile(f); };
+$("#exDrop").onclick = () => $("#exFile").click();
+$("#exDrop").ondragover = e => { e.preventDefault(); $("#exDrop").classList.add("over"); };
+$("#exDrop").ondragleave = () => $("#exDrop").classList.remove("over");
 
 let stemsAuto = false;          // set by "Import stems and build", used once by startStems
 async function pickStems(auto) {
@@ -246,6 +249,11 @@ window.addEventListener("dragleave", e => { if (!dragHasFiles(e)) return; if (--
 window.addEventListener("drop", async e => {
   if (!dragHasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; $("#dropZone").hidden = true;
+  if ($("#dlgExtract").open) {             // dropped while extracting samples: that's the song to use
+    const f = [...e.dataTransfer.files].find(x => AUDIO_RE.test(x.name) || (x.type || "").startsWith("audio/"));
+    if (f) extractFile(f); else toast("Drop an audio file (MP3, WAV, FLAC, M4A or OGG).");
+    return;
+  }
   if (S_busy()) { toast("Wait for the current song to finish processing, then drop the next one."); return; }
   const all = [...e.dataTransfer.files];
   const files = all.filter(f => AUDIO_RE.test(f.name) || (f.type || "").startsWith("audio/"));
@@ -602,6 +610,7 @@ async function openGrid(k) {
     const t = Math.max(st.view.start, Math.min(player.currentTime || 0, st.view.start + viewSec()));
     let b0 = 0; g.bars.forEach((bt, i) => { if (bt <= t + 0.01) b0 = i; });
     st.grid = { k, g, b0, nb: +$("#gridBars").value };
+    $("#gridSim").value = g.sim || 0.9; $("#gridSimOut").textContent = simWord(g.sim || 0.9);
     $("#gridTitle").textContent = `Grid: ${nice(k[0].toUpperCase() + k.slice(1))}`;
     $("#gridPattern").hidden = !["drums", "kick", "snare", "toms", "cymbals", "bass"].includes(k);
     if (!g.rows.length) { toast("No repeated hits or notes found on this track to put on a grid."); return; }
@@ -678,6 +687,11 @@ function renderDrumGrid() {
       if (Math.abs(v - 1) > 0.02) { ctx.fillStyle = "#fff"; ctx.font = "9px system-ui"; ctx.fillText(Math.round(v * 100) + "%", x + 2, y + 13); }
     }
     ctx.fillStyle = "#ffffffc0"; ctx.fillRect(xOf(beat), y + rowH - 4, 1.5, 3);     // exact timing tick
+    const f4 = (g.hits.find(h => h[0] === t && h[1] === id) || [])[3];
+    if (f4 != null && f4 < 0.8 && !off(t)) {        // doesn't sound much like its sound: maybe damaged
+      ctx.strokeStyle = "#f0b04a"; ctx.setLineDash([3, 2]); ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 0.5, y + 3.5, cellW - 1, rowH - 7); ctx.setLineDash([]);
+    }
   }
   for (const ad of e.add || []) {
     if (ad.t < a - 0.02 || ad.t >= b) continue;
@@ -692,8 +706,23 @@ function renderDrumGrid() {
   const bars = g.bars.length;
   $("#gridWhere").textContent = `bars ${st.grid.b0 + 1}-${Math.min(bars, st.grid.b0 + st.grid.nb)} of ${bars}`;
 }
+let gridCatchUp = null;
 async function gridPost(path, body) {
-  try { const r = await api.post(path, body); await applyEdit(r); renderDrumGrid(); return r; } catch (e) { fail(e); }
+  try {
+    const r = await api.post(path, body);
+    if (r.light) {                       // the grid updates now; the tracks and audio catch up once you pause
+      st.rev = r.rev;
+      (st.ov.mixer.drum_edits ||= {})[st.grid.k] = r.edits;
+      if (r.rows) { st.grid.g.rows = r.rows; st.grid.g.hits = r.hits; }
+      renderDrumGrid(); reloadAudio();
+      clearTimeout(gridCatchUp);
+      gridCatchUp = setTimeout(async () => {
+        try { const o = await api.get("/api/overview", 60000); await applyEdit(o, { keepSpectro: false }); renderDrumGrid(); } catch {}
+      }, 1500);
+      return r;
+    }
+    await applyEdit(r); renderDrumGrid(); return r;
+  } catch (e) { fail(e); }
 }
 $("#gridCanvas").oncontextmenu = e => e.preventDefault();
 $("#gridCanvas").onmousedown = e => {
@@ -739,12 +768,14 @@ function gridSampleMenu(row, e) {
   m.innerHTML = `<b></b>
     <button data-v="merge" class="${!cur ? "on" : ""}">A merge of its cleanest hits (default)</button>
     <button data-v="hit" class="${cur && cur.mode === "hit" ? "on" : ""}">The ${nice(row.name)} nearest the playhead</button>
-    <button data-v="file" class="${cur && cur.mode === "file" ? "on" : ""}">My own sample…${cur && cur.mode === "file" ? " (" + (cur.name || "loaded") + ")" : ""}</button>`;
+    <button data-v="file" class="${cur && cur.mode === "file" ? "on" : ""}">My own sample…${cur && cur.mode === "file" ? " (" + (cur.name || "loaded") + ")" : ""}</button>
+    <button data-v="odd">Repair this sound's odd hits (whole song)</button>`;
   m.querySelector("b").textContent = `${nice(row.name)} plays:`;
   m.style.left = Math.min(e.clientX, window.innerWidth - 280) + "px"; m.style.top = Math.min(e.clientY, window.innerHeight - 180) + "px";
   m.querySelectorAll("button").forEach(b => b.onclick = () => {
     m.remove();
     if (b.dataset.v === "file") { st.gridSampleRow = row.id; $("#gridSampleFile").click(); return; }
+    if (b.dataset.v === "odd") { gridRepairOdd({ s: row.id }); return; }
     if (b.dataset.v === "hit") {
       const pt = player.currentTime || 0, mine = st.grid.g.hits.filter(h => h[1] === row.id);
       if (!mine.length) return;
@@ -792,6 +823,16 @@ $("#gridMidiFile").onchange = async e => {
     if (r) toast(`Played ${r.used} note${r.used === 1 ? "" : "s"} from ${f.name} with this track's clean sounds.`, { ms: 7000 });
   } catch (err) { fail(err); }
 };
+async function gridRepairOdd(extra) {
+  const r = await gridPost("/api/drums/repair_odd", { stem: st.grid.k, ...extra });
+  if (r) toast(r.repaired ? `Rebuilt ${r.repaired} odd hit${r.repaired === 1 ? "" : "s"} from the merge of each sound's best hits.` :
+    "No odd hits: where a sound plays at the same place in almost every bar, every copy already sounds right.", { ms: 7000 });
+}
+$("#gridOddHere").onclick = () => { const [a, b] = gridRange(); gridRepairOdd({ start: a, end: b }); };
+$("#gridOddAll").onclick = () => gridRepairOdd({});
+$("#gridSim").oninput = () => { $("#gridSimOut").textContent = simWord(+$("#gridSim").value); };
+$("#gridSim").onchange = () => gridPost("/api/drums/similarity", { stem: st.grid.k, sim: +$("#gridSim").value });
+const simWord = v => v < 0.84 ? "loose" : v < 0.88 ? "fairly loose" : v < 0.92 ? "normal" : v < 0.95 ? "strict" : "very strict";
 $("#gridPrev").onclick = () => { st.grid.b0 = Math.max(0, st.grid.b0 - st.grid.nb); renderDrumGrid(); };
 $("#gridNext").onclick = () => { st.grid.b0 = Math.min(Math.max(0, st.grid.g.bars.length - 1), st.grid.b0 + st.grid.nb); renderDrumGrid(); };
 $("#gridBars").onchange = () => { if (st.grid) { st.grid.nb = +$("#gridBars").value; renderDrumGrid(); } };

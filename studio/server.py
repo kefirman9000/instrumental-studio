@@ -1087,7 +1087,7 @@ class Handler(BaseHTTPRequestHandler):
                 p = self._proj()
                 k = q["stem"]
                 dm = p.drum_map(k)
-                return self._send(200, {"rows": dm["rows"], "hits": dm["hits"], "edits": p.drum_edits(k),
+                return self._send(200, {"rows": dm["rows"], "hits": dm["hits"], "edits": p.drum_edits(k), "sim": dm.get("sim", 0.9),
                                         "beats": p.beat_times, "bars": [p.beat_times[s0] for s0, L in p.windows if s0 < len(p.beat_times)]})
             if path == "/api/report":
                 return self._send(200, self._proj().report())
@@ -1428,7 +1428,25 @@ class Handler(BaseHTTPRequestHandler):
                 p.display.get("raw", {}).pop(f"ref:{d['stem']}", None) if ("gain_db" in (d.get("change") or {}) or "nudge_ms" in (d.get("change") or {})) else None
                 p.save()
             elif path == "/api/drums/edit":
-                p.drum_edit(str(d["stem"]), d.get("change") or {})
+                # quick answer for the grid (no whole-song refresh); the window catches up when you pause
+                e_ = p.drum_edit(str(d["stem"]), d.get("change") or {})
+                S.rev += 1
+                S.audio_cache.clear()
+                _schedule_save(p)
+                return self._send(200, {"ok": True, "rev": S.rev, "edits": e_, "light": True})
+            elif path == "/api/drums/similarity":
+                dm = p.drum_set_similarity(str(d["stem"]), float(d["sim"]))
+                S.rev += 1
+                S.audio_cache.clear()
+                _schedule_save(p)
+                return self._send(200, {"ok": True, "rev": S.rev, "rows": dm["rows"], "hits": dm["hits"],
+                                        "edits": p.drum_edits(str(d["stem"])), "light": True})
+            elif path == "/api/drums/repair_odd":
+                n_ = p.drum_repair_odd(str(d["stem"]), d.get("s"), d.get("start"), d.get("end"))
+                S.rev += 1
+                S.audio_cache.clear()
+                _schedule_save(p)
+                return self._send(200, {"ok": True, "rev": S.rev, "repaired": n_, "edits": p.drum_edits(str(d["stem"])), "light": True})
             elif path == "/api/drums/sample":
                 k_, sid_ = str(d["stem"]), int(d["s"])
                 if d.get("path"):
