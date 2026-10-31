@@ -109,7 +109,9 @@ def device_info():
     if _DEVICE:
         return _DEVICE
     code = ("import torch;"
-            "c=torch.cuda.is_available();"
+            "c=torch.cuda.is_available()\n"
+            "try:\n if c: (torch.ones(8,device='cuda')*2).sum().item()\n"
+            "except Exception: c=False\n"
             "m=getattr(torch.backends,'mps',None) and torch.backends.mps.is_available();"
             "print('cuda|'+torch.cuda.get_device_name(0) if c else 'mps|Apple GPU' if m else 'cpu|CPU')")
     try:
