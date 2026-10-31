@@ -4652,7 +4652,8 @@ class Project:
                             envs.append(E / E[:, :3].max())
                     if envs:
                         tmpl[r["id"]] = np.median(envs, axis=0)
-            notes = dm if dm and dm["rows"] and dm["rows"][0].get("midi") is not None else None
+            # the note mask only on the bass (one note at a time); on mixed tracks it would remove the other instruments
+            notes = dm if k == "bass" and dm and dm["rows"] and dm["rows"][0].get("midi") is not None else None
             loops = []
             try:
                 loops = self.find_loops(raw, drums=perc, limit=6)
@@ -4801,7 +4802,9 @@ class Project:
         clearly weaker than its clean copies. One review item per section. Returns ids."""
         ids = []
         sr = self.sr
-        for k in (ks or [x for x in self.instruments if self._tonal(x)]):
+        # only tracks that play one note at a time (the bass): on a track holding several instruments ("other",
+        # guitar, piano) one detected note doesn't describe what's playing, and rebuilding it loses the rest
+        for k in (ks or [x for x in self.instruments if x == "bass"]):
             try:
                 dm = self.drum_map(k)
             except Exception as e:
@@ -5070,10 +5073,10 @@ class Project:
             ("pattern", "Learn the drum and bass patterns and restore hits and notes the vocals took",
              "Only where the pattern is near-certain one belongs, the original recording has that sound there, and the "
              "track is missing it.", len([x for x in self.instruments if x in self.PERCUSSIVE or x == "bass"])),
-            ("notes", "Rebuild damaged bass notes (and other pitched notes) as the notes they are",
+            ("notes", "Rebuild damaged bass notes as the notes they are",
              "Notes under the singing that came out clearly weaker are made again from clean copies of the same note "
              "elsewhere in the song (or a nearby note retuned a little).",
-             len([x for x in self.instruments if self._tonal(x)])),
+             1 if "bass" in self.instruments else 0),
             ("loops", "Loop-based songs: play each loop again from its clean copies",
              "Where an instrument repeats a 1-4 bar loop, copies under the singing are replaced by a merge of the clean "
              "copies. Best for electronic and loop-based music; off by default.",
