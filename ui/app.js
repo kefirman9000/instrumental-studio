@@ -188,9 +188,12 @@ window.addEventListener("dragenter", e => {
   e.preventDefault(); dragDepth++;
   if (S_busy()) return;
   const inEditor = $("#welcome").hidden && st.ov;
-  $("#dropTitle").textContent = inEditor ? "Drop a song to start a new project" : "Drop a song to open it";
-  $("#dropSub").textContent = inEditor
-    ? `"${st.ov.meta.name}" is saved and stays in Songs. A set of stems (including the vocals) also starts a new project.`
+  const forSong = inEditor && st.ov.stems.length && !e.shiftKey;
+  $("#dropTitle").textContent = forSong ? `Drop clean stems, loops or samples to use in "${st.ov.meta.name}"`
+    : inEditor ? "Drop a song to start a new project" : "Drop a song to open it";
+  $("#dropSub").textContent = forSong
+    ? "The app works out which instrument each one is and where it goes. Hold Shift while dropping to open a new song instead."
+    : inEditor ? `"${st.ov.meta.name}" is saved and stays in Songs. A set of stems (including the vocals) also starts a new project.`
     : "Or drop a full set of stems, including the vocals, to import them";
   $("#dropZone").hidden = false;
 });
@@ -203,6 +206,8 @@ window.addEventListener("drop", async e => {
   const all = [...e.dataTransfer.files];
   const files = all.filter(f => AUDIO_RE.test(f.name) || (f.type || "").startsWith("audio/"));
   if (!files.length) { toast(all.length ? "That doesn't look like an audio file. Drop an MP3, WAV, FLAC, M4A or OGG." : "Drop audio files, not folders."); return; }
+  // a split song is open: what you drop is used in it (clean stems, loops, samples), unless Shift is held
+  if ($("#welcome").hidden && st.ov && st.ov.stems.length && !e.shiftKey) { openRefWith(files); return; }
   stopPreview(); player.pause();
   if (files.length > 1 && files.some(f => /vocal|vox/i.test(f.name))) return (stemsAuto = false, openStemFiles)(files);
   if (files.length > 1) toast(`Opening ${files[0].name}. Drop one song at a time, or a full set of stems including the vocals.`, { ms: 6000 });
@@ -1373,7 +1378,8 @@ function renderSteps() {
 
   const fromFile = !demo && ov.meta.separation !== "Imported stems" && !!ov.meta.source;
   $("#vinylBox").hidden = !fromFile;
-  $("#refBox").hidden = at < 2 || !ov.stems.length;
+  $("#refBox").hidden = at < 1 || !ov.stems.length;
+  $("#btnRefOpen2").hidden = !ov.stems.length;
   const vy = ov.meta.vinyl;
   $("#btnVinylUndo").hidden = !vy;
   $("#importSub").textContent = vy ? `Vinyl crackle removed (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks)`
@@ -2335,6 +2341,13 @@ function renderRefRows() {
   $("#refApplyRow").hidden = false;
 }
 $("#btnRefOpen").onclick = () => { refFiles = []; $("#refBuild").checked = false; renderRefRows(); $("#dlgRef").showModal(); };
+$("#btnRefOpen2").onclick = () => $("#btnRefOpen").onclick();
+function openRefWith(files) {
+  const add = files.map(file => ({ file, stem: guessStem(file.name), use: "vocals" }));
+  if ($("#dlgRef").open) refFiles = refFiles.concat(add);          // dropped onto the open window: add to the list
+  else { refFiles = add; $("#refKind").value = "auto"; $("#refBuild").checked = false; $("#dlgRef").showModal(); }
+  renderRefRows();
+}
 $("#btnAutoStems").onclick = () => {        // from the build window: add stems, then build with them
   $("#dlgAuto").close(); refFiles = []; $("#refBuild").checked = true; renderRefRows(); $("#dlgRef").showModal();
 };
