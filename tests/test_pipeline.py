@@ -130,6 +130,12 @@ def main():
                                                        match_level=True, declick=True))
     if files:
         print(f"       {len(files)} files")
+    def loud():
+        p.export(os.path.join(root, "export_lufs"), "wav", ("mix",), lufs=-14.0)
+        got = p.meta.get("last_export_lufs")
+        assert got is not None and got <= -13.5, got
+        return got
+    print(f"       {step('export at streaming loudness', loud)} LUFS")
     step("vinyl declick on the stems", lambda: p.declick_stems("normal"))
     print()
     if FAILED:

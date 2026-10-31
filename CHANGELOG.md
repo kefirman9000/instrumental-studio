@@ -1,5 +1,15 @@
 # What's new
 
+## 1.27.0
+
+- **Fast model without a graphics card.** On the processor, each start begins on *Quick draft* (about 4 times faster than Best quality); pick another any time.
+- **Time estimates before splitting** ("about 3 min on your processor"), learned from this computer's own splits.
+- **Split time and device after splitting:** step 2 says what the split ran on and how long it took.
+- **Your clean tracks** list (Levels tab): each clean stem you added, its match and where it's used, with **Remove** (Undo brings its parts back).
+- **A cappella silencing joins short pauses** where the singer breathes and nothing else plays, instead of leaving gaps.
+- **Note when Python is a test version** on the start screen, with the download link.
+- **Match streaming loudness (-14 LUFS)** in Export: measured like Spotify and YouTube do, with a gentle shared limiter (at most 6 dB) so every file stays in step and peaks stay under -1 dB.
+
 ## 1.26.0
 
 - **Work it out for me** (the new default in *Add clean stems or a sample…*): drop in any clean files and the app decides what each one is:
