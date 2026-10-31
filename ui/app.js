@@ -519,6 +519,12 @@ function renderLane(k) {
       ctx.setLineDash([]); ctx.globalAlpha = 1;
     }
   }
+  const bs = st.ov.meta.quality?.bar_scores?.[k];
+  if (bs) for (const [a0, b0, q] of bs) {         // clean score per bar: red needs work, amber so-so, green clean
+    const x0 = tToX(a0), x1 = tToX(b0); if (x1 < 0 || x0 > w) continue;
+    ctx.fillStyle = q < 60 ? "#e5527a" : q < 80 ? "#f0b04a" : "#6dbf8c"; ctx.globalAlpha = 0.85;
+    ctx.fillRect(x0 + 1, 0, Math.max(1, x1 - x0 - 2), 3); ctx.globalAlpha = 1;
+  }
   drawKept(ctx, w, h, true);
   drawMuted(ctx, w, h, k);
   drawLeftover(ctx, w, h, k);
@@ -604,6 +610,9 @@ function renderGrid() {
   });
   const cellW = Math.max(4, (xOf(ba + 0.25) - xOf(ba)) - 2);
   const off = t => (e.off || []).some(o => Math.abs(o - t) < 0.012);
+  const velOf = t => ((e.vel || []).find(x => Math.abs(x.t - t) < 0.012) || {}).v ?? 1;
+  const custom = e.samples || {};
+  g.rows.forEach((r, ri) => { if (custom[r.id]) { ctx.fillStyle = "#f0b04a"; ctx.fillText("•", labelW - 14, top + ri * rowH + 17); } });
   const rowIdx = id => g.rows.findIndex(r => r.id === id);
   for (const [t, id, lv] of g.hits) {
     if (t < a - 0.02 || t >= b) continue;
@@ -614,7 +623,9 @@ function renderGrid() {
       ctx.strokeStyle = "#e5527a"; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 4, cellW - 2, rowH - 8);
       ctx.beginPath(); ctx.moveTo(x + 4, y + 7); ctx.lineTo(x + cellW - 4, y + rowH - 7); ctx.moveTo(x + cellW - 4, y + 7); ctx.lineTo(x + 4, y + rowH - 7); ctx.stroke();
     } else {
-      ctx.globalAlpha = 0.35 + 0.65 * lv; ctx.fillStyle = col; ctx.fillRect(x, y + 4, cellW, rowH - 8); ctx.globalAlpha = 1;
+      const v = velOf(t) * (st.gridDrag && st.gridDrag.t === t ? st.gridDrag.v / st.gridDrag.v0 : 1);
+      ctx.globalAlpha = Math.min(1, 0.25 + 0.75 * lv * v); ctx.fillStyle = col; ctx.fillRect(x, y + 4, cellW, rowH - 8); ctx.globalAlpha = 1;
+      if (Math.abs(v - 1) > 0.02) { ctx.fillStyle = "#fff"; ctx.font = "9px system-ui"; ctx.fillText(Math.round(v * 100) + "%", x + 2, y + 13); }
     }
     ctx.fillStyle = "#ffffffc0"; ctx.fillRect(xOf(beat), y + rowH - 4, 1.5, 3);     // exact timing tick
   }
@@ -622,7 +633,7 @@ function renderGrid() {
     if (ad.t < a - 0.02 || ad.t >= b) continue;
     const ri = rowIdx(ad.s); if (ri < 0) continue;
     const x = xOf(Math.round(tToBeat(ad.t, bt) * 4) / 4) + 1, y = top + ri * rowH;
-    ctx.fillStyle = "#6dbf8c"; ctx.fillRect(x, y + 4, cellW, rowH - 8);
+    ctx.globalAlpha = Math.min(1, 0.35 + 0.65 * (ad.v ?? 1)); ctx.fillStyle = "#6dbf8c"; ctx.fillRect(x, y + 4, cellW, rowH - 8); ctx.globalAlpha = 1;
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 4.5, cellW - 1, rowH - 9);
   }
   // playhead
@@ -638,8 +649,9 @@ $("#gridCanvas").oncontextmenu = e => e.preventDefault();
 $("#gridCanvas").onmousedown = e => {
   if (!st.grid) return;
   const G = gridGeom(), r = G.cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top - 22;
-  if (x < G.labelW || y < 0) return;
+  if (y < 0) return;
   const ri = Math.floor(y / G.rowH), row = G.g.rows[ri]; if (!row) return;
+  if (x < G.labelW) { gridSampleMenu(row, e); return; }
   const beat = G.ba + (x - G.labelW) / (G.w - G.labelW) * (G.bb - G.ba);
   const snap = $("#gridSnap").checked, stepB = Math.floor(beat * 4) / 4;
   const half = (beatToT(stepB + 0.25, G.bt) - beatToT(stepB, G.bt));
@@ -649,15 +661,86 @@ $("#gridCanvas").onmousedown = e => {
     && Math.abs(Math.round(tToBeat(t, G.bt) * 4) / 4 - stepB) < 0.01);
   const added = (e2.add || []).find(ad => ad.s === row.id && Math.abs(Math.round(tToBeat(ad.t, G.bt) * 4) / 4 - stepB) < 0.01);
   if (e.button === 2) { if (added) gridPost("/api/drums/edit", { stem: k, change: { remove_add: added.t } }); return; }
-  if (hit) {
-    const isOff = (e2.off || []).some(o => Math.abs(o - hit[0]) < 0.012);
-    gridPost("/api/drums/edit", { stem: k, change: isOff ? { on: hit[0] } : { off: hit[0] } });
-  } else if (added) {
-    gridPost("/api/drums/edit", { stem: k, change: { remove_add: added.t } });
+  if (hit || added) {
+    // drag up or down: louder or softer; a click without dragging toggles
+    const t = hit ? hit[0] : added.t, v0 = hit ? (((e2.vel || []).find(q => Math.abs(q.t - t) < 0.012) || {}).v ?? 1) : (added.v ?? 1);
+    st.gridDrag = { t, v0, v: v0, y0: e.clientY, moved: false };
+    const move = ev => { const d = st.gridDrag; if (!d) return; const dy = d.y0 - ev.clientY;
+      if (Math.abs(dy) > 4) d.moved = true; d.v = clamp(d.v0 * Math.pow(2, dy / 60), 0.05, 2.5); renderGrid(); };
+    const up = () => {
+      window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
+      const d = st.gridDrag; st.gridDrag = null; if (!d) return;
+      if (d.moved) { gridPost("/api/drums/edit", { stem: k, change: { vel: { t: d.t, v: d.v } } }); return; }
+      if (hit) {
+        const isOff = (e2.off || []).some(o => Math.abs(o - hit[0]) < 0.012);
+        gridPost("/api/drums/edit", { stem: k, change: isOff ? { on: hit[0] } : { off: hit[0] } });
+      } else gridPost("/api/drums/edit", { stem: k, change: { remove_add: added.t } });
+    };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
   } else {
     const t = snap ? cellT0 : beatToT(beat, G.bt);
     gridPost("/api/drums/edit", { stem: k, change: { add: { t, s: row.id } } });
   }
+};
+function gridSampleMenu(row, e) {
+  document.querySelectorAll(".ref-menu").forEach(m => m.remove());
+  const k = st.grid.k, cur = (gridEdits().samples || {})[row.id];
+  const m = document.createElement("div"); m.className = "ref-menu";
+  m.innerHTML = `<b></b>
+    <button data-v="merge" class="${!cur ? "on" : ""}">A merge of its cleanest hits (default)</button>
+    <button data-v="hit" class="${cur && cur.mode === "hit" ? "on" : ""}">The ${nice(row.name)} nearest the playhead</button>
+    <button data-v="file" class="${cur && cur.mode === "file" ? "on" : ""}">My own sample…${cur && cur.mode === "file" ? " (" + (cur.name || "loaded") + ")" : ""}</button>`;
+  m.querySelector("b").textContent = `${nice(row.name)} plays:`;
+  m.style.left = Math.min(e.clientX, window.innerWidth - 280) + "px"; m.style.top = Math.min(e.clientY, window.innerHeight - 180) + "px";
+  m.querySelectorAll("button").forEach(b => b.onclick = () => {
+    m.remove();
+    if (b.dataset.v === "file") { st.gridSampleRow = row.id; $("#gridSampleFile").click(); return; }
+    if (b.dataset.v === "hit") {
+      const pt = player.currentTime || 0, mine = st.grid.g.hits.filter(h => h[1] === row.id);
+      if (!mine.length) return;
+      const best = mine.reduce((p, h) => Math.abs(h[0] - pt) < Math.abs(p[0] - pt) ? h : p);
+      gridPost("/api/drums/sample", { stem: k, s: row.id, mode: "hit", t: best[0] });
+      return;
+    }
+    gridPost("/api/drums/sample", { stem: k, s: row.id, mode: "merge" });
+  });
+  document.body.append(m);
+  setTimeout(() => document.addEventListener("mousedown", function off(ev) { if (!m.contains(ev.target)) { m.remove(); document.removeEventListener("mousedown", off); } }), 0);
+}
+$("#gridSampleFile").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f || st.gridSampleRow == null) return;
+  try { const up = await upload(f, "smp" + Date.now()); await gridPost("/api/drums/sample", { stem: st.grid.k, s: st.gridSampleRow, path: up.path }); toast(`${f.name} now plays that row.`); }
+  catch (err) { fail(err); }
+};
+$("#gridCopy").onclick = () => {
+  const [a, b] = gridRange(), G = gridGeom(), e = gridEdits();
+  const offs = e.off || [], vel = t => ((e.vel || []).find(q => Math.abs(q.t - t) < 0.012) || {}).v ?? 1;
+  const hits = G.g.hits.filter(([t]) => t >= a && t < b && !offs.some(o => Math.abs(o - t) < 0.012))
+    .map(([t, s]) => ({ off: tToBeat(t, G.bt) - G.ba, s, v: vel(t) }))
+    .concat((e.add || []).filter(x => x.t >= a && x.t < b).map(x => ({ off: tToBeat(x.t, G.bt) - G.ba, s: x.s, v: x.v ?? 1 })));
+  st.gridClip = { k: st.grid.k, hits, beats: G.bb - G.ba };
+  $("#gridPaste").disabled = false;
+  toast(`Copied ${hits.length} hit${hits.length === 1 ? "" : "s"}. Move to other bars and press Paste here.`);
+};
+$("#gridPaste").onclick = () => {
+  const c = st.gridClip; if (!c) return;
+  if (c.k !== st.grid.k) return toast("Those hits were copied from another track.");
+  const [a, b] = gridRange(), G = gridGeom();
+  const hits = [];
+  for (let rep = 0; rep * c.beats < G.bb - G.ba; rep++)        // short copies repeat to fill the bars
+    for (const h of c.hits) { const bt = G.ba + rep * c.beats + h.off; if (bt < G.bb) hits.push({ t: beatToT(bt, G.bt), s: h.s, v: h.v }); }
+  gridPost("/api/drums/edit", { stem: st.grid.k, change: { paste: { start: a, end: b, hits } } });
+};
+$("#gridTighten").onclick = () => { const [a, b] = gridRange(); gridPost("/api/drums/edit", { stem: st.grid.k, change: { tighten: { start: a, end: b, amount: +$("#gridTightAmt").value } } }); };
+$("#gridMidiOut").onclick = async () => { try { const r = await api.post("/api/drums/midi_export", { stem: st.grid.k }); toast(`Saved ${r.path}`, { ms: 8000 }); } catch (e) { fail(e); } };
+$("#gridMidiIn").onclick = () => $("#gridMidiFile").click();
+$("#gridMidiFile").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  try {
+    const up = await upload(f, "mid" + Date.now());
+    const r = await gridPost("/api/drums/midi_import", { stem: st.grid.k, path: up.path });
+    if (r) toast(`Played ${r.used} note${r.used === 1 ? "" : "s"} from ${f.name} with this track's clean sounds.`, { ms: 7000 });
+  } catch (err) { fail(err); }
 };
 $("#gridPrev").onclick = () => { st.grid.b0 = Math.max(0, st.grid.b0 - st.grid.nb); renderGrid(); };
 $("#gridNext").onclick = () => { st.grid.b0 = Math.min(Math.max(0, st.grid.g.bars.length - 1), st.grid.b0 + st.grid.nb); renderGrid(); };
@@ -672,7 +755,14 @@ $("#gridPattern").onclick = async () => {
   const r = await gridPost("/api/drums/pattern", { stem: st.grid.k, start: a, end: b });
   if (r) toast(r.added ? `Added ${r.added} hit${r.added === 1 ? "" : "s"} the pattern was sure about.` : "The pattern found nothing missing in these bars.");
 };
-(function gridLoop() { if (st.grid && $("#dlgGrid").open && !player.paused) renderGrid(); requestAnimationFrame(gridLoop); })();
+(function gridLoop() {
+  if (st.grid && $("#dlgGrid").open && !player.paused) {
+    const [a, b] = gridRange();
+    if ($("#gridLoop").checked && player.currentTime >= b) seek(a);
+    renderGrid();
+  }
+  requestAnimationFrame(gridLoop);
+})();
 
 /* ---------- your clean tracks: their own lanes, under the instrument they feed */
 const REF_MODE_NAMES = { damaged: "Where the singing damaged it", stem: "Your stem (the whole part)", mix: "Mix (half and half)", split: "The split (not your stem)" };
@@ -684,7 +774,8 @@ function buildRefLane(k) {
       <div class="head-row"><span class="link" title="Feeds the ${nice(k)} lane above">↳</span><span class="nm"></span>
         <div class="ms"><button class="m" title="Leave it out everywhere (mute)">M</button><button class="s" title="Hear only your clean track">S</button><button class="x" title="Stop using this clean track">×</button></div></div>
       <label class="gain">Level <input type="range" class="rg" min="-24" max="12" step="0.5"><output></output></label>
-      <label class="gain">Timing <input type="number" class="rn" min="-100" max="100" step="1" style="width:56px"> ms</label>
+      <label class="gain">Timing <input type="number" class="rn" min="-100" max="100" step="1" style="width:52px"> ms <button type="button" class="ra small ghost" title="Find the best timing automatically">Auto</button>
+        <input type="checkbox" class="rt" title="Match its tone to the song (session stems are often unmixed)"> Tone</label>
     </div><canvas></canvas>`;
   lane.querySelector(".nm").textContent = `Your clean ${nice(k)}`;
   lane.querySelector(".nm").title = `${r.name} (${Math.round((r.match || 0) * 100)}% match). Drag on the lane to use it there, Alt + drag (or right-drag) to leave it out; click a section to choose for the whole part.`;
@@ -694,6 +785,9 @@ function buildRefLane(k) {
   rg.onchange = () => refEdit(k, { gain_db: +rg.value }, true);
   rg.ondblclick = () => { rg.value = 0; rg.oninput(); rg.onchange(); };
   rn.onchange = () => refEdit(k, { nudge_ms: +rn.value }, true);
+  lane.querySelector(".ra").onclick = () => refEdit(k, { auto_timing: true }, true);
+  const rt = lane.querySelector(".rt"); rt.checked = r.tone_match !== false;
+  rt.onchange = () => refEdit(k, { tone_match: rt.checked });
   const bm = lane.querySelector(".m"), bs = lane.querySelector(".s");
   bm.classList.toggle("on", !!r.mute); bs.classList.toggle("on", st.refSolo === k);
   bm.onclick = () => refEdit(k, { mute: !r.mute });
@@ -768,6 +862,10 @@ function renderRefLane(k) {
     const mode = (r.sections || {})[si] || "damaged";
     if (x1 - x0 > 60) { ctx.fillStyle = "#ffffffb0"; ctx.fillText({ damaged: "where damaged", stem: "your stem", mix: "mix", split: "split" }[mode], Math.max(x0, 0) + 4, h - 5); }
   });
+  for (const [a0, b0] of r.disagree || []) {     // where your stem and the split play different things
+    const x0 = tToX(a0), x1 = tToX(b0); if (x1 < 0 || x0 > w) continue;
+    ctx.fillStyle = "#ff8f5a"; ctx.fillRect(x0, h - 4, Math.max(2, x1 - x0), 4);
+  }
   for (const p of r.paint || []) {               // painted strokes: a line along the top
     const x0 = tToX(p.start), x1 = tToX(p.end); if (x1 < 0 || x0 > w) continue;
     ctx.fillStyle = p.on ? "#6dbf8c" : "#e5527a"; ctx.fillRect(x0, 0, x1 - x0, 3);
@@ -990,6 +1088,7 @@ function showKeepPop(a, b, e) {
     btn.onclick = () => { hideKeepPop(); setMutes([...(st.ov.mixer.mute_ranges || []), { start: a, end: b, stem: k }]); };
     mr.append(btn);
   }
+  pop.querySelector('[data-act="compare"]').onclick = () => { hideKeepPop(); playCompare(a, b); };
   pop.querySelector('[data-act="smooth"]').onclick = async () => {
     hideKeepPop();
     try {
@@ -2327,3 +2426,35 @@ const useGpu = async () => {
 };
 $("#btnGpu").onclick = useGpu;
 $("#btnGpu2").onclick = useGpu;
+
+
+/* ---------- compare a part: original, split, result, back to back */
+let cmp = null;
+function playCompare(a, b) {
+  const order = ["original", "raw", "repaired"], names = { original: "the original song", raw: "the split as it came", repaired: "your result" };
+  cmp = { a, b, i: 0, order, back: st.version };
+  const step = () => {
+    if (!cmp) return;
+    if (cmp.i >= order.length) { const back = cmp.back; cmp = null; setVersion(back); player.pause(); seek(a); toast("Done comparing."); return; }
+    setVersion(order[cmp.i], true); seek(a); player.play().catch(() => {});
+    toast(`Playing ${names[order[cmp.i]]} (${cmp.i + 1} of 3)`, { ms: Math.max(1500, (b - a) * 1000) });
+  };
+  step();
+  const tick = () => {
+    if (!cmp) return;
+    if (player.currentTime >= b || player.paused && player.currentTime > a + 0.2) { cmp.i++; step(); }
+    if (cmp) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/* ---------- hold B: hear the split as it came (no fixes) at the same spot; let go to go back */
+let abBack = null;
+window.addEventListener("keydown", e => {
+  if (e.key.toLowerCase() !== "b" || e.repeat || abBack || !st.ov || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  abBack = st.version; setVersion("raw");
+});
+window.addEventListener("keyup", e => {
+  if (e.key.toLowerCase() !== "b" || !abBack) return;
+  const back = abBack; abBack = null; setVersion(back);
+});

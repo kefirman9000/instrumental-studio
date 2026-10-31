@@ -102,3 +102,70 @@ def write(path, beat_times, beats_per_bar=4, markers=(), tracks=(), name="Instru
     with open(path, "wb") as f:
         f.write(hdr + b"".join(chunks))
     return first_offset
+
+
+def read_notes(data):
+    """Note-ons of a standard MIDI file: [(seconds, note, velocity)], following its tempo changes."""
+    import struct as _st
+    if data[:4] != b"MThd":
+        raise ValueError("That isn't a MIDI file.")
+    hl = _st.unpack(">I", data[4:8])[0]
+    fmt, ntr, div = _st.unpack(">HHH", data[8:14])
+    if div & 0x8000:
+        raise ValueError("SMPTE-timed MIDI files aren't supported.")
+    pos = 8 + hl
+    events, tempos = [], [(0, 500000)]
+    for _ in range(ntr):
+        if data[pos:pos + 4] != b"MTrk":
+            break
+        ln = _st.unpack(">I", data[pos + 4:pos + 8])[0]
+        p, end, tick, run = pos + 8, pos + 8 + ln, 0, None
+        while p < end:
+            d = 0
+            while True:
+                b = data[p]; p += 1
+                d = (d << 7) | (b & 0x7F)
+                if not b & 0x80:
+                    break
+            tick += d
+            st = data[p]
+            if st == 0xFF:
+                typ, p = data[p + 1], p + 2
+                l = 0
+                while True:
+                    b = data[p]; p += 1
+                    l = (l << 7) | (b & 0x7F)
+                    if not b & 0x80:
+                        break
+                if typ == 0x51 and l == 3:
+                    tempos.append((tick, int.from_bytes(data[p:p + 3], "big")))
+                p += l
+                continue
+            if st in (0xF0, 0xF7):
+                p += 1
+                l = 0
+                while True:
+                    b = data[p]; p += 1
+                    l = (l << 7) | (b & 0x7F)
+                    if not b & 0x80:
+                        break
+                p += l
+                continue
+            if st & 0x80:
+                run, p = st, p + 1
+            kind = run & 0xF0
+            nargs = 1 if kind in (0xC0, 0xD0) else 2
+            args = data[p:p + nargs]; p += nargs
+            if kind == 0x90 and len(args) == 2 and args[1] > 0:
+                events.append((tick, args[0], args[1]))
+        pos = end
+    tempos.sort()
+    def secs(t):
+        out, last_t, last_us = 0.0, 0, 500000
+        for tt, us in tempos:
+            if tt >= t:
+                break
+            out += (tt - last_t) * last_us / div / 1e6
+            last_t, last_us = tt, us
+        return out + (t - last_t) * last_us / div / 1e6
+    return sorted((round(secs(t), 4), n, v) for t, n, v in events)
