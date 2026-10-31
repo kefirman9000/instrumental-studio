@@ -171,6 +171,34 @@ $("#fileSong").onchange = async e => {
   await openSongFile(f);
   e.target.value = "";
 };
+/* ---------- extract samples, straight from the start screen */
+$("#btnExtract").onclick = () => {
+  const s = st.state || {}, from = $("#exFrom");
+  from.innerHTML = `<option value="file">A song file…</option>` +
+    (s.projects || []).map(p => `<option value="${encodeURIComponent(p.id)}">${p.name.replace(/[<>&"]/g, "")}</option>`).join("");
+  fillModelSelect($("#exMode"), s.models || {});
+  const cpu = /CPU/i.test(s.model?.device || "");
+  $("#exMode").value = cpu ? "4stem_fast" : "6stem_best";
+  $("#dlgExtract").showModal();
+};
+async function runExtract(body) {
+  $("#dlgExtract").close();
+  try { showBusy(0.02, "Getting the song ready"); await api.post("/api/extract_samples", body); watchJob(); }
+  catch (e) { hideBusy(); fail(e); }
+}
+$("#btnExGo").onclick = async () => {
+  const kind = $("#exKind").value, mode = $("#exMode").value, from = $("#exFrom").value;
+  if (from !== "file") return runExtract({ project: decodeURIComponent(from), kind, mode });
+  const nat = await nativeReady();
+  if (nat) { const p = await nat.choose_song(); if (p) runExtract({ path: p, kind, mode }); return; }
+  $("#exFile").click();
+};
+$("#exFile").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  try { showBusy(0.01, "Copying the song into the app"); const j = await upload(f, "song" + Date.now());
+    runExtract({ path: j.path, kind: $("#exKind").value, mode: $("#exMode").value }); } catch (err) { hideBusy(); fail(err); }
+};
+
 let stemsAuto = false;          // set by "Import stems and build", used once by startStems
 async function pickStems(auto) {
   stemsAuto = auto;
@@ -241,6 +269,7 @@ $("#sepMode").onchange = e => { localStorage.setItem("sepMode", e.target.value);
 function renderSpeedTip() {
   const m = st.state?.model || {}, sel = $("#sepMode");
   if (m.installed && /CPU/i.test(m.device || "") && sel.dataset.auto) sel.value = "4stem_fast";
+  else if (m.installed && m.device_kind === "cuda" && sel.dataset.auto && [...sel.options].some(o => o.value === "agree")) sel.value = "agree";
   sel.title = speedTip(sel.value, /CPU/i.test(m.device || ""));
   if (st.ov) renderSteps();
 }
@@ -1477,6 +1506,7 @@ function speedTip(mode, cpu) {
     "6stem": "6 tracks: adds guitar and piano lanes, so damage is found and repaired per instrument. The piano track is less clean.",
     "6stem_best": cpu ? "6 tracks with drums, bass and vocals from the best model: 2 models in a row, slow on a CPU." : "6 tracks with drums, bass and vocals from the best model: 2 models in a row.",
     "ensemble": "Two models combined: they fill each other's gaps, so least is lost under the vocals. Slowest.",
+    "agree": cpu ? "Three models split it and each instrument keeps only what they agree on: the fewest artifacts and least leftover singing. Slow on a CPU (about 6x Quick draft)." : "Three models split it and each instrument keeps only what they agree on: the fewest artifacts and least leftover singing. Recommended with a graphics card.",
     "hybrid": "Roformer takes the vocals out first (the cleanest removal), then the best model splits the rest. Extra download.",
     "hybrid6": "Roformer takes the vocals out first (the cleanest removal), then the 6-track model splits the rest. Extra download.",
   }[mode] || "";
@@ -2290,9 +2320,20 @@ async function openAutoBuild() {
       row.querySelector("span").textContent = stp.detail;
       box.append(row);
     }
+    st.autoSteps = r.steps;
     $("#dlgAuto").showModal();
   } catch (e) { fail(e); }
 }
+function autoPreset(all) {
+  for (const stp of st.autoSteps || []) {
+    const box = $(`#autoSteps input[name="${stp.key}"]`); if (!box) continue;
+    box.checked = all ? stp.count > 0 && stp.key !== "deep" || (stp.on && !stp.extra) : !!stp.on;
+    box.closest(".auto-step").classList.toggle("off", !box.checked);
+  }
+  $("#autoSimple").classList.toggle("on", !all); $("#autoAll").classList.toggle("on", all);
+}
+$("#autoSimple").onclick = () => autoPreset(false);
+$("#autoAll").onclick = () => autoPreset(true);
 $("#dlgAuto").addEventListener("close", async () => {
   const dlg = $("#dlgAuto"); if (dlg.returnValue !== "ok") return;
   const steps = $$("#autoSteps input").filter(i => i.checked).map(i => i.name);

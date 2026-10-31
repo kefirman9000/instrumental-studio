@@ -633,6 +633,40 @@ def _auto_rest(p):
     S.job["result"] = {"report": res["report"], "title": "Your instrumental is built"}
 
 
+def _job_extract(path, project_id, kind, mode):
+    """From the start screen: a song in, its samples out. Opens the song (or the one already in Songs),
+    splits it if it isn't yet, finds its repeated hits and loops, and saves them."""
+    if project_id:
+        _progress(0.02, "Opening the song")
+        S.project = _Project().load(os.path.join(PROJECTS, os.path.basename(str(project_id))))
+        S.rev += 1
+    else:
+        _job_song(path)
+        S.job["result"] = None
+    p = S.project
+    if not p.instruments:
+        if p.meta.get("source") != "demo" and not SEP.demucs_available() and \
+                not _reuse_stems(p.meta.get("source_hash"), mode, exclude=p.root):
+            raise RuntimeError("Splitting needs the separation model: download it on the start screen first.")
+        _job_split(mode, {})
+    if p.stage != "detected":
+        p.detect(lambda f, m: _progress(None if f is None else 0.86 + 0.08 * f, f"Finding the hits and loops: {m}"))
+    _progress(0.95, "Saving the samples")
+    name = re.sub(r"[^\w\- ()]", "", p.meta.get("name", "song")) or "song"
+    folder = os.path.join(EXPORTS, name, f"{name} - samples")
+    what = (["samples_raw"] if kind in ("single", "both") else []) + (["samples_merged"] if kind in ("merged", "both") else [])
+    files = p.export_samples(folder, raw="samples_raw" in what, merged="samples_merged" in what)
+    p.save()
+    reveal(folder)
+    S.job["result"] = {"title": "Samples saved", "report": [
+        f"Saved {len(files)} sample file{'s' if len(files) != 1 else ''} from \"{p.meta.get('name')}\" to {folder}.",
+        {"single": "Each is the single cleanest copy found in the song.",
+         "merged": "Each is a merge of its cleanest copies (what's only in one copy, like a trace of singing, drops out).",
+         "both": "Each comes as the single cleanest copy and as a merge of its cleanest copies."}[kind],
+        "Folders: loops of each section, samples that repeat (1 to 4 bars) from the whole instrumental and each "
+        "instrument, and the drum one-shots. The song is open behind this, if you want to fix it up too."]}
+
+
 def _job_full(mode, opts):
     """One click for a song: split it, find the damage, build the best instrumental."""
     _job_split(mode, opts)
@@ -1197,6 +1231,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not todo:
                     return self._send(400, {"error": "Choose a file."})
                 _start_job(_job_import_ref, todo, kind, bool(d.get("apply", True)), bool(d.get("build", False)))
+                return self._send(200, {"ok": True})
+            if path == "/api/extract_samples":
+                kind = d.get("kind") if d.get("kind") in ("single", "merged", "both") else "both"
+                mode = d.get("mode") if d.get("mode") in SEP.MODELS else "4stem_fast"
+                pid = d.get("project")
+                src = None
+                if not pid:
+                    src = os.path.realpath(str(d.get("path") or ""))
+                    if not os.path.isfile(src):
+                        return self._send(400, {"error": "Choose a song."})
+                _start_job(_job_extract, src, pid, kind, mode)
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
                 folder = d["folder"]

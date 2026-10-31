@@ -1,5 +1,17 @@
 # What's new
 
+## 1.32.0
+
+- **Fewer wrong swaps.** Parts and bars are only swapped in when they're near-identical (rhythm and notes) and line up with the original closely; alike-but-different parts (a verse and a pre-chorus, two guitar lines) no longer replace each other.
+- **Simple build by default:** the best split, the original recording wherever nobody sings, your clean tracks, careful repairs and cleanup. Swapping repeated parts and bars, drum patterns, notches, tone matching and the rest are now extras: tick them under *Change what it does*, or choose **Everything**.
+- **Cleaner samples.** Repeating samples only come from copies with no singing over them; loops and samples of the whole instrumental come straight from the original recording where nobody sings (no separation artifacts at all).
+- **New split: "Cleanest: three models must agree".** Three models split the song and each instrument keeps only what they agree on, so a model's own artifacts and the singing one lets through drop out. The default once the graphics card works (slow on the processor).
+- Extract samples (from 1.31.0) is back on the main line after a history cleanup.
+
+## 1.31.0
+
+- **Extract samples from the start screen.** A new **Extract samples** button: choose a song file (or one of your songs), whether you want the single cleanest copies, merged copies, or both, and how to split it. The app splits it if needed, finds the drum hits, section loops and repeating parts, saves them as WAV files and opens the folder.
+
 ## 1.30.9
 
 - **Fix: the Grid window opened empty.** Its drawing code clashed with another part of the app, so the grid of hits never appeared.

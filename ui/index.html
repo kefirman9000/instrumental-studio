@@ -298,6 +298,10 @@
         <b>Import stems</b><span>Already split with UVR, Spleeter or another tool. Select all the files, including the vocals.</span>
         <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
       </button>
+      <button class="big" id="btnExtract">
+        <b>Extract samples</b><span>Pull the drum hits, loops and repeating parts out of a song: the single cleanest copies, merged ones, or both.</span>
+        <em class="needs"><i class="light small ok"></i><span>Splits it first if needed</span></em>
+      </button>
       <button class="big" id="btnDemo">
         <b>Try the demo song</b><span>A short song to walk through every step, including splitting</span>
         <em class="needs"><i class="light small ok"></i><span>Works without the model</span></em>
@@ -453,11 +457,29 @@
     </div>
   </form>
 </dialog>
+<dialog id="dlgExtract">
+  <form method="dialog">
+    <h2>Extract samples</h2>
+    <p>Splits the song if it isn't split yet, finds its repeated drum hits, loops and parts, and saves them as WAV files.</p>
+    <label class="ref-row">From
+      <select id="exFrom"><option value="file">A song file…</option></select></label>
+    <label class="ref-row">Save
+      <select id="exKind">
+        <option value="both">Both: the single cleanest copy and a merge of the cleanest copies</option>
+        <option value="single">The single cleanest copy of each</option>
+        <option value="merged">A merge of the cleanest copies (cleanest sound)</option></select></label>
+    <label class="ref-row" id="exModeRow">Split with
+      <select id="exMode"></select></label>
+    <input type="file" id="exFile" accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aiff" hidden>
+    <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button type="button" class="primary" id="btnExGo">Extract</button></div>
+  </form>
+</dialog>
 <dialog id="dlgAuto">
   <form method="dialog">
     <h2>Build the best instrumental</h2>
     <p>Goes through every option and settles it: the original recording wherever nobody sings (whole parts and the gaps between vocal lines), your clean tracks, the cleanest takes and rebuilt parts everywhere else. Where options overlap or contradict, one is chosen; anything that doesn't line up with the original is left out, and no part may end up sounding worse than before. Building again starts fresh (your own decisions stay). It all becomes one step: Undo takes it back.</p>
     <p class="auto-stems"><span>Have clean stems or samples from this song? Add them first: the build uses them before anything else and checks every other fix against them.</span> <button type="button" class="small" id="btnAutoStems">Add clean stems first…</button></p>
+    <div class="seg small auto-preset"><button type="button" id="autoSimple" class="on" title="The best split, the original wherever nobody sings, your clean tracks, careful repairs and cleanup. Fewest wrong guesses.">Simple (recommended)</button><button type="button" id="autoAll" title="Also swaps in repeated parts and bars, learns drum patterns, notches, tone matching and more. Can fix more, but guesses more too.">Everything</button></div>
     <details class="auto-details"><summary>Change what it does</summary><div id="autoSteps"></div></details>
     <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button value="ok" class="primary">Build</button></div>
   </form>
