@@ -13,8 +13,24 @@ const TOKEN = (() => {
   } catch { if (m) history.replaceState(null, "", location.pathname); return m ? m[1] : ""; }
 })();
 const authed = { "X-Studio-Token": TOKEN };
+// a small spinner by the model light whenever the app is working: a request taking a moment, a job, or
+// measurements still running in the background
+let inFlight = 0;
+function activity() {
+  const el = document.getElementById("activity"); if (!el) return;
+  const job = st.state?.job?.running, warm = st.ov?.warming;
+  const msg = job ? (st.state.job.message || "Working") : inFlight ? "Working" : warm ? "Still analysing the song" : "";
+  el.hidden = !msg; if (msg) { document.getElementById("activityText").textContent = msg; el.title = msg; }
+}
+function track(p) {
+  inFlight++; const t = setTimeout(activity, 250);          // only show it for anything slower than a blink
+  return p.finally(() => { inFlight--; clearTimeout(t); activity(); });
+}
+setInterval(activity, 1000);
 const api = {
-  async get(path, timeoutMs = 15000) {
+  get(path, timeoutMs) { return track(api._get(path, timeoutMs)); },
+  post(path, body) { return track(api._post(path, body)); },
+  async _get(path, timeoutMs = 15000) {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), timeoutMs);
     try {
       const r = await fetch(path, { signal: ctl.signal, headers: authed }); const j = await r.json();
@@ -22,7 +38,7 @@ const api = {
     } catch (e) { if (e.name === "AbortError") { noteStuck(); throw new Error("The app took too long to answer."); } throw e; }
     finally { clearTimeout(t); }
   },
-  async post(path, body) {
+  async _post(path, body) {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Studio-Token": TOKEN }, body: JSON.stringify(body || {}) });
     const j = await r.json();
     if (!r.ok) { const e = new Error(j.error || r.statusText); e.data = j; throw e; }
