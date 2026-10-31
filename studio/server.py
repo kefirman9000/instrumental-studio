@@ -41,14 +41,20 @@ UPLOADS = os.path.join(HOME, "uploads")
 # ----------------------------------------------------------------------------- lockdown
 # The server only listens on this computer, but any web page open in a browser on this computer can
 # still send requests to it. So:
-#  - every POST must carry this session's secret token, which only the app's own page knows (it's
-#    written into index.html when served; other sites can't read that page or send custom headers
-#    to it without the browser asking first, which this server never allows),
+#  - every request for data (GET) and every change (POST) must carry this session's secret, which only the
+#    app's own window knows: it arrives in the address fragment (never sent to a server, never in a page),
+#    then travels as a header, or as a SameSite=Strict, HttpOnly cookie for audio the player streams.
+#    Other programs and user accounts on this computer can reach 127.0.0.1 too, so the page itself holds
+#    no secret,
 #  - requests must name 127.0.0.1/localhost and this port as the Host (stops DNS-rebinding tricks),
 #  - requests from other sites are turned away using the browser's Origin / Sec-Fetch-Site headers,
 #  - the app's pages can't be framed by other sites, and its audio can't be embedded by them,
 #  - "Show folder" only opens folders inside the app's own folder, and never runs files.
-TOKEN = secrets.token_urlsafe(32)
+# The secret comes from the window process (environment, removed at once so helpers never inherit it); run on
+# its own, the engine makes one and logs the address with it.
+TOKEN = os.environ.pop("STUDIO_TOKEN", "") or secrets.token_urlsafe(32)
+COOKIE = "studio_s"
+MAX_UPLOAD = 4 << 30           # 4 GB per uploaded file
 LOCAL_NAMES = ("127.0.0.1", "localhost")
 MAX_JSON = 16 << 20            # 16 MB: far more than any real request needs
 SEC_HEADERS = {
@@ -801,6 +807,7 @@ def _schedule_save(p):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = 120          # a connection that sends nothing for 2 minutes is closed (keeps idle sockets from piling up)
 
     def log_message(self, fmt, *args):
         pass
@@ -888,6 +895,13 @@ class Handler(BaseHTTPRequestHandler):
     def _token_ok(self):
         return hmac.compare_digest(self.headers.get("X-Studio-Token") or "", TOKEN)
 
+    def _cookie_ok(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == COOKIE and hmac.compare_digest(v, TOKEN):
+                return True
+        return False
+
     def _refuse(self, why):
         log(f"refused {self.command} {self.path}: {why}")
         self.close_connection = True
@@ -935,10 +949,9 @@ class Handler(BaseHTTPRequestHandler):
                          ".svg": "image/svg+xml", ".png": "image/png"}.get(os.path.splitext(fp)[1], "application/octet-stream")
                 with open(fp, "rb") as fh:
                     data = fh.read()
-                if fp.endswith(".html"):          # hand this session's token to the app's own page
-                    data = data.replace(b'<meta charset="utf-8">',
-                                        b'<meta charset="utf-8">\n<meta name="studio-token" content="' + TOKEN.encode() + b'">', 1)
                 return self._send(200, data, ctype + ("; charset=utf-8" if ctype.startswith("text") else ""))
+            if not (self._token_ok() or self._cookie_ok()):
+                return self._refuse("token")
             if path == "/api/state":
                 have = SEP.demucs_available()          # cached for 30 s: polls must answer instantly
                 S.model["installed"] = S.model["installed"] or have
@@ -997,6 +1010,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._refuse("other site")
             if not self._token_ok():
                 return self._refuse("token")
+            if path == "/api/session":
+                # lets the audio player (which can't send headers) prove it's the app: strict same-site cookie
+                return self._send(200, {"ok": True}, extra={
+                    "Set-Cookie": f"{COOKIE}={TOKEN}; HttpOnly; SameSite=Strict; Path=/"})
             if path == "/api/upload":
                 # raw body upload; X-Filename header; X-Batch groups several files (stem import)
                 name = os.path.basename(urllib.parse.unquote(self.headers.get("X-Filename", "song.wav")))
@@ -1005,6 +1022,8 @@ class Handler(BaseHTTPRequestHandler):
                 os.makedirs(folder, exist_ok=True)
                 dest = os.path.join(folder, name)
                 remaining = int(self.headers.get("Content-Length") or 0)
+                if remaining < 0 or remaining > MAX_UPLOAD:
+                    return self._send(413, {"error": "That file is too big (4 GB at most)."})
                 with open(dest, "wb") as fh:
                     while remaining > 0:
                         chunk = self.rfile.read(min(remaining, 1 << 20))
