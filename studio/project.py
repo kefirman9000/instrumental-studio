@@ -2600,7 +2600,7 @@ class Project:
                     if si == ti or not i_s or i_s["quality"] < it["quality"] + 0.03 or i_s["level"] < it["level"] - 15:
                         continue
                     sim = self.section_similarity(k, ti, si)
-                    if sim >= 0.7:
+                    if sim >= 0.85:                 # (was 0.7: alike-but-different parts got swapped in)
                         cands.append({"section": si, "name": self.sections[si]["name"], "similarity": sim,
                                       "cover": i_s["cover"], "quality": i_s["quality"]})
                 if not cands:
@@ -2964,10 +2964,13 @@ class Project:
                 lost = x.get("severity", 0.0)
         return float(max(3 * lost, (E * R[s0:s0 + L]).sum() / (E.sum() + EPS))), float(np.log(E.sum(1).mean() + EPS))
 
-    def best_bars(self, min_sim=0.85):
+    SWAP_SIM = 0.93          # how alike two bars/parts must be before one may replace the other
+
+    def best_bars(self, min_sim=None):
         """Groups of bars where an instrument plays the same thing, with a clean one to copy from."""
         if self.stage != "detected":
             return []
+        min_sim = self.SWAP_SIM if min_sim is None else min_sim
         out = []
         for k in [x for x in self.instruments if x not in NOT_REPAIRED and x not in self.PERCUSSIVE]:
             mb, mc = self._dist_scale(k)
@@ -4234,10 +4237,13 @@ class Project:
                 pk = float(np.abs(full).max()) + 1e-9
                 g = 0.89 / pk if pk > 0.89 else 1.0
                 tracks = {k: self.render_stem(k) for k in self.instruments}
+                vc_all = self._vocal_curve(0, self.original.shape[1])
                 for bars in (4, 2):
                     for kind, a, b, t in self._phrase_loops(bars):
                         base = f"{kind} - {bars} bars{tempo} (from {ts(t)})"
-                        put("Loops - full instrumental", base, loop_ready(full[:, a:b] * g), shape=False)
+                        # nobody sings here: the original recording is the cleanest version there is
+                        src_ = self.original if float(vc_all[a:b].max()) < 0.05 else full
+                        put("Loops - full instrumental", base, loop_ready(src_[:, a:b] * g), shape=False)
                         for k, y in tracks.items():
                             seg = y[:, a:b]
                             if float((seg ** 2).mean()) < 1e-7:
@@ -4295,16 +4301,26 @@ class Project:
         #    from each instrument: the cleanest copy and a merge of the cleanest copies
         try:
             srcs = [("full instrumental", self.mix("repaired"))] + [(k, self.render_stem(k)) for k in self.instruments]
+            vc_all = self._vocal_curve(0, self.original.shape[1])
+            sung = lambda b0, b1: float(vc_all[int(self.beats[b0] * HOP):int(self.beats[b1] * HOP)].max(initial=0)) > 0.05
             for src, y in srcs:
-                for li, g in enumerate(self.find_loops(y, drums=src in self.PERCUSSIVE)):
+                groups = []
+                for g in self.find_loops(y, drums=src in self.PERCUSSIVE):
+                    clean = [m for m in g["members"] if not sung(*m)]
+                    if not clean:
+                        continue                      # every copy has singing over it: not a clean sample
+                    groups.append({**g, "members": clean, "beats": clean[0]})
+                if src == "full instrumental":
+                    y = self.original               # the copies chosen have no singing: use the real recording
+                for li, g in enumerate(groups):
                     t = self.beat_times[g["beats"][0]]
                     secn = self.sections[self._section_of(t)]["name"] if self.sections else ""
                     ln = {0.5: "half bar", 1: "1 bar"}.get(g["len_bars"], f"{g['len_bars']} bars")
                     label = f"{chr(65 + li)} - {ln} - repeats {g['count']}x{tempo} ({secn}, {ts(t)})"
                     if raw:
                         put(f"Repeating samples - {src}", f"{label} - cleanest", loop_ready(self._loop_audio(y, g, False)), shape=False)
-                    if merged and g["count"] >= 2:
-                        put(f"Repeating samples - {src}", f"{label} - merged from {min(5, g['count'])}",
+                    if merged and len(g["members"]) >= 2:
+                        put(f"Repeating samples - {src}", f"{label} - merged from {min(5, len(g['members']))}",
                             loop_ready(self._loop_audio(y, g, True)), shape=False)
         except Exception as e:
             log(f"samples: repeating samples skipped: {e}")
@@ -4360,6 +4376,10 @@ class Project:
             if len(va) and float(va.max()) < 0.04:
                 out.append(sec)
         return out
+
+    # A simple build is the default: the best split, the original wherever nobody sings, your clean tracks,
+    # careful repairs and cleanup. These guess more (and can guess wrong), so they're extras you tick yourself.
+    EXTRA_STEPS = ("versions", "bars", "pattern", "recover", "deep", "improve", "mutes", "notch", "tone")
 
     def _safe_runs(self, aggressive):
         try:
@@ -4441,7 +4461,8 @@ class Project:
                                           "switch would be heard.", 1),
         ]
         return [{"key": k, "title": t, "detail": d, "count": int(c),
-                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k not in ("deep", "recover")}
+                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k not in self.EXTRA_STEPS,
+                 "extra": k in self.EXTRA_STEPS}
                 for k, t, d, c in steps]
 
     def build_best(self, steps=None, progress=lambda f, m: None):
@@ -4575,7 +4596,7 @@ class Project:
             if "bestof" in steps:
                 pick("alt", lambda x: x.get("alt_mode") == "best-of" and self.ref_track(x["stem"]) is None)
             if "versions" in steps:
-                pick("take", lambda x: x.get("conf", 0) >= 0.8)
+                pick("take", lambda x: x.get("conf", 0) >= 0.92 and (x.get("check") or {}).get("u", 1) < 0.15)
             def active(kind):
                 """Applied fixes of one kind, by instrument (looked up once, not once per fix)."""
                 d = {}
@@ -4588,7 +4609,7 @@ class Project:
                 takes_on.setdefault(k_, []).extend(y for y in ys if y.get("alt_mode") == "imported")
             covered = lambda x: any(ov(y, x) for y in takes_on.get(x["stem"], ()))
             if "bars" in steps:
-                pick("bars", lambda x: not covered(x))
+                pick("bars", lambda x: not covered(x) and (x.get("check") or {}).get("u", 1) < 0.15)
             drum = lambda x: x["stem"] in self.PERCUSSIVE
             if "hits" in steps:
                 pick("hits", lambda x: drum(x) and not x.get("pattern") and not covered(x))
@@ -4850,7 +4871,8 @@ class Project:
         against = np.asarray(ref[:, a:b], np.float32) if ref is not None and ref.shape[1] >= b else self.original[:, a:b]
         r = VF.check_region(self.stems[k][:, a:b], P, against, self.sr)
         flag = None
-        if r["u"] > (0.3 if ref is not None else 0.35):
+        swap = x["type"] in ("take", "bars") or (x["type"] == "alt" and x.get("alt_mode") != "imported")
+        if r["u"] > (0.3 if ref is not None else 0.2 if swap else 0.35):    # swaps must match the original closely
             flag = (f"Adds sound your clean {k} track doesn't have here ({r['u']:.0%} of what it adds). Try another "
                     f"source, or reject it." if ref is not None else
                     f"Adds sound the original doesn't have here ({r['u']:.0%} of what it adds), so it is probably "

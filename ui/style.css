@@ -375,3 +375,4 @@ label.check input { margin-top: 3px; }
 .ms .grid-btn { width: auto; padding: 0 6px; }
 .activity { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--dim, #9aa3b2); margin-right: 8px; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .activity[hidden] { display: none; }
+.auto-preset { margin: 6px 0; }

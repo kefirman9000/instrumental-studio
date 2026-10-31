@@ -17,6 +17,9 @@ MODELS = {
     "4stem_fast": ("4 tracks · Quick draft (fastest)", ["htdemucs"], ["drums", "bass", "other", "vocals"]),
     "ensemble": ("4 tracks · Fewest gaps (two models combined, slowest)", ["htdemucs_ft", "htdemucs"],
                  ["drums", "bass", "other", "vocals"]),
+    # three models split it; an instrument keeps only what they agree on (artifacts are rarely in all three)
+    "agree": ("4 tracks · Cleanest: three models must agree (best with a graphics card)", ["htdemucs_ft", "htdemucs", "htdemucs_6s"],
+              ["drums", "bass", "other", "vocals"]),
     # Roformer takes the vocals out first (cleanest vocal removal), then Demucs splits what's left
     "hybrid": ("4 tracks · Cleanest vocal removal (Roformer first, slow)", ["htdemucs_ft"],
                ["drums", "bass", "other", "vocals"]),
@@ -195,6 +198,22 @@ def _run_model(wav_path, model, outdir, progress, frac0, frac1):
     return outdir
 
 
+def _agreement(arrs):
+    """Keep what several models agree is in this instrument: per frequency and moment, the median level of
+    their outputs (the smallest, with two), with the phase of their average. A model's own artifacts and the
+    singing one model let through drop out."""
+    from .audio import stft, istft
+    out = np.zeros_like(arrs[0], dtype=np.float32)
+    for c in range(arrs[0].shape[0]):
+        X = [stft(a[c]) for a in arrs]
+        mags = np.stack([np.abs(x) for x in X])
+        mag = np.median(mags, axis=0) if len(X) >= 3 else mags.min(axis=0)
+        avg = sum(X) / len(X)
+        out[c] = istft(avg / (np.abs(avg) + 1e-9) * mag, arrs[0].shape[1])
+        del X, mags
+    return out
+
+
 def separate(path, workdir, mode="4stem", progress=lambda f, m: None, options=None):
     """Return dict stem_name -> (2, n) float32 array, and the sample rate."""
     if not demucs_available():
@@ -232,12 +251,33 @@ def separate(path, workdir, mode="4stem", progress=lambda f, m: None, options=No
         results.append(_run_model(demucs_in, model, os.path.join(workdir, model), progress, a, b))
     at += span
     out = {}
+    def model_stem(d, stem):
+        f = os.path.join(d, stem + ".wav")
+        if not os.path.exists(f):
+            return None
+        y = load_audio(f, sr)[0]
+        if stem == "other" and "guitar" not in stems:     # a 6-track model's guitar and piano belong in "other" here
+            for extra in ("guitar", "piano"):
+                fe = os.path.join(d, extra + ".wav")
+                if os.path.exists(fe):
+                    ye = load_audio(fe, sr)[0]
+                    m = min(y.shape[1], ye.shape[1])
+                    y = y[:, :m] + ye[:, :m]
+        return y
     for stem in stems:
-        # average every model that produced this track (e.g. drums from both, guitar only from the 6-track one)
-        arrs = [load_audio(os.path.join(d, stem + ".wav"), sr)[0] for d in results
-                if os.path.exists(os.path.join(d, stem + ".wav"))]
+        arrs = [a for a in (model_stem(d, stem) for d in results) if a is not None]
         n = min(a.shape[1] for a in arrs)
-        out[stem] = np.mean([a[:, :n] for a in arrs], axis=0).astype(np.float32)
+        arrs = [a[:, :n] for a in arrs]
+        if mode == "agree" and len(arrs) >= 2 and stem != "vocals":
+            out[stem] = _agreement(arrs)
+        else:
+            # average every model that produced this track (e.g. drums from both, guitar only from the 6-track one)
+            out[stem] = np.mean(arrs, axis=0).astype(np.float32)
+    if mode == "agree":
+        # what the models didn't agree belongs to an instrument stays with the vocals, so everything still adds up
+        n = min(min(a.shape[1] for a in out.values()), audio.shape[1])
+        out = {k: v[:, :n] for k, v in out.items()}
+        out["vocals"] = (audio[:, :n] - sum(v for k, v in out.items() if k != "vocals")).astype(np.float32)
     if roformer_vocals is not None:
         # Demucs ran on the Roformer instrumental: whatever it calls vocals is leftover singing
         n0 = min(roformer_vocals.shape[1], out["vocals"].shape[1])
