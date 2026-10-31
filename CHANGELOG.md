@@ -1,5 +1,11 @@
 # What's new
 
+## 1.23.4
+
+- **Use my graphics card works when Windows sees an NVIDIA card but NVIDIA's own check tool doesn't answer.** The app relied only on that tool (nvidia-smi) to spot an NVIDIA card; now it also asks Windows which cards are installed. If there's an NVIDIA one, it installs the graphics-card version of PyTorch and then tests the card with a real calculation, so it only says it's done when splitting really can use the card.
+- **Older NVIDIA cards and drivers are supported:** the app installs the CUDA 12.6 build, which runs on GTX 900 and 10 series cards and on any driver with CUDA 12, instead of the newest builds that need recent ones.
+- When the NVIDIA tool doesn't answer, the log says why.
+
 ## 1.23.3
 
 - **Use my graphics card now says what card you have.** The app lists the graphics cards in the computer (in Settings and in the log). If it's an NVIDIA card whose driver isn't answering, it says to reinstall the driver. If it's AMD or Intel, it says plainly that the separation model can't use it on Windows, instead of a vague message.
