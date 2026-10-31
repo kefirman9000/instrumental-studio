@@ -108,7 +108,7 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
-        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples", "_ref_dis", "_bar_chords"):
+        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples", "_ref_dis", "_bar_chords", "_noise_prof"):
             self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
@@ -2563,7 +2563,7 @@ class Project:
                 s0, s1 = int(sug["start"] * self.sr), int(sug["end"] * self.sr)
                 res = smooth_window(self.stems[sug["stem"]], self.stems["vocals"], self.inst_sum, s0, s1, strength)
                 self.patches[sid] = (res["lo"], res["patch"].astype(np.float16))
-            elif sug["type"] == "bleed":
+            elif sug["type"] == "bleed" and "beat" in sug:
                 s0, s1 = self._window_samples(sug["beat"], sug["beats"])
                 b = bleed_window(self.stems[sug["stem"]], self.stems["vocals"], s0, s1, strength)
                 if b is not None:
@@ -4573,6 +4573,202 @@ class Project:
             log(f"samples: repeating samples skipped: {e}")
         return written
 
+    # ------------------------------------------------------------------ smart cleanup: learn what belongs
+    CLEAN_FLOOR_DB = -12      # turn down what doesn't belong by at most this much (never a hard mute)
+
+    def _band_gain_apply(self, X, gb):
+        """Per-band gains (bands, frames) -> per-bin gains on a complex STFT."""
+        B = self.B
+        w = B.sum(0) + 1e-9
+        return X * ((B.T @ gb) / w[:, None]).astype(np.float32)
+
+    def _noise_profile(self, k):
+        """The steady noise of a track (hiss, vinyl surface, hum): per frequency, its level in the quietest
+        stretches of the song."""
+        cache = self.__dict__.setdefault("_noise_prof", {})
+        if k in cache:
+            return cache[k]
+        x = self.stems[k].mean(0)
+        L = self.sr
+        lev = [float(np.mean(x[i:i + L] ** 2)) for i in range(0, max(1, len(x) - L), L)]
+        quiet = np.argsort(lev)[:max(3, len(lev) // 10)]
+        mags = [np.abs(stft(x[i * L:(i + 1) * L])) for i in quiet if (i + 1) * L <= len(x)]
+        prof = np.percentile(np.concatenate(mags, axis=1), 50, axis=1) if mags else None
+        cache[k] = prof
+        return prof
+
+    def smart_clean(self, sung_only=True):
+        """Learn what belongs on each track and turn down the rest, section by section:
+          - drums: each sound's normal attack and decay, learned from its clean hits; anything louder than that
+            between and after hits (clicks, crackle, smeared consonants, separation chirps) comes down,
+          - pitched parts: during each note, what isn't at that note's pitch and overtones (bleed singing other
+            notes, artifacts) comes down,
+          - repeating loops: what a sung copy has that the clean copies don't comes down,
+          - every track: its steady noise (hiss, vinyl surface), learned from the quietest moments.
+        Gentle (at most CLEAN_FLOOR_DB), only under the singing unless sung_only=False (noise: everywhere).
+        One review item per track and section. Returns ids."""
+        ids = []
+        sr, n_all = self.sr, self.original.shape[1]
+        floor = 10 ** (self.CLEAN_FLOOR_DB / 20)
+        vc = self._vocal_curve(0, n_all)
+        from scipy.ndimage import uniform_filter1d, maximum_filter
+        for k in [x for x in self.instruments if x not in NOT_REPAIRED]:
+            raw = np.asarray(self.stems[k], np.float32)
+            n = raw.shape[1]
+            prof = self._noise_profile(k)
+            perc = k in self.PERCUSSIVE
+            try:
+                dm = self.drum_map(k)
+            except Exception:
+                dm = None
+            # learned shapes: each sound's band envelope over its first ~0.4 s, from its clean hits
+            tmpl = {}
+            if dm and dm["rows"] and (perc or dm["rows"][0].get("midi") is None):
+                pos = dm["_pos"]
+                T = int(0.4 * sr / HOP)
+                for r in dm["rows"]:
+                    c = [int(i) for i in dm["_clusters"][r["id"]] if vc[min(int(pos[i]) + int(0.02 * sr), n_all - 1)] < 0.05][:8]
+                    envs = []
+                    for i in c:
+                        a = int(pos[i])
+                        E = VF.band_energy(raw[:, a:a + (T + 2) * HOP].mean(0), self.B)[:, :T]
+                        if E.shape[1] == T and E.max() > 0:
+                            envs.append(E / E[:, :3].max())
+                    if envs:
+                        tmpl[r["id"]] = np.median(envs, axis=0)
+            notes = dm if dm and dm["rows"] and dm["rows"][0].get("midi") is not None else None
+            loops = []
+            try:
+                loops = self.find_loops(raw, drums=perc, limit=6)
+            except Exception:
+                pass
+            for si, sec in enumerate(self.sections):
+                a, b = int(sec["start"] * sr), min(n, int(sec["end"] * sr))
+                if b - a < sr // 2:
+                    continue
+                sung = float(vc[a:b].mean()) > 0.05
+                lo, hi = max(0, a - XFADE), min(n, b + XFADE)
+                seg = raw[:, lo:hi]
+                stages = []                                 # (kind, cleaned seg)
+                cur = seg.copy()
+                f0 = lo // HOP
+                nfr = (hi - lo) // HOP + 1
+                wv = np.clip(uniform_filter1d(vc[lo:hi], int(0.1 * sr)) * 4, 0, 1)[::HOP][:nfr] if sung_only else np.ones(nfr)
+                wv = np.pad(wv, (0, max(0, nfr - len(wv))), constant_values=wv[-1] if len(wv) else 1)
+                def run(kind, gain_fn):
+                    nonlocal cur
+                    out = np.empty_like(cur)
+                    for c in range(cur.shape[0]):
+                        X = stft(cur[c])
+                        G = gain_fn(X)
+                        out[c] = istft(X * G, cur.shape[1])
+                    stages.append((kind, out - cur))
+                    cur = out
+                # 1. steady noise, everywhere (spectral subtraction, gentle)
+                if prof is not None:
+                    def g_noise(X):
+                        m = np.abs(X)
+                        return np.clip((m - 1.5 * prof[:, None]) / (m + 1e-9), 0.3, 1).astype(np.float32)
+                    run("noise", g_noise)
+                if not sung and sung_only:
+                    pass
+                elif tmpl:
+                    # 2. drums: what each sound's learned attack and decay allow, at each hit
+                    hits = [(h[0], h[1]) for h in dm["hits"] if lo / sr - 0.4 <= h[0] < hi / sr]
+                    def g_drum(X):
+                        Eb = self.B @ (np.abs(X) ** 2)
+                        allowed = np.full_like(Eb, 0.0)
+                        for t, sid in hits:
+                            tp = tmpl.get(sid)
+                            if tp is None:
+                                continue
+                            f = int(round((t * sr - lo) / HOP))
+                            if f >= Eb.shape[1] or f + tp.shape[1] <= 0:
+                                continue
+                            if f >= 0:
+                                lvl = Eb[:, f:f + 3].max(axis=1, keepdims=True)
+                            else:                          # a hit just before this part: its decay carries in
+                                lvl = Eb[:, :3].max(axis=1, keepdims=True) / (tp[:, -f:-f + 1] + 1e-6)
+                            e0, e1 = max(0, f), min(Eb.shape[1], f + tp.shape[1])
+                            if e1 > e0:
+                                allowed[:, e0:e1] = np.maximum(allowed[:, e0:e1], tp[:, e0 - f:e1 - f] * lvl * 2.0)  # +3 dB room
+                        allowed = maximum_filter(allowed, size=(1, 3))
+                        gb = np.clip(np.sqrt(allowed / (Eb + 1e-12)), floor, 1)
+                        gb = 1 - (1 - gb) * wv[None, :gb.shape[1]]
+                        return ((self.B.T @ gb) / (self.B.sum(0)[:, None] + 1e-9)).astype(np.float32)
+                    run("pattern", g_drum)
+                elif notes is not None:
+                    # 3. pitched: keep the note's pitch and overtones while it plays
+                    pos = notes["_pos"]
+                    midi_of = {int(i): r["midi"] for r in notes["rows"] for i in notes["_clusters"][r["id"]]}
+                    fr = np.fft.rfftfreq(N_FFT, 1 / sr)
+                    spans = []
+                    for i, m in midi_of.items():
+                        p0 = int(pos[i])
+                        if lo <= p0 < hi:
+                            nx = int(pos[i + 1]) if i + 1 < len(pos) else hi
+                            spans.append((p0 + int(0.03 * sr), min(nx, p0 + int(4 * sr)), 440 * 2 ** ((m - 69) / 12)))
+                    def g_note(X):
+                        G = np.ones(X.shape, np.float32)
+                        for s0, s1, f0_ in spans:
+                            c0, c1 = max(0, (s0 - lo) // HOP), min(X.shape[1], (s1 - lo) // HOP)
+                            if c1 <= c0:
+                                continue
+                            h = np.arange(1, int(fr[-1] / f0_) + 1)[:40] * f0_
+                            keep = np.zeros(len(fr), bool)
+                            for hf in h:
+                                keep |= np.abs(fr - hf) <= max(0.03 * hf, 12)
+                            keep |= fr > h[-1] if len(h) else True
+                            g = np.where(keep, 1.0, floor).astype(np.float32)
+                            g = uniform_filter1d(g, 3)
+                            G[:, c0:c1] = np.minimum(G[:, c0:c1], (1 - (1 - g)[:, None] * wv[None, c0:c1]))
+                        return G
+                    run("notes", g_note)
+                # 4. loops: what a sung copy has that the clean copies don't
+                if (sung or not sung_only) and loops:
+                    covered = []
+                    for g in loops:
+                        span_ = lambda u: (int(self.beats[u[0]] * HOP), int(self.beats[u[1]] * HOP))
+                        clean_u = [u for u in g["members"] if float(vc[slice(*span_(u))].max(initial=0)) < 0.05]
+                        if len(clean_u) < 2:
+                            continue
+                        refa = self._loop_audio(raw, {**g, "members": clean_u, "beats": clean_u[0]}, True)
+                        for u in g["members"]:
+                            ua, ub = span_(u)
+                            if ua >= lo and ub <= hi and float(vc[ua:ub].mean()) > 0.2:
+                                covered.append((ua, ub, refa))
+                    if covered:
+                        def g_loop(X):
+                            G = np.ones(X.shape, np.float32)
+                            for ua, ub, refa in covered:
+                                c0, c1 = (ua - lo) // HOP, min(X.shape[1], (ub - lo) // HOP)
+                                if c1 - c0 < 4:
+                                    continue
+                                R = np.abs(stft(refa.mean(0)))
+                                xi = np.linspace(0, R.shape[1] - 1, c1 - c0).astype(int)
+                                Rm = maximum_filter(R[:, xi], size=(3, 3)) * 1.6
+                                G[:, c0:c1] = np.clip(Rm / (np.abs(X[:, c0:c1]) + 1e-9), floor, 1)
+                            return G
+                        run("loops", g_loop)
+                for kind, d in stages:
+                    tot = float((seg ** 2).sum()) + 1e-12
+                    rem = float((d ** 2).sum())
+                    if rem < 1e-4 * tot:
+                        continue                                # hardly changes anything here
+                    rid = f"sc_{kind}_{k}_{si}"
+                    if rid in self.suggestions and self.suggestions[rid]["status"] != "pending" and not self.suggestions[rid].get("by_build"):
+                        continue
+                    what = {"noise": "steady noise (hiss, vinyl surface)", "pattern": "what isn't part of each drum sound's hit and decay",
+                            "notes": "what isn't at the notes being played", "loops": "what the clean copies of this loop don't have"}[kind]
+                    self.suggestions[rid] = {
+                        "id": rid, "type": "bleed", "stem": k, "status": "pending", "start": lo / sr, "end": hi / sr,
+                        "section": si, "conf": 0.8, "severity": round(min(1.0, 10 * rem / tot), 3), "strength": 1.0,
+                        "donors": [], "smart": kind, "removed_db": round(float(10 * np.log10(rem / tot + 1e-12)), 1),
+                        "note": f"Turns down {what} on the {k} in {sec['name']} (learned from the rest of the song)"}
+                    self.patches[rid] = (lo, d.astype(np.float16))
+                    ids.append(rid)
+        return ids
+
     # ------------------------------------------------------------------ rebuild from notes / from patterns
     def _note_end(self, x_env, pos, i, n):
         p0 = int(pos[i])
@@ -4757,7 +4953,7 @@ class Project:
 
     # ------------------------------------------------------------------ build the best instrumental
     AUTO_STEPS = ("keep", "gaps", "refs", "bestof", "versions", "bars", "hits", "pattern", "notes", "loops", "repairs",
-                  "recover", "deep", "leftovers",
+                  "recover", "deep", "leftovers", "smartclean",
                   "clicks", "improve", "mutes", "acappella", "acappella_hard", "notch", "tone", "seams")
 
     def vocal_gaps(self, min_len=1.0):
@@ -4866,6 +5062,10 @@ class Project:
              "Where an instrument repeats a 1-4 bar loop, copies under the singing are replaced by a merge of the clean "
              "copies. Best for electronic and loop-based music; off by default.",
              len([x for x in self.instruments if x not in NOT_REPAIRED])),
+            ("smartclean", "Smart cleanup: learn what belongs on each track and turn down the rest",
+             "Drums: anything beyond each sound's normal hit and decay. Pitched parts: what isn't at the notes being "
+             "played. Loops: what the clean copies don't have. Every track: steady hiss and vinyl noise. Gentle "
+             "(at most 12 dB), mainly under the singing.", len([x for x in self.instruments if x not in NOT_REPAIRED])),
             ("repairs", "Apply the repairs with a close match",
              "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
              len([x for x in pend(("repair",)) if x.get("recommended")])),
@@ -4999,6 +5199,12 @@ class Project:
                     self.make_pattern_rebuilds()
                 except Exception as e:
                     log(f"build: loop rebuild skipped: {e}")
+            if "smartclean" in steps:
+                progress(0.36, "Learning what belongs on each track")
+                try:
+                    self.smart_clean()
+                except Exception as e:
+                    log(f"build: smart cleanup skipped: {e}")
             if "pattern" in steps:
                 progress(0.35, "Learning the drum pattern")
                 try:
@@ -5081,7 +5287,11 @@ class Project:
                 pick("rebuild", lambda x: x.get("recover"))
             if "leftovers" in steps:
                 for i, x in S.items():
-                    if x["type"] in ("bleed", "ess") and x["status"] == "pending" and not inside_kept(x):
+                    if x["type"] in ("bleed", "ess") and x["status"] == "pending" and not inside_kept(x) and not x.get("smart"):
+                        accept.add(i)
+            if "smartclean" in steps:
+                for i, x in S.items():
+                    if x.get("smart") and x["status"] == "pending" and not inside_kept(x):
                         accept.add(i)
             if "clicks" in steps:
                 for i, x in S.items():

@@ -140,7 +140,7 @@
   <aside class="panel">
     <nav class="tabs" role="tablist">
       <button class="on" data-tab="review" role="tab">Review</button>
-      <button data-tab="grid" role="tab">Repairability</button>
+      <button data-tab="grid" role="tab">Song map</button>
       <button data-tab="levels" role="tab">Levels</button>
       <button data-tab="settings" role="tab">Settings</button>
     </nav>
@@ -150,19 +150,16 @@
         <button class="primary small" data-auto>Build it</button>
       </div>
       <details class="tips" id="tipsBox" open>
-        <summary>Make the fixed parts match the rest <span class="tip-count" id="tipCount"></span><span class="warm-chip" id="warmChip" hidden><span class="spin small"></span>Working out more suggestions</span></summary>
+        <summary>What to do next <span class="tip-count" id="tipCount"></span><span class="warm-chip" id="warmChip" hidden><span class="spin small"></span>Working out more suggestions</span></summary>
         <div id="tipsList"></div>
       </details>
       <div class="summary" id="reviewSummary"></div>
       <div class="filters" id="filters">
-        <button data-f="review" class="on">Needs review</button>
-        <button data-f="applied">Applied</button>
-        <button data-f="bleed">Vocal leftovers</button>
-        <button data-f="hard">No good match</button>
-        <button data-f="misfit" title="Fixes that add sound the original doesn't have at that spot, or land off its beat">Doesn't fit</button>
-        <button data-f="cleanup">Clicks and smoothing</button>
-        <button data-f="takes">Other takes</button>
+        <button data-f="review" class="on">Waiting</button>
+        <button data-f="applied">Used</button>
+        <button data-f="notused" title="Fixes that weren't used, each with the reason (doesn't fit the original, no good match, another fix was used...)">Not used</button>
         <button data-f="all">All</button>
+        <label class="small dim minor-toggle" title="Tiny fixes you'd hardly hear: hidden so the list shows what matters"><input type="checkbox" id="showMinor"> Show small fixes</label>
       </div>
       <div class="scope" id="scope" hidden></div>
       <div class="bulk" id="bulkBar"></div>
@@ -170,6 +167,10 @@
     </div>
     <div class="tab" id="tab-grid" hidden>
       <div class="row" style="margin-bottom:10px"><button class="small" id="btnQuality" hidden>Score how clean each section is</button></div>
+      <h3 class="panel-h">How clean each part is</h3>
+      <p class="help">Each instrument in each section: green is clean, amber so-so, red needs work. Click a cell to see its fixes in Review.</p>
+      <div id="gridWrap"></div>
+      <details class="adv-lists"><summary>Repeated parts, hits and bars (advanced)</summary>
       <div class="bulk-best" id="bulkBest">
         <div class="row" style="margin-bottom:8px"><button class="primary small" data-auto title="Every kind of fix, conflicts worked out, checked against the original, one undo step">Build the best instrumental</button><span class="dim small">Recommended instead of Apply all: it picks one fix where they overlap.</span></div>
         <b>All repeated parts</b>
@@ -185,10 +186,7 @@
       <h3 class="panel-h" style="margin-top:14px">Repeated bars <button class="ghost small hdr-btn" data-kind="bars" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="bars" data-accept="1" data-blend="1" title="Replace every damaged repeat with a merge of the cleanest repeats">Blend all</button></h3>
       <p class="help">Riffs and patterns an instrument plays again and again. Damaged repeats are replaced by the cleanest one.</p>
       <div id="barList"></div>
-      <hr>
-      <h3 class="panel-h">Repairability</h3>
-      <p class="help">How badly each instrument was damaged in each section, and how well it can be rebuilt from the same instrument elsewhere in the song. Click a cell to review it.</p>
-      <div id="gridWrap"></div>
+      </details>
     </div>
     <div class="tab" id="tab-levels" hidden>
       <h3 class="panel-h">Your clean tracks</h3>

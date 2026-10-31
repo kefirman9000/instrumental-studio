@@ -1389,7 +1389,15 @@ function renderTips() {
   const actionable = tips.filter(t => t.action).length;
   $("#tipCount").textContent = actionable ? `${actionable}` : "";
   list.innerHTML = "";
-  for (const t of tips) {
+  const ordered = tips.filter(t => t.action).concat(tips.filter(t => !t.action));
+  const show = st.allTips ? ordered : ordered.slice(0, 1);
+  if (ordered.length > 1) {
+    const more = document.createElement("button"); more.className = "ghost small";
+    more.textContent = st.allTips ? "Show just the next step" : `${ordered.length - 1} more idea${ordered.length === 2 ? "" : "s"}`;
+    more.onclick = () => { st.allTips = !st.allTips; renderTips(); };
+    setTimeout(() => list.append(more), 0);
+  }
+  for (const t of show) {
     const d = document.createElement("div"); d.className = "tip";
     d.innerHTML = `<b></b><p></p>`;
     d.querySelector("b").textContent = t.title; d.querySelector("p").textContent = t.detail;
@@ -1624,8 +1632,14 @@ function renderBadges() {
 
 /* ---------- review list */
 const ok = s => s.status === "auto" || s.status === "accepted";
+// tiny fixes you'd hardly hear: kept out of the list unless asked for
+const minorFix = s => s.status === "pending" && !s.recommended && (
+  (s.type === "repair" && (s.severity || 0) < 0.08) ||
+  ((s.type === "bleed" || s.type === "ess") && s.removed_db != null && s.removed_db > -1.5) ||
+  (s.type === "glitch" && (s.severity || 0) < 0.3) || s.type === "smooth");
 const FILTERS = {
-  review: s => s.status === "pending" || (s.type === "bleed" && s.status === "pending"),
+  review: s => s.status === "pending" && (st.showMinor || !minorFix(s)),
+  notused: s => s.status === "rejected" || s.status === "low" || s.status === "nodonor",
   applied: s => ok(s),
   bleed: s => s.type === "bleed" || s.type === "ess",
   cleanup: s => s.type === "glitch" || s.type === "smooth",
@@ -1635,6 +1649,7 @@ const FILTERS = {
   all: () => true,
 };
 $$("#filters button").forEach(b => b.onclick = () => { st.filter = b.dataset.f; renderReview(); });
+$("#showMinor").onchange = () => { st.showMinor = $("#showMinor").checked; renderReview(); };
 
 function setScope(scope) { st.scope = scope; activateTab("review"); renderReview(); renderRuler(); }
 
@@ -1650,8 +1665,11 @@ function statusText(s) {
 function renderReview() {
   const ov = st.ov, all = ov.suggestions;
   const repairs = all.filter(s => s.type === "repair");
-  const applied = repairs.filter(ok).length, pending = all.filter(FILTERS.review).length, hard = repairs.filter(FILTERS.hard).length;
-  $("#reviewSummary").innerHTML = `<div><b>${applied}</b><span>repairs applied by you</span></div><div><b>${pending}</b><span>waiting for you</span></div><div><b>${hard}</b><span>without a good source</span></div>`;
+  const used = all.filter(ok).length, pending = all.filter(FILTERS.review).length;
+  const small = all.filter(s => minorFix(s)).length;
+  $("#reviewSummary").innerHTML = `<div><b>${used}</b><span>fixes in use</span></div><div><b>${pending}</b><span>waiting for you</span></div>` +
+    (small && !st.showMinor ? `<div><b>${small}</b><span>small ones hidden</span></div>` : "");
+  if (!FILTERS[st.filter]) st.filter = "review";
   $$("#filters button").forEach(b => b.classList.toggle("on", b.dataset.f === st.filter));
   const sc = $("#scope");
   if (st.scope) {
@@ -1670,14 +1688,13 @@ function renderReview() {
   const bulk = $("#bulkBar"); bulk.innerHTML = "";
   if (list.some(s => s.status !== "nodonor")) {
     const scopeArgs = { stem: st.scope?.stem ?? null, section: st.scope?.section ?? null };
-    const types = st.filter === "bleed" ? ["bleed", "ess"] : st.filter === "cleanup" ? ["glitch", "smooth"] : st.filter === "takes" ? ["take", "alt", "hits", "bars", "rebuild"] : st.filter === "misfit" ? ["repair", "take", "alt", "hits", "bars", "rebuild"] : st.filter === "review" ? ["repair", "bleed", "ess", "glitch", "smooth", "take", "alt", "hits", "bars", "rebuild"] : ["repair"];
+    const types = ["repair", "bleed", "ess", "glitch", "smooth", "take", "alt", "hits", "bars", "rebuild"];
     const mk = (label, action, cls) => { const b = document.createElement("button"); b.className = "small " + (cls || "ghost"); b.textContent = label; b.onclick = () => edit("/api/bulk", { action, ...scopeArgs, types }); bulk.append(b); };
     const what = st.filter === "bleed" || st.filter === "cleanup" || st.filter === "takes" ? "fixes" : "repairs";
     const rec = list.filter(x => x.recommended && x.status === "pending").length;
     if (rec && !["bleed", "cleanup", "takes"].includes(st.filter)) mk(`Apply ${rec} recommended`, "accept_recommended", "primary");
     mk(`Apply all${st.scope ? " here" : ""}`, "accept", "");
     mk(`Reject all${st.scope ? " here" : ""}`, "reject");
-    mk("Clear decisions", "reset");
   }
 
   const wrap = $("#sugList"); wrap.innerHTML = "";
