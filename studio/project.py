@@ -108,7 +108,7 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
-        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs"):
+        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples"):
             self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
@@ -419,6 +419,11 @@ class Project:
         if kept is not None:          # kept parts are never repaired
             delta *= (1 - kept)[None, :]
         out += delta
+        if (self.mixer.get("drum_edits") or {}).get(k):
+            try:
+                out = self._apply_drum_edits(k, out)
+            except Exception as e:
+                log(f"drum edits skipped for {k}: {e}")
         self._render_cache[key] = out
         gen = self.__dict__.setdefault("_render_gen", {})
         gen[k] = gen.get(k, 0) + 1
@@ -1167,12 +1172,15 @@ class Project:
                 pass
             return ids
 
+    REF_MODES = ("damaged", "stem", "mix", "split")      # per section: where singing damaged it, all, half, none
+
     def add_reference_track(self, audio, k, name, use="vocals"):
         """A clean recording of one instrument from this song (an official stem, a session file...): line it up
-        with the song, match its level, keep it with the song, and offer it for that instrument, section by
+        with the song, match its level, keep it with the song, and use it for that instrument, section by
         section. use="vocals": only where the singing damaged the split (the rest of the split stays);
         use="all": the whole track. From then on every fix on that instrument is also checked against it.
-        Returns ids."""
+        It gets its own lane, where you choose per section, paint where it's used, set its level and timing.
+        Returns ids (waiting in Review)."""
         with self.lock:
             if k not in self.stems:
                 raise ValueError(f"No {k} track in this song.")
@@ -1187,62 +1195,355 @@ class Project:
             ref = np.zeros((2, n), np.float32)
             s0, s1 = max(0, off), min(n, off + audio.shape[1])
             ref[:, s0:s1] = audio[:, s0 - off:s1 - off]
-            # refine to the sample (within +-5 ms) on the first strong part
-            a = s0 + int(0.5 * sr)
+            a = s0 + int(0.5 * sr)                     # refine to the sample (within +-5 ms) on the first strong part
             if a + sr < s1:
-                sh = __import__("studio.hits", fromlist=["align"]).align(self.stems[k][:, a:a + sr].mean(0), ref[:, a:a + sr].mean(0),
-                                                                         int(0.005 * sr))
+                sh = HT.align(self.stems[k][:, a:a + sr].mean(0), ref[:, a:a + sr].mean(0), int(0.005 * sr))
                 ref = np.roll(ref, -sh, axis=1)
-            ids = []
             raw = self.stems[k]
-            # one overall level for the stored copy (used to check fixes): matched where nobody sings
-            vq = self._vocal_curve(0, n) < 0.1
+            vq = self._vocal_curve(0, n) < 0.1          # one overall level, matched where nobody sings
             mq = vq if vq.sum() > sr else np.ones(n, bool)
             g_all = float(np.clip(np.sqrt(float((raw[:, mq] ** 2).mean()) / (float((ref[:, mq] ** 2).mean()) + 1e-12)), 0.1, 10))
             os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
             np.save(self._ref_path(k), (ref * g_all).astype(np.float16))
             self.__dict__.setdefault("_refs", {}).pop(k, None)
-            self.meta.setdefault("refs", {})[k] = {"name": name, "match": round(float(score), 2), "use": use}
-            for rid in [i for i, x in self.suggestions.items() if i.startswith(f"ref_{k}_") and x["status"] == "pending"]:
+            self.display.get("raw", {}).pop(f"ref:{k}", None)
+            for rid in [i for i, x in self.suggestions.items() if i.startswith(f"ref_{k}_")]:
                 self.suggestions.pop(rid, None)
                 self.patches.pop(rid, None)
                 self.take_w.pop(rid, None)
-            if use == "vocals":
-                # where the singing was, widened a little so the switch happens before the damage starts
-                from scipy.ndimage import maximum_filter1d, uniform_filter1d
-                vw = np.clip(self._vocal_curve(0, n) * 4, 0, 1)
-                vw = maximum_filter1d(vw, int(0.25 * sr))
-                vw = uniform_filter1d(vw, int(0.04 * sr)).astype(np.float32)
-            for si, sec in enumerate(self.sections):
-                a, b = int(sec["start"] * sr), min(n, int(sec["end"] * sr))
-                rs = ref[:, a:b]
-                if b - a < sr // 2 or float((rs ** 2).mean()) < 1e-8:
+            mode = "damaged" if use == "vocals" else "stem"
+            self.meta.setdefault("refs", {})[k] = {
+                "name": name, "match": round(float(score), 2), "use": use, "gain_db": 0.0, "nudge_ms": 0.0,
+                "mute": False, "sections": {str(si): mode for si in range(len(self.sections))}, "paint": []}
+            return self._rebuild_ref(k, "pending")
+
+    def _ref_weight(self, k, cfg):
+        """0..1 per sample: how much of instrument k comes from your clean track, from the per-section choices
+        and what you painted on its lane."""
+        sr, n = self.sr, self.original.shape[1]
+        W = np.zeros(n, np.float32)
+        if cfg.get("mute"):
+            return W
+        vw = None
+        ramp = int(0.02 * sr)
+        for si, sec in enumerate(self.sections):
+            mode = (cfg.get("sections") or {}).get(str(si), "damaged" if cfg.get("use") != "all" else "stem")
+            a, b = int(sec["start"] * sr), min(n, int(sec["end"] * sr))
+            if b <= a or mode == "split":
+                continue
+            if mode == "damaged":
+                if vw is None:
+                    from scipy.ndimage import maximum_filter1d, uniform_filter1d
+                    vw = np.clip(self._vocal_curve(0, n) * 4, 0, 1)
+                    vw = uniform_filter1d(maximum_filter1d(vw, int(0.25 * sr)), int(0.04 * sr)).astype(np.float32)
+                W[a:b] = vw[a:b]
+            else:
+                W[a:b] = 1.0 if mode == "stem" else 0.5
+        for r in cfg.get("paint") or []:                 # painted on the lane: always (on) or never (off)
+            a, b = max(0, int(r["start"] * sr)), min(n, int(r["end"] * sr))
+            if b > a:
+                W[a:b] = 1.0 if r.get("on") else 0.0
+        from scipy.ndimage import uniform_filter1d
+        return np.clip(uniform_filter1d(W, ramp), 0, 1).astype(np.float32)   # short crossfades at every change
+
+    def ref_audio(self, k):
+        """Your clean track as it's used: lined up, level, timing nudge applied."""
+        ref = self.ref_track(k)
+        cfg = (self.meta.get("refs") or {}).get(k)
+        if ref is None or cfg is None:
+            raise ValueError(f"No clean {k} track.")
+        y = np.asarray(ref, np.float32) * float(10 ** (float(cfg.get("gain_db", 0)) / 20))
+        sh = int(round(float(cfg.get("nudge_ms", 0)) * self.sr / 1000))
+        if sh:
+            y = np.roll(y, sh, axis=1)
+            if sh > 0:
+                y[:, :sh] = 0
+            else:
+                y[:, sh:] = 0
+        return y
+
+    def _rebuild_ref(self, k, status=None):
+        """Remake the review items of your clean k track from its settings, one per section. status: what to set
+        them to ("accepted" after you edit the lane, "pending" when first added; None keeps theirs)."""
+        cfg = self.meta["refs"][k]
+        sr, n = self.sr, self.original.shape[1]
+        ref = self.ref_audio(k)
+        raw = self.stems[k]
+        Wf = self._ref_weight(k, cfg)
+        ids = []
+        for si, sec in enumerate(self.sections):
+            a, b = int(sec["start"] * sr), min(n, int(sec["end"] * sr))
+            rid = f"ref_{k}_{si}"
+            lo, hi = max(0, a - XFADE), min(n, b + XFADE)
+            if b - a < sr // 4:
+                continue
+            W = Wf[lo:hi].copy()
+            t = np.arange(lo, hi) / sr                  # stay inside the section (neighbours have their own item)
+            W *= np.minimum(np.clip((t - sec["start"] + 0.01) / 0.02, 0, 1), np.clip((sec["end"] + 0.01 - t) / 0.02, 0, 1))
+            rs = ref[:, a:b]
+            if float(W.max()) < 0.01 or float((rs ** 2).mean()) < 1e-9:
+                if rid in self.suggestions:
+                    self.suggestions[rid]["status"] = "rejected"
+                    self.suggestions[rid].pop("by_build", None)
+                continue
+            vc = self._vocal_curve(a, b) < 0.1            # level: match the instrument where nobody sings
+            m = vc if vc.sum() > sr // 4 else np.ones(b - a, bool)
+            gl = float(10 ** (float(cfg.get("gain_db", 0)) / 20))      # your level setting rides on top of the match
+            g = float(np.clip(np.sqrt(float((raw[:, a:b][:, m] ** 2).mean()) / (float(((rs / gl)[:, m] ** 2).mean()) + 1e-12)), 0.25, 4))
+            mode = (cfg.get("sections") or {}).get(str(si), "damaged")
+            old = self.suggestions.get(rid, {})
+            self.suggestions[rid] = {
+                "id": rid, "type": "alt", "stem": k, "status": status or old.get("status", "pending"),
+                "start": sec["start"], "end": sec["end"], "section": si, "conf": cfg.get("match", 1.0), "severity": 0.0,
+                "strength": 1.0, "donors": [], "alt_mode": "imported", "blend": 0.0, "reference": cfg["name"],
+                "use": cfg.get("use"),
+                "note": f"Your clean \"{cfg['name']}\" for the {k} here: "
+                        + {"damaged": "where the singing damaged it", "stem": "the whole part", "mix": "mixed half and half with the split",
+                           "split": "not used"}.get(mode, "") + (" (with what you painted on its lane)" if cfg.get("paint") else "")}
+            if status:
+                self.suggestions[rid].pop("by_build", None)
+            self.patches[rid] = (lo, (W[None, :] * (ref[:, lo:hi] * g - raw[:, lo:hi])).astype(np.float16))
+            self.take_w[rid] = (lo, W.astype(np.float16))
+            ids.append(rid)
+        self._render_cache.pop(("stem", k), None)
+        self._render_cache.pop("mix", None)
+        return ids
+
+    def ref_edit(self, k, ch):
+        """Change your clean k track from its lane. ch: sections {si: mode} | paint {start, end, on} |
+        clear_paint | gain_db | nudge_ms | mute."""
+        with self.lock:
+            cfg = (self.meta.get("refs") or {}).get(k)
+            if cfg is None:
+                raise ValueError(f"No clean {k} track.")
+            for si, mode in (ch.get("sections") or {}).items():
+                if mode in self.REF_MODES:
+                    cfg.setdefault("sections", {})[str(si)] = mode
+                    cfg["paint"] = [r for r in cfg.get("paint", [])            # a section choice resets painting there
+                                    if not (r["start"] >= self.sections[int(si)]["start"] - 0.01
+                                            and r["end"] <= self.sections[int(si)]["end"] + 0.01)]
+            if ch.get("paint"):
+                r = ch["paint"]
+                a, b = sorted((float(r["start"]), float(r["end"])))
+                if b - a >= 0.05:
+                    keep = []
+                    for q in cfg.get("paint", []):                 # the newest stroke wins where they overlap
+                        if q["end"] <= a or q["start"] >= b:
+                            keep.append(q)
+                        else:
+                            if q["start"] < a:
+                                keep.append({**q, "end": a})
+                            if q["end"] > b:
+                                keep.append({**q, "start": b})
+                    cfg["paint"] = sorted(keep + [{"start": round(a, 3), "end": round(b, 3), "on": bool(r.get("on", True))}],
+                                          key=lambda q: q["start"])
+            if ch.get("clear_paint"):
+                cfg["paint"] = []
+            if "gain_db" in ch:
+                cfg["gain_db"] = float(np.clip(float(ch["gain_db"]), -24, 12))
+            if "nudge_ms" in ch:
+                cfg["nudge_ms"] = float(np.clip(float(ch["nudge_ms"]), -100, 100))
+            if "mute" in ch:
+                cfg["mute"] = bool(ch["mute"])
+            return self._rebuild_ref(k, "accepted")
+
+    def ref_lanes(self):
+        """For the lanes: each clean track's settings and how much it's used, 10 times a second."""
+        out = {}
+        n = self.original.shape[1] if self.original is not None else 0
+        rate = 10
+        for k, cfg in (self.meta.get("refs") or {}).items():
+            cols = n * rate // self.sr + 1
+            use = np.zeros(cols, np.float32)
+            for i, x in self.suggestions.items():
+                if i.startswith(f"ref_{k}_") and x["status"] in ("accepted", "auto") and i in self.take_w:
+                    lo, w = self.take_w[i]
+                    w = np.asarray(w, np.float32)
+                    step = self.sr // rate
+                    m = len(w) // step
+                    if m:
+                        c0 = lo // step
+                        seg = w[:m * step].reshape(m, step).mean(1)
+                        use[c0:c0 + m] = np.maximum(use[c0:c0 + m], seg[:max(0, cols - c0)])
+            out[k] = {**cfg, "rate": rate, "used": [round(float(v), 2) for v in use]}
+        return out
+
+    # ------------------------------------------------------------------ drum hits you can see and edit
+    def drum_map(self, k):
+        """Every hit on a drum track, grouped into its sounds (rows): {"rows": [{id, name, count}],
+        "hits": [[time, row id, level 0..1]]}."""
+        cache = self.__dict__.setdefault("_drum_map", {})
+        if k in cache:
+            return cache[k]
+        if k not in self.stems:
+            raise ValueError(f"No {k} track.")
+        x = self.stems[k].mean(0)
+        pos, clusters, F, lv, centers = HT.find_sounds(x, self.sr, min_count=3)
+        rows, seen, hits = [], {}, []
+        order = sorted(range(len(clusters)), key=lambda ci: -len(clusters[ci]))[:10]
+        top = float(np.max(lv)) if len(lv) else 0.0
+        for ci in order:
+            c = clusters[ci]
+            nm = HT.name_sound(F[c].mean(0), centers) if k in self.PERCUSSIVE else f"note {chr(65 + len(rows) % 26)}"
+            seen[nm] = seen.get(nm, 0) + 1
+            rows.append({"id": int(ci), "name": nm + (f" {seen[nm]}" if seen[nm] > 1 else ""), "count": len(c)})
+            for i in c:
+                hits.append([round(float(pos[i]) / self.sr, 4), int(ci), round(float(np.clip(np.exp((lv[i] - top) / 2), 0, 1)), 3)])
+        hits.sort()
+        cache[k] = {"rows": rows, "hits": hits, "_pos": pos, "_clusters": clusters, "_F": F, "_lv": lv}
+        return cache[k]
+
+    def _drum_sample(self, k, sid):
+        """The cleanest version of one drum sound: its clean hits (least singing), lined up and merged.
+        Returns (audio (2, n) starting 3 ms before the attack, its level)."""
+        cache = self.__dict__.setdefault("_drum_samples", {})
+        if (k, sid) in cache:
+            return cache[(k, sid)]
+        dm = self.drum_map(k)
+        pos, c, lv = dm["_pos"], dm["_clusters"][sid], dm["_lv"]
+        x = self.stems[k]
+        sr = self.sr
+        pre = int(0.003 * sr)
+        nxt = {int(p): int(q) for p, q in zip(pos, np.r_[pos[1:], x.shape[1]])}
+        gaps = [nxt[int(pos[i])] - int(pos[i]) for i in c]
+        L = int(np.clip(np.median(gaps) if gaps else 0.3 * sr, 0.06 * sr, 0.6 * sr))
+        vc = self._vocal_curve(0, x.shape[1])
+        med = float(np.median(lv[c]))
+        ranked = sorted(c, key=lambda i: (vc[min(int(pos[i]) + int(0.02 * sr), len(vc) - 1)], abs(lv[i] - med)))
+        clips = []
+        for i in ranked[:5]:
+            p = int(pos[i])
+            if p - pre < 0 or p + L > x.shape[1]:
+                continue
+            seg = x[:, p - pre:p + L]
+            if clips:
+                sh = HT.align(clips[0].mean(0), seg.mean(0), int(0.003 * sr))
+                q = p - pre - sh
+                if q < 0 or q + clips[0].shape[1] > x.shape[1]:
                     continue
-                if use == "vocals" and float(vw[a:b].max()) < 0.05:
-                    continue                                   # no singing here: the split is already clean
-                # level: match the instrument where nobody sings (else the whole section)
-                vc = self._vocal_curve(a, b) < 0.1
-                m = vc if vc.sum() > sr // 4 else np.ones(b - a, bool)
-                g = np.sqrt(float((raw[:, a:b][:, m] ** 2).mean()) / (float((rs[:, m] ** 2).mean()) + 1e-12))
-                g = float(np.clip(g, 0.1, 10))
-                lo, hi = max(0, a - XFADE), min(n, b + XFADE)
-                t = np.arange(lo, hi) / sr
-                ramp = 0.02
-                W = np.minimum(np.clip((t - sec["start"] + ramp / 2) / ramp, 0, 1),
-                               np.clip((sec["end"] + ramp / 2 - t) / ramp, 0, 1)).astype(np.float32)
-                if use == "vocals":
-                    W = W * vw[lo:hi]
-                rid = f"ref_{k}_{si}"
-                self.suggestions[rid] = {
-                    "id": rid, "type": "alt", "stem": k, "status": "pending", "start": sec["start"], "end": sec["end"],
-                    "section": si, "conf": round(float(score), 2), "severity": 0.0, "strength": 1.0, "donors": [],
-                    "alt_mode": "imported", "blend": 0.0, "reference": name, "use": use,
-                    "note": (f"Uses your clean \"{name}\" for the {k} where the singing damaged it" if use == "vocals" else
-                             f"Uses your clean \"{name}\" for the {k} here") + " (lined up with the song, level-matched)"}
-                self.patches[rid] = (lo, (W[None, :] * (ref[:, lo:hi] * g - raw[:, lo:hi])).astype(np.float16))
-                self.take_w[rid] = (lo, W.astype(np.float16))
-                ids.append(rid)
-            return ids
+                seg = x[:, q:q + clips[0].shape[1]]
+            clips.append(np.asarray(seg, np.float32))
+        if not clips:
+            raise ValueError("No clean example of that sound.")
+        y = self._merge_clips(clips) if len(clips) >= 2 else clips[0].copy()
+        f = min(int(0.02 * sr), y.shape[1] // 4)
+        y[:, -f:] *= np.linspace(1, 0, f, dtype=np.float32)
+        cache[(k, sid)] = (y, float(np.median([lv[i] for i in ranked[:5]])))
+        return cache[(k, sid)]
+
+    def drum_edits(self, k):
+        return (self.mixer.get("drum_edits") or {}).get(k) or {"add": [], "off": [], "rebuild": []}
+
+    def drum_edit(self, k, ch):
+        """Edit the hits of drum track k. ch: add {t, s} | remove_add t | off t | on t | rebuild {start, end} |
+        unrebuild {start, end} | clear {start, end} (your edits there)."""
+        with self.lock:
+            e = self.mixer.setdefault("drum_edits", {}).setdefault(k, {"add": [], "off": [], "rebuild": []})
+            near = lambda a, b: abs(float(a) - float(b)) < 0.012
+            if ch.get("add"):
+                a = ch["add"]
+                e["add"] = [x for x in e["add"] if not (near(x["t"], a["t"]) and x["s"] == int(a["s"]))]
+                e["add"].append({"t": round(float(a["t"]), 4), "s": int(a["s"]), "v": float(a.get("v", 1.0))})
+            if "remove_add" in ch:
+                e["add"] = [x for x in e["add"] if not near(x["t"], ch["remove_add"])]
+            if "off" in ch:
+                if not any(near(t, ch["off"]) for t in e["off"]):
+                    e["off"].append(round(float(ch["off"]), 4))
+            if "on" in ch:
+                e["off"] = [t for t in e["off"] if not near(t, ch["on"])]
+            if ch.get("rebuild"):
+                r = ch["rebuild"]
+                e["rebuild"] = [q for q in e["rebuild"] if q["end"] <= r["start"] or q["start"] >= r["end"]]
+                e["rebuild"].append({"start": round(float(r["start"]), 3), "end": round(float(r["end"]), 3)})
+            if ch.get("unrebuild"):
+                r = ch["unrebuild"]
+                e["rebuild"] = [q for q in e["rebuild"] if q["end"] <= r["start"] or q["start"] >= r["end"]]
+            if ch.get("clear"):
+                r = ch["clear"]
+                inside = lambda t: r["start"] <= float(t) < r["end"]
+                e["add"] = [x for x in e["add"] if not inside(x["t"])]
+                e["off"] = [t for t in e["off"] if not inside(t)]
+                e["rebuild"] = [q for q in e["rebuild"] if q["end"] <= r["start"] or q["start"] >= r["end"]]
+            if not (e["add"] or e["off"] or e["rebuild"]):
+                self.mixer["drum_edits"].pop(k, None)
+            self._render_cache.pop(("stem", k), None)
+            self._render_cache.pop("mix", None)
+            return self.drum_edits(k)
+
+    def drum_fill_pattern(self, k, start, end):
+        """Add the hits the learned pattern is sure belong in [start, end) and the track is missing."""
+        found = self.find_pattern_hits()
+        n = 0
+        for (kk, sid), ps in found.items():
+            if kk != k:
+                continue
+            for p in ps:
+                t = p / self.sr
+                if start <= t < end:
+                    self.drum_edit(k, {"add": {"t": t, "s": sid}})
+                    n += 1
+        return n
+
+    def _apply_drum_edits(self, k, y):
+        e = (self.mixer.get("drum_edits") or {}).get(k)
+        if not e:
+            return y
+        sr, n = self.sr, y.shape[1]
+        dm = self.drum_map(k)
+        pos = dm["_pos"]
+        pre = int(0.003 * sr)
+        lvl_of = {}
+        for ci, c in enumerate(dm["_clusters"]):
+            for i in c:
+                lvl_of[int(pos[i])] = (ci, float(dm["_lv"][i]))
+        def place(out, t, sid, gain=1.0, lv=None):
+            try:
+                smp, slv = self._drum_sample(k, sid)
+            except Exception:
+                return
+            if lv is not None:
+                gain *= float(np.clip(np.exp((lv - slv) / 2), 0.1, 4))
+            a = int(round(t * sr)) - pre
+            a0, a1 = max(0, a), min(n, a + smp.shape[1])
+            if a1 > a0:
+                out[:, a0:a1] += smp[:, a0 - a:a1 - a] * gain
+        y = y.copy()
+        nxt = np.r_[pos[1:], n] if len(pos) else pos
+        for t in e.get("off", []):                   # take a hit out: silence from its attack to the next hit
+            if not len(pos):
+                break
+            i = int(np.argmin(np.abs(pos / sr - t)))
+            p = int(pos[i])
+            a, b = max(0, p - pre), min(n, int(nxt[i]), p + int(0.4 * sr))
+            r = min(int(0.004 * sr), (b - a) // 4)
+            w = np.ones(b - a, np.float32)
+            if r:
+                w[:r] = np.linspace(1, 0, r)
+                w[-r:] = np.linspace(0, 1, r)
+            y[:, a:b] *= (1 - w)[None, :] if r else 0
+        offs = e.get("off", [])
+        for q in e.get("rebuild", []):               # these bars made again from clean samples, hit by hit
+            a, b = max(0, int(q["start"] * sr)), min(n, int(q["end"] * sr))
+            if b - a < 64:
+                continue
+            synth = np.zeros((2, n), np.float32)
+            for p in pos:
+                t = p / sr
+                if q["start"] <= t < q["end"] and not any(abs(t - o) < 0.012 for o in offs) and int(p) in lvl_of:
+                    ci, lv = lvl_of[int(p)]
+                    place(synth, t, ci, 1.0, lv)
+            for ad in e.get("add", []):
+                if q["start"] <= ad["t"] < q["end"]:
+                    place(synth, ad["t"], ad["s"], ad.get("v", 1.0))
+            f = min(int(0.01 * sr), (b - a) // 4)
+            w = np.ones(b - a, np.float32)
+            w[:f] = np.linspace(0, 1, f)
+            w[-f:] = np.linspace(1, 0, f)
+            y[:, a:b] = y[:, a:b] * (1 - w)[None, :] + synth[:, a:b] * w[None, :]
+        for ad in e.get("add", []):                  # added hits outside rebuilt bars
+            if not any(q["start"] <= ad["t"] < q["end"] for q in e.get("rebuild", [])):
+                place(y, ad["t"], ad["s"], ad.get("v", 1.0))
+        return y
 
     def add_reference_sample(self, audio, name):
         """A clean one-shot (one drum hit or one note): find the repeated sound in the song it is, and rebuild that
@@ -2968,6 +3269,11 @@ class Project:
     def spectro(self, k, kind):
         """uint8 image bytes (rows = DISPLAY_BANDS low->high, row-major) for the timeline."""
         ref = self.display.get("ref_db", 0.0)
+        if k.startswith("ref:"):                       # your clean track's own lane
+            kk = k[4:]
+            if k not in self.display["raw"]:
+                self.display["raw"][k] = self._display_spec(self.ref_audio(kk))
+            return _to_u8(self.display["raw"][k], ref - 85, ref).tobytes()
         if kind == "damage":
             a = self.display["damage"].get(k)
             if a is None:
@@ -4750,6 +5056,7 @@ class Project:
             "tips": self._safe(self.tips, []),
             "best_versions": self._safe(self.best_versions, []),
             "best_hits": self._safe(lambda: self.best_hits(lazy=True), []),
+            "ref_lanes": self._safe(self.ref_lanes, {}),
             "best_bars": self._safe(lambda: [{**g, "damaged_times": [self.beat_times[self.windows[v][0]] for v in g["damaged"]]}
                                              for g in self.best_bars()], []),
             "user_decisions": sum(1 for x in self.suggestions.values() if x["status"] in ("accepted", "rejected")),
