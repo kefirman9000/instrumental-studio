@@ -1,5 +1,19 @@
 # What's new
 
+## 1.35.0
+
+**Smart cleanup** (a new Build step, on by default): the app learns what belongs on each track from the rest of the song and turns down the rest, gently (at most 12 dB, never a hard mute), mainly under the singing.
+- **Drums:** each sound's normal attack and decay is learned from its clean hits; anything louder than that between and after hits (clicks, vinyl crackle, smeared consonants, separation chirps) comes down. Real hits off the grid (fills, ghost notes) stay.
+- **Pitched parts (bass, keys...):** during each note, whatever isn't at that note's pitch and overtones (vocal bleed singing other notes, artifacts) comes down.
+- **Loops:** what a sung copy has that the clean copies don't comes down.
+- **Every track:** its steady noise (hiss, vinyl surface, hum), learned from the quietest moments, is reduced everywhere.
+- Each track and section is one item in Review, to hear before and after.
+
+**Simpler Review and Song map**
+- Review has four filters: **Waiting**, **Used**, **Not used** (each with its reason) and **All**. Tiny fixes you'd hardly hear are hidden (tick *Show small fixes* to see them).
+- **What to do next** shows the single most useful step; the other ideas are one click away.
+- *Repairability* is now **Song map**: how clean each instrument is in each section, first. The lists of repeated parts, hits and bars are tucked under *advanced*.
+
 ## 1.34.0
 
 - **Bass notes rebuilt as notes.** Bass (and other pitched) notes that the singing damaged are made again from clean copies of the *same note* elsewhere in the song, or a nearby note retuned a little when that note is never heard clean. Part of Build the best instrumental (on by default), and each section's notes are one item in Review.
