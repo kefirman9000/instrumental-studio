@@ -1,5 +1,9 @@
 # What's new
 
+## 1.30.7
+
+- **You can always see when the app is working:** a small spinner next to the model light, with what it's doing (a job's progress message, "Working" for anything taking more than a moment, or "Still analysing the song" while background measurements finish).
+
 ## 1.30.6
 
 - **Fix: the split type list could be empty** (and other parts of the start screen not fill in). Since 1.27.2, the first request when the app opened left a few bytes unread, which garbled the next one.
