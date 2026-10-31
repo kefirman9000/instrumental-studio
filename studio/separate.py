@@ -28,6 +28,17 @@ MODELS = {
                 ["drums", "bass", "guitar", "piano", "other", "vocals"]),
 }
 NEEDS_EXTRA = {"hybrid": "roformer", "hybrid6": "roformer"}
+PASSES = {"htdemucs_ft": 4, "htdemucs": 1, "htdemucs_6s": 1}
+
+
+def passes(mode, options=None):
+    """How much work a split is, in single-model passes (for time estimates)."""
+    n = sum(PASSES.get(m, 1) for m in MODELS[mode][1]) + (3 if mode in NEEDS_EXTRA else 0)
+    return n + (2 if (options or {}).get("backing") else 0) + (1 if (options or {}).get("drums") else 0)
+
+
+# seconds of work per second of song per pass, until this computer's own speed is measured
+DEFAULT_SPEED = {"cuda": 0.03, "mps": 0.15, "cpu": 0.8}
 BS_ROFORMER = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 KARAOKE = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
 

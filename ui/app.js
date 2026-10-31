@@ -68,7 +68,7 @@ async function refreshState() {
   if (!sel.options.length) {
     fillModelSelect(sel, s.models);
     sel.value = localStorage.getItem("sepMode") || "4stem";
-    sel.dataset.auto = localStorage.getItem("sepMode") ? "" : "1";
+    sel.dataset.auto = "1";       // with no graphics card, each start begins on the fast model (pick another any time)
   }
   renderModel(s); renderExtras(s); renderSpeedTip();
   const rec = $("#recent"); rec.innerHTML = "";
@@ -782,6 +782,23 @@ function hideKeepPop() { $("#keepPop").hidden = true; }
 async function setKeep(list) {
   try { applyEdit(await api.post("/api/mixer", { keep: list })); } catch (e) { fail(e); }
 }
+function renderRefList() {
+  const w = $("#refList"), refs = st.ov.meta.refs || {}, keys = Object.keys(refs);
+  if (!w) return;
+  w.innerHTML = keys.length ? "" : `<p class="help">None yet.</p>`;
+  for (const k of keys) {
+    const r = refs[k], used = (st.ov.suggestions || []).filter(x => x.stem === k && (x.id || "").startsWith(`ref_${k}_`) && x.status === "accepted").length;
+    const d = document.createElement("div"); d.className = "keep-item";
+    d.innerHTML = `<i class="sw" style="background:${st.ov.colors?.[k] || "#888"}"></i><span></span><button class="ghost small">Remove</button>`;
+    d.querySelector("span").textContent = `${nice(k)}: ${r.name} (${Math.round((r.match || 0) * 100)}% match, ` +
+      `${r.use === "all" ? "whole track" : "where the singing damaged it"}${used ? `, used in ${used} part${used === 1 ? "" : "s"}` : ""})`;
+    d.querySelector("button").onclick = async () => {
+      try { await api.post("/api/ref_remove", { stem: k }); await openWorkspace(); toast(`Stopped using your clean ${nice(k)} track. Undo brings its parts back.`); }
+      catch (e) { fail(e); }
+    };
+    w.append(d);
+  }
+}
 function renderKeepList() {
   const w = $("#keepList"), list = st.ov.mixer.keep || [];
   w.innerHTML = list.length ? "" : `<p class="help">Nothing kept yet.</p>`;
@@ -984,14 +1001,16 @@ function renderSteps() {
   auto.disabled = at < 1 && !modelOk;
   sel.hidden = demo;
   if (at >= 1) {
-    $("#splitSub").textContent = `Split with ${ov.meta.separation || "a separator"}: ${ov.stems.join(", ")} and vocals.`;
+    const si = ov.meta.split_info;
+    const how = si ? ` on ${si.kind === "cuda" ? "your graphics card (" + si.device + ")" : si.kind === "mps" ? "the Mac's graphics" : "the processor"} in ${si.seconds >= 60 ? Math.floor(si.seconds / 60) + "m " + Math.round(si.seconds % 60) + "s" : Math.round(si.seconds) + "s"}` : "";
+    $("#splitSub").textContent = `Split with ${ov.meta.separation || "a separator"}${how}: ${ov.stems.join(", ")} and vocals.`;
     split.textContent = "Split again"; split.className = "ghost small"; split.disabled = false;
     sel.hidden = true;
   } else if (demo) {
     $("#splitSub").textContent = "The demo comes pre-split, no model needed.";
     split.textContent = "Split"; split.className = "primary"; split.disabled = false;
   } else if (modelOk) {
-    $("#splitSub").textContent = speedTip(sel.value, /CPU/i.test(m.device || ""));
+    $("#splitSub").textContent = splitEstimate(sel.value) + speedTip(sel.value, /CPU/i.test(m.device || ""));
     split.textContent = "Split"; split.className = "primary"; split.disabled = false;
   } else if (m.installing) {
     $("#splitSub").textContent = `Waiting for the separation model: ${pct(m.progress || 0)}.`;
@@ -1029,6 +1048,14 @@ function fillModelSelect(sel, models, skip) {
     if (!groups[g]) { groups[g] = document.createElement("optgroup"); groups[g].label = GROUP_NAMES[g] || g; sel.append(groups[g]); }
     groups[g].append(new Option(shortModel(label), k));
   }
+}
+const fmtDur = s => s < 60 ? "under a minute" : s < 3600 ? `about ${Math.round(s / 60)} min` : `about ${(s / 3600).toFixed(1)} h`;
+function splitEstimate(mode) {
+  const e = st.state?.split_estimates || {};
+  if (e[mode] == null) return "";
+  const fast = e["4stem_fast"], cpu = /CPU/i.test(st.state?.model?.device || "");
+  return `${fmtDur(e[mode])} on your ${cpu ? "processor" : "graphics card"}` +
+    (cpu && mode !== "4stem_fast" && fast != null && e[mode] > 1.5 * fast ? ` (Quick draft: ${fmtDur(fast)})` : "") + ". ";
 }
 function speedTip(mode, cpu) {
   return {
@@ -1092,7 +1119,7 @@ $("#btnDetect").onclick = async () => {
 
 function renderAll() {
   $("#autoCard").hidden = st.ov.stage !== "detected";
-  renderSteps(); renderTips(); renderKeepList(); renderSidesList(); renderMuteList(); renderEqList();
+  renderSteps(); renderTips(); renderRefList(); renderKeepList(); renderSidesList(); renderMuteList(); renderEqList();
   $("#btnUndo").disabled = !st.ov.can_undo;
   $("#btnUndo").title = st.ov.can_undo ? `Undo: ${st.ov.undo_label}` : "Nothing to undo";
   renderBadges(); renderLanes(); renderReview(); renderGrid(); renderLevels(); renderSettings();
@@ -1528,8 +1555,8 @@ $("#dlgExport").addEventListener("close", async () => {
   showBusy(0.3, "Writing files");
   try {
     const r = await api.post("/api/export", { what, format, reveal: true, match_level: f.elements.match_level.checked,
-                                               declick: f.elements.declick.checked });
-    hideBusy(); toast(`Saved ${r.files.length} file(s) to ${r.folder}`, { ms: 9000, action: ["Show folder", () => api.post("/api/reveal", { path: r.folder })] });
+                                               declick: f.elements.declick.checked, lufs: f.elements.lufs.checked });
+    hideBusy(); toast(`Saved ${r.files.length} file(s) to ${r.folder}` + (r.lufs != null ? ` (instrumental at ${r.lufs} LUFS)` : ""), { ms: 9000, action: ["Show folder", () => api.post("/api/reveal", { path: r.folder })] });
   } catch (e) { hideBusy(); fail(e); }
 });
 
@@ -1797,6 +1824,11 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
     }
     msg(s.has_project ? `Opening ${s.project || "your song"}` : "Ready");
     $("#safeBanner").hidden = !s.safe;
+    if (s.python && !s.python.final) {
+      $("#pyText").textContent = `This computer runs Python ${s.python.version}, a test (pre-release) version, which can cause odd errors. ` +
+        `Installing the final release from python.org (then running Check and fix setup) is the fix; your songs aren't affected.`;
+      $("#pyBanner").hidden = false;
+    }
     if (s.backup_home) {
       $("#backupText").textContent = `It's running from ${s.app_dir}, a copy an update kept in case it had to go back. ` +
         `Fix it copies this version into ${s.backup_home}; from then on start the app with the Start file there ` +
