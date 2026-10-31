@@ -115,13 +115,13 @@ def _probe_device():
         S.model["device"] = "unknown (couldn't check)"
         S.model["device_kind"] = "unknown"
     try:
-        S.model["nvidia"] = bool(INST.nvidia_cuda())
+        S.model["nvidia"] = INST.has_nvidia()
     except Exception:
         S.model["nvidia"] = False
     try:
         S.model["gpus"] = INST.gpu_names()
         DG.line(f"graphics cards: {', '.join(S.model['gpus']) or 'none found'}"
-                f"{'' if S.model['nvidia'] else ' (no working NVIDIA driver)'}")
+                + (f" (nvidia-smi: {INST.SMI_PROBLEM[0]})" if INST.SMI_PROBLEM[0] else ""))
     except Exception:
         S.model["gpus"] = []
     DG.line(f"splitting runs on: {S.model['device']}" + (" (an NVIDIA card is present but not used: Settings, "
@@ -1002,14 +1002,13 @@ class Handler(BaseHTTPRequestHandler):
                 DG.line(f"graphics card button: {'ready' if ok else why}")
                 if not ok or sys.platform == "darwin":
                     return self._send(400 if not ok else 200, {"error": why} if not ok else {"ok": True, "message": why})
-                cuda = INST.nvidia_cuda()
+                card = INST.plan().get("gpu") or "NVIDIA card"
                 if S.model.get("device_kind") == "cuda":
                     return self._send(200, {"ok": True, "message": f"Already using your graphics card: {S.model.get('device')}."})
                 SEP._DEVICE = None
                 start_model_install(force=True, gpu=True)   # swaps in the graphics-card build for this driver
-                return self._send(200, {"ok": True, "message": f"Setting up the separation model for your NVIDIA card "
-                                                             f"(CUDA {cuda[0]}.{cuda[1]}). It downloads once; watch the "
-                                                             f"model light."})
+                return self._send(200, {"ok": True, "message": f"Setting up the separation model for your {card}. It "
+                                                             f"downloads once (about 3 GB); watch the model light."})
             if path == "/api/deep":
                 if self._proj().stage != "detected":
                     raise ValueError("Find damage first (step 3).")
