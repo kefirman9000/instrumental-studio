@@ -62,8 +62,12 @@ def main():
     except Exception as e:
         diag.line(f"engine: can't load the app: {e!r}")
         sys.exit(3)                # tells the window process to open the setup check
+    standalone = not os.environ.get("STUDIO_TOKEN")
     httpd, url = serve(a.port, just_updated=a.after_update, safe=a.safe)
     diag.mark(f"engine: ready at {url}")
+    if standalone:                   # started by hand: the address with this session's secret, to open yourself
+        from studio.server import TOKEN
+        print(f"Open {url}#t={TOKEN}", flush=True)
     RESTART.wait()
     diag.line("engine: restarting")
     time.sleep(0.5)
