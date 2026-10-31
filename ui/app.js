@@ -2193,6 +2193,12 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
   try {
     if (what === "stop") { const r = await api.post("/api/stop"); log.textContent = r.stopped ? `Stopped ${r.stopped} background task${r.stopped === 1 ? "" : "s"}.` : "Nothing was running."; return; }
     if (what === "restart") { $("#dlgReset").close(); return restartNow(); }
+    if (what === "dedupe") {
+      if (!confirm("Remove the extra copies of songs opened more than once from the same file? The copy you worked on last is kept.")) return;
+      const r = await api.post("/api/dedupe_songs", {});
+      log.textContent = r.removed.length ? `Removed ${r.removed.length} duplicate${r.removed.length === 1 ? "" : "s"}: ${r.removed.join(", ")}.` : "No duplicates found.";
+      refreshState(); return;
+    }
     if (what === "reinstall") {
       if (!confirm("Download and set up the separation model again? This takes a few minutes.")) return;
       await api.post("/api/stop"); await installModel(true); log.textContent = "Reinstalling. Watch the light on the start screen."; return;
