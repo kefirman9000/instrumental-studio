@@ -1,5 +1,15 @@
 # What's new
 
+## 1.28.0
+
+- **Build the best instrumental, reworked to give a finished result.**
+  - **Uses the original recording between the vocal lines**, not just in whole parts without singing: every gap of a second or more where the singer is silent (strict: 45 dB under, with margins for breaths and reverb, and backing vocals count as singing) plays the original, with crossfades. The report says how much of the song is the original.
+  - **Settles every option.** Where options overlap or contradict, one is chosen and the rest are put aside with the reason (*another fix was used here*, *the original recording is used here*, *doesn't line up with the original*, *not a close enough match*). They're under Rejected if you want to try one; Review shows the finished result instead of a pile of alternatives.
+  - **Never worse:** the clean score of every part is measured before and after; where the build made a part score lower, its fixes there are taken back out.
+  - **Building again starts fresh:** what the last build chose and set (fixes, kept parts, mutes, notches, tone, seams) is taken back first, so builds no longer stack on top of each other. Your own decisions stay.
+  - **Clear summary:** the clean score before and after, how much of the song is the original recording, then what was done. **Export…** right from the result.
+  - The step list is tucked under *Change what it does*: the defaults are the recommended build.
+
 ## 1.27.2
 
 - **Tighter security.** The engine listens only on this computer (127.0.0.1), but other programs and other user accounts on the same computer can reach that too. Now nothing can read from it or control it without this session's secret:

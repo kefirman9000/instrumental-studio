@@ -2632,10 +2632,13 @@ class Project:
             mode = "original" if r.get("mode") == "original" else "no_edits"
             if b - a < 0.05:
                 continue
+            auto = bool(r.get("auto"))
             if out and out[-1]["mode"] == mode and a <= out[-1]["end"] + 0.01:
                 out[-1]["end"] = max(out[-1]["end"], b)
+                if not auto:
+                    out[-1].pop("auto", None)          # merged with one of yours: it's yours
             else:
-                out.append({"start": a, "end": b, "mode": mode})
+                out.append({"start": a, "end": b, "mode": mode, **({"auto": True} if auto else {})})
         return out
 
     def undo(self):
@@ -3633,8 +3636,42 @@ class Project:
         return written
 
     # ------------------------------------------------------------------ build the best instrumental
-    AUTO_STEPS = ("keep", "refs", "bestof", "versions", "bars", "hits", "pattern", "repairs", "recover", "deep", "leftovers",
+    AUTO_STEPS = ("keep", "gaps", "refs", "bestof", "versions", "bars", "hits", "pattern", "repairs", "recover", "deep", "leftovers",
                   "clicks", "improve", "mutes", "acappella", "acappella_hard", "notch", "tone", "seams")
+
+    def vocal_gaps(self, min_len=1.0):
+        """Gaps between the vocal lines (a second or more) where the singer is silent: the original recording
+        is a clean instrumental there. Strict: the vocal track must be 45 dB under its usual level, with margins
+        for breaths before a line and reverb after it (and backing vocals count as singing). [(start, end)]"""
+        if self.meta.get("separation") == "Imported stems" or not self.instruments:
+            return []
+        hop = 1024
+        def frames(y):
+            x = np.asarray(y, np.float32).mean(0)
+            n = len(x) // hop
+            return (x[:n * hop].reshape(n, hop) ** 2).mean(1)
+        v = frames(self.stems["vocals"])
+        if "backing_vocals" in self.stems:
+            v = v + frames(self.stems["backing_vocals"])[:len(v)]
+        loud = float(np.percentile(v, 95)) + 1e-12
+        sing = v > loud * 10 ** (-45 / 10)
+        from scipy.ndimage import binary_dilation
+        fr = self.sr / hop
+        pre, post = int(0.15 * fr), int(0.5 * fr)
+        sing = binary_dilation(sing, np.ones(pre + post + 1, bool), origin=(post - pre) // 2)
+        out, j = [], 0
+        while j < len(sing):
+            if not sing[j]:
+                e = j
+                while e + 1 < len(sing) and not sing[e + 1]:
+                    e += 1
+                a, b = j / fr, (e + 1) / fr
+                if b - a >= min_len:
+                    out.append((round(a, 3), round(b, 3)))
+                j = e + 1
+            else:
+                j += 1
+        return out
 
     def _free_sections(self):
         """Sections with no singing: the original recording already is a clean instrumental there."""
@@ -3663,11 +3700,21 @@ class Project:
         sugs = list(self.suggestions.values())
         pend = lambda t: [x for x in sugs if x["type"] in t and x["status"] == "pending"]
         free = self._free_sections()
+        try:
+            gaps = [g for g in self.vocal_gaps()
+                    if not any(sc["start"] <= g[0] and sc["end"] >= g[1] for sc in free)]
+        except Exception as e:
+            log(f"vocal gaps skipped: {e}")
+            gaps = []
         hits = [h for h in self.best_hits() if not h["status"]]
         steps = [
             ("keep", "Use the original recording where nobody sings",
              f"{len(free)} part{'s' if len(free) != 1 else ''} ({', '.join(s['name'] for s in free[:4])}{'...' if len(free) > 4 else ''}): "
              "the cleanest sound there is. Fixes inside them are skipped.", len(free)),
+            ("gaps", "...and between the vocal lines",
+             f"{len(gaps)} gap{'s' if len(gaps) != 1 else ''} of a second or more where the singer is silent "
+             f"({sum(b - a for a, b in gaps):.0f} s in all): the original recording takes over there, with crossfades "
+             "and margins for breaths and reverb.", len(gaps)),
             ("refs", "Use your clean tracks",
              "Where the singing damaged an instrument you have a clean track of, that track is used (lined up with the "
              "song); the other fixes skip those parts.",
@@ -3749,6 +3796,32 @@ class Project:
             report = []
             ov = lambda a, b: a["start"] < b["end"] - 0.01 and b["start"] < a["end"] - 0.01
 
+            # -- start fresh: take back what the last build chose and set (your own decisions stay as they are),
+            #    so building again never stacks on top of the last build
+            for x in self.suggestions.values():
+                if x.pop("by_build", False):
+                    x["status"] = x.pop("by_build_was", "pending")
+                    x.pop("skip_reason", None)
+            m = self.mixer
+            m["keep"] = [r for r in m.get("keep", []) if not r.get("auto")]
+            m["mute_ranges"] = [r for r in m.get("mute_ranges", []) if not (r.get("auto") or r.get("acappella"))]
+            m["eq_ranges"] = [r for r in m.get("eq_ranges", []) if not r.get("auto")]
+            for k_, cv in (m.pop("build_tone", None) or {}).items():
+                cur = m.get("tone_eq", {}).get(k_)
+                if cur is not None and len(cur) == len(cv):
+                    left = [round(float(a_) - float(b_), 2) for a_, b_ in zip(cur, cv)]
+                    if any(abs(v) >= 0.05 for v in left):
+                        m["tone_eq"][k_] = left
+                    else:
+                        m["tone_eq"].pop(k_, None)
+            m["seams"] = []
+            self._render_cache.clear()
+            q_start = None
+            try:
+                q_start = self.quality()["now"]
+            except Exception as e:
+                log(f"build: starting score skipped: {e}")
+
             # -- make the candidates (all still waiting)
             progress(0.05, "Finding the cleanest versions of repeating parts")
             if "bestof" in steps and self.alt_modes() and not any(i.startswith("e_") for i in self.suggestions):
@@ -3795,8 +3868,18 @@ class Project:
             bad = {i for i in cand if self.flagged(i)}
 
             # -- choose
-            keep = [{"start": sc["start"], "end": sc["end"], "mode": "original"} for sc in self._free_sections()] \
-                if "keep" in steps else []
+            keep = [{"start": sc["start"], "end": sc["end"], "mode": "original", "auto": True}
+                    for sc in self._free_sections()] if "keep" in steps else []
+            n_free = len(keep)
+            gap_keep = []
+            if "gaps" in steps:
+                try:
+                    gap_keep = [{"start": a_, "end": b_, "mode": "original", "auto": True, "gap": True}
+                                for a_, b_ in self.vocal_gaps()
+                                if not any(r["start"] <= a_ and r["end"] >= b_ for r in keep)]
+                except Exception as e:
+                    log(f"build: vocal gaps skipped: {e}")
+            keep = keep + gap_keep
             kept = self.keep_ranges("original") + keep
             inside_kept = lambda x: any(r["start"] <= x["start"] + 0.05 and r["end"] >= x["end"] - 0.05 for r in kept)
             accept, reject = set(), set()
@@ -3856,10 +3939,18 @@ class Project:
 
             # -- apply statuses and the kept parts, then measure the result for mutes and tone
             progress(0.6, "Applying the chosen fixes")
+            def mark(i, status, why=None):
+                x = S[i]
+                if not x.get("by_build"):
+                    x["by_build_was"] = x["status"]
+                x["by_build"] = True
+                x["status"] = status
+                if why:
+                    x["skip_reason"] = why
             for i in accept:
-                S[i]["status"] = "accepted"
+                mark(i, "accepted")
             for i in reject:
-                S[i]["status"] = "rejected"
+                mark(i, "rejected", "Doesn't line up with the original")
             if keep:
                 self.mixer["keep"] = self._clean_keep(self.mixer.get("keep", []) + keep)
             self._render_cache.clear()
@@ -3874,7 +3965,7 @@ class Project:
                 progress(0.7, "Looking for bars that are only leftover singing")
                 for k in self.instruments:
                     try:
-                        mutes += [{"start": r["start"], "end": r["end"], "stem": k} for r in self.ghost_runs(k)]
+                        mutes += [{"start": r["start"], "end": r["end"], "stem": k, "auto": True} for r in self.ghost_runs(k)]
                     except Exception as e:
                         log(f"build: mute check skipped for {k}: {e}")
                 if mutes:
@@ -3924,6 +4015,7 @@ class Project:
                         prev = np.asarray(self.mixer.get("tone_eq", {}).get(k) or np.zeros(len(curve)), float)
                         eq = np.clip(prev + curve, -8, 8)
                         self.mixer.setdefault("tone_eq", {})[k] = [round(float(v), 2) for v in eq]
+                        self.mixer.setdefault("build_tone", {})[k] = [round(float(v), 2) for v in eq - prev]
                         toned[k] = (float(eq.max()), float(eq.min()))
                     except Exception as e:
                         log(f"build: tone match skipped for {k}: {e}")
@@ -3941,7 +4033,50 @@ class Project:
             applied = [i for i, x in S.items() if x["type"] in self.CHECK_TYPES and x["status"] in ("accepted", "auto")]
             late = [i for i in self.check_ids(applied)]
             for i in late:
-                S[i]["status"] = "rejected"
+                mark(i, "rejected", "Doesn't line up with the original")
+
+            # -- never worse: where the build made a part score lower than before it, its fixes there come out
+            worse = []
+            if q_start:
+                progress(0.92, "Making sure every part sounds better than before")
+                try:
+                    self._render_cache.clear()
+                    q_now = self.quality()["now"]
+                    for si_, sc_ in q_now.items():
+                        if si_ in q_start and sc_ < q_start[si_] - 2:
+                            sec = self.sections[int(si_)]
+                            back = [i for i, x in S.items() if x.get("by_build") and x["status"] == "accepted"
+                                    and x["type"] in self.CHECK_TYPES and ov(x, sec)]
+                            for i in back:
+                                mark(i, "rejected", "Made this part sound worse")
+                            if back:
+                                worse.append(sec["name"])
+                    if worse:
+                        self._render_cache.clear()
+                except Exception as e:
+                    log(f"build: score check skipped: {e}")
+
+            # -- settle everything else: options the build didn't use are put aside (with the reason), so Review
+            #    holds the finished result, not a pile of alternatives that contradict it
+            fix_types = set(self.CHECK_TYPES) | {"bleed", "ess", "glitch"}
+            on_by_stem = {}
+            for j, y in S.items():
+                if y["status"] in ("accepted", "auto") and y["type"] in fix_types:
+                    on_by_stem.setdefault(y["stem"], []).append(y)
+            settled = 0
+            for i, x in S.items():
+                if x["status"] != "pending" or x["type"] not in fix_types:
+                    continue
+                if self.flagged(i):
+                    why = "Doesn't line up with the original"
+                elif inside_kept(x) or any(r["start"] <= x["start"] + 0.05 and r["end"] >= x["end"] - 0.05 for r in keep):
+                    why = "The original recording is used here"
+                elif any(ov(y, x) for y in on_by_stem.get(x["stem"], ())):
+                    why = "Another fix was used here"
+                else:
+                    why = "Not a close enough match to use"
+                mark(i, "rejected", why)
+                settled += 1
 
             # -- one undo step, refreshed displays
             new = [i for i in self.suggestions if i not in before]
@@ -3956,6 +4091,25 @@ class Project:
             self.meta["verified"] = {"at": time.time(), "applied": self._applied_count(), "checked": len(applied),
                                      "flagged": len(late)}
 
+            head = []
+            try:
+                qf = self.quality()
+                b_, n_ = qf.get("before", {}), qf.get("now", {})
+                if n_:
+                    avg = lambda d: sum(d.values()) / max(1, len(d))
+                    head.append(f"Clean score: {avg(b_):.0f} for the split as it came, {avg(n_):.0f} now (out of 100)")
+            except Exception as e:
+                log(f"build: final score skipped: {e}")
+            kept_all = self.keep_ranges("original")
+            if kept_all:
+                tot = sum(r["end"] - r["start"] for r in kept_all)
+                dur = max(1e-6, float(self.meta.get("duration") or 1))
+                bits = [f"{n_free} whole part{'s' if n_free != 1 else ''} without singing"] if n_free else []
+                if gap_keep:
+                    bits.append(f"{len(gap_keep)} gap{'s' if len(gap_keep) != 1 else ''} between the vocal lines")
+                head.append(f"The original recording is used for {tot:.0f} s ({100 * tot / dur:.0f}% of the song)"
+                            + (f": {' and '.join(bits)}" if bits else ""))
+            report[:0] = head
             n_by = {}
             for i in accept:
                 if S[i]["status"] == "accepted":
@@ -3968,8 +4122,6 @@ class Project:
             for t, n in n_by.items():
                 one, many = names.get(t, (t, t + "s"))
                 report.append(f"Applied {n} {one if n == 1 else many}")
-            if keep:
-                report.append(f"Original recording kept in {len(keep)} part{'s' if len(keep) != 1 else ''} without singing")
             if mutes:
                 report.append(f"Muted {len(mutes)} stretch{'es' if len(mutes) != 1 else ''} that were only leftover singing or noise")
             if acap:
@@ -3985,19 +4137,16 @@ class Project:
             sm = [x for x in self.mixer.get("seams", []) if x.get("fade", 0) > 0.05]
             if "seams" in steps and sm:
                 report.append(f"Lengthened {len(sm)} crossfade{'s' if len(sm) != 1 else ''} where the original recording takes over")
-            if "improve" in steps:
-                try:
-                    q2 = self.quality()
-                    b_, n_ = q2.get("before", {}), q2.get("now", {})
-                    if n_:
-                        avg = lambda d: sum(d.values()) / max(1, len(d))
-                        report.append(f"Clean score per section: {avg(b_):.0f} before any repairs, {avg(n_):.0f} now")
-                except Exception as e:
-                    log(f"build: final score skipped: {e}")
-            held = len([i for i in bad if S[i]["status"] == "pending"]) + len(late)
-            if reject or late or held:
-                report.append(f"Left out {len(reject) + len(late) + held} fix{'es' if len(reject) + len(late) + held != 1 else ''} "
-                              f"that don't line up with the original (see Doesn't fit)")
+            if worse:
+                report.append(f"Took the fixes back out of {', '.join(worse)}: they made {'it' if len(worse) == 1 else 'those parts'} "
+                              f"score lower than before")
+            misfit = len(reject) + len(late)
+            if misfit:
+                report.append(f"Left out {misfit} fix{'es' if misfit != 1 else ''} that don't line up with the original")
+            if settled:
+                report.append(f"Put aside {settled} other option{'s' if settled != 1 else ''} the build didn't need (another fix "
+                              f"or the original covers them, or they weren't close enough); they're under Rejected, "
+                              f"each with the reason, if you want to try one")
             return {"report": report, "new": len(new)}
 
     # ------------------------------------------------------------------ double-check against the original
