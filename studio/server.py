@@ -527,7 +527,7 @@ def _job_build(steps):
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else (0.4 + 0.6 * f if pre else f), m))
     _progress(0.97, "Saving")
     p.save()
-    S.job["result"] = {"report": res["report"]}
+    S.job["result"] = {"report": res["report"], "title": "Your instrumental is built"}
 
 
 def _file_hash(path):
@@ -574,7 +574,7 @@ def _auto_rest(p):
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.55 + 0.42 * f, m))
     _progress(0.98, "Saving")
     p.save()
-    S.job["result"] = {"report": res["report"]}
+    S.job["result"] = {"report": res["report"], "title": "Your instrumental is built"}
 
 
 def _job_full(mode, opts):
