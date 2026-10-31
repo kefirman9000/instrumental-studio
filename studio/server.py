@@ -307,6 +307,17 @@ def _job_song(path, mode=None):
     S.project = p
 
 
+def _split_estimates():
+    """Rough seconds each split mode would take on this song and computer ({} with no song open)."""
+    p = S.project
+    if not p or p.original is None:
+        return {}
+    dev = S.model.get("device_kind") or "cpu"
+    rate = (UP.load_prefs(HOME).get("split_speed") or {}).get(dev) or SEP.DEFAULT_SPEED.get(dev, 0.8)
+    dur = p.original.shape[1] / p.sr
+    return {k: round(dur * rate * SEP.passes(k)) for k in SEP.MODELS}
+
+
 def _job_split(mode, opts=None):
     """Step 2: split into instruments (or reuse an earlier split of the same file), then map the song."""
     p = S.project
@@ -326,8 +337,21 @@ def _job_split(mode, opts=None):
         else:
             work = os.path.join(p.root, "work")
             os.makedirs(work, exist_ok=True)
+            t0 = time.time()
             stems, sr = SEP.separate(src, work, mode, lambda f, m: _progress(None if f is None else 0.02 + 0.8 * f, m), opts)
+            took = time.time() - t0
             shutil.rmtree(work, ignore_errors=True)
+            dev = S.model.get("device_kind") or "cpu"
+            p.meta["split_info"] = {"device": S.model.get("device") or "processor", "kind": dev, "seconds": round(took, 1)}
+            try:                       # remember this computer's speed, for estimates next time
+                rate = took / max(1.0, p.original.shape[1] / p.sr) / SEP.passes(mode, opts)
+                prefs = UP.load_prefs(HOME)
+                sp = prefs.get("split_speed") or {}
+                sp[dev] = round(0.5 * sp[dev] + 0.5 * rate, 4) if dev in sp else round(rate, 4)
+                prefs["split_speed"] = sp
+                UP.save_prefs(HOME, prefs)
+            except Exception as e:
+                log(f"split speed not saved: {e}")
         extra = [w for w, on in (("backing vocals on their own track", (opts or {}).get("backing")),
                                  ("drums split into kick, snare, toms and cymbals", (opts or {}).get("drums"))) if on]
         p.meta["separation"] = SEP.MODELS[mode][0] + (", " + ", ".join(extra) if extra else "")
@@ -926,6 +950,8 @@ class Handler(BaseHTTPRequestHandler):
                     "models": {k: v[0] for k, v in SEP.MODELS.items()}, "home": HOME,
                     "projects": list_projects(), "model": S.model, "extras": extras_state(), "version": __version__, "repo": UP.REPO,
                     "backup_home": UP.backup_home(), "app_dir": UP.APP_DIR,
+                    "split_estimates": _split_estimates(),
+                    "python": {"version": sys.version.split()[0], "final": sys.version_info.releaselevel == "final"},
                     "update": S.update, "update_prefs": UP.load_prefs(HOME), "just_updated": S.just_updated,
                     "safe": getattr(S, "safe", False)})
             if path == "/api/overview":
@@ -1245,6 +1271,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, res)
             elif path == "/api/quality":
                 p.quality()
+            elif path == "/api/ref_remove":
+                p.remove_reference(str(d["stem"]))
+                p.save()
             elif path == "/api/rename_section":
                 p.rename_section(d["index"], d["name"])
             elif path == "/api/export":
@@ -1253,10 +1282,12 @@ class Handler(BaseHTTPRequestHandler):
                 if fmt not in ("wav", "flac", "mp3"):
                     raise ValueError("Unknown format.")
                 files = p.export(folder, fmt, tuple(d.get("what", ["mix", "stems", "vocals", "report"])),
-                                 match_level=bool(d.get("match_level", False)), declick=bool(d.get("declick", False)))
+                                 match_level=bool(d.get("match_level", False)) and not d.get("lufs"),
+                                 declick=bool(d.get("declick", False)), lufs=-14.0 if d.get("lufs") else None)
                 if d.get("reveal", True):
                     reveal(folder)
-                return self._send(200, {"ok": True, "folder": folder, "files": files})
+                return self._send(200, {"ok": True, "folder": folder, "files": files,
+                                        "lufs": p.meta.get("last_export_lufs")})
             else:
                 return self._send(404, {"error": "unknown endpoint"})
             return self._send(200, self._edited())
