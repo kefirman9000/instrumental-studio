@@ -1,5 +1,28 @@
 # What's new
 
+## 1.30.0
+
+**Grid editor**
+- **Taking a hit out removes only that sound.** Its clean sample is subtracted frequency by frequency, so a cymbal ringing underneath stays (it used to silence the track until the next hit).
+- **Louder or softer:** drag a hit up or down (shown as brightness and a %).
+- **Copy bars / Paste here:** put a clean bar's hits over a damaged one (short copies repeat to fill); the bars are made again from clean samples.
+- **Tighten timing** (50, 75 or 100%) pulls hits toward the grid without making them robotic; the tick under each hit shows how far off it was.
+- **Choose what each row plays:** click its name for a merge of its cleanest hits, one particular hit, or your own sample.
+- **Loop** the bars you're editing while it plays.
+- **Real notes for bass and keys:** pitched tracks get a row per note (C3, D#2...), high to low, like a piano roll.
+- **Export MIDI / Import MIDI:** the grid's hits as a MIDI file on the song's tempo, or a MIDI file played with this track's own clean sounds (drums by General MIDI note).
+
+**Clean stem lanes**
+- **Automatic timing:** stems that run slightly fast or slow (a different master) are stretched to match when added; **Auto** next to Timing finds the best nudge.
+- **Tone match** (on by default): your stem's EQ is matched to the song per section, so the switches can't be heard. Untick *Tone* to use it as it is.
+- **Orange marks** where your stem and the split play different things (different notes, a missing part): handy to spot an alternate take or a mislabelled stem.
+
+**Everywhere**
+- **Undo** covers lane and grid edits too.
+- **Compare** any part: drag across the Sections bar, *Compare: original, split, result* plays it three times in a row.
+- **Hold B** to hear the split as it came at the same spot; let go to come back.
+- **Clean score per bar** as a thin strip along the top of each lane (red needs work, amber so-so, green clean), after a build or a score check.
+
 ## 1.29.0
 
 - **Your clean stems get their own lanes**, right under the instrument they feed (marked ↳), with their own picture of the sound. Green shows where your stem is used and how much.
