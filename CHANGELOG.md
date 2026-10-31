@@ -1,5 +1,9 @@
 # What's new
 
+## 1.37.1
+
+- **Split again with different settings.** After a song is split, the split type list stays in step 2 (showing what it was split with), so *Split again* can use another model or other split options.
+
 ## 1.37.0
 
 - **✨ Clean instrumental** (above the tracks): one click for the cleanest copy of the song the app can make from its own best material. The drums are played again from merged clean samples at every hit (odd hits put right by their place in the bar), damaged notes are rebuilt as notes, loops replayed from clean copies, leftover noise cleaned up, and the original recording used wherever nobody sings. Then Export. Undo takes the build back (the drum rebuild has its own Undo step, or use the Grid's *Undo rebuild here*).

@@ -272,7 +272,7 @@ async function startStems(folder, name) {
 }
 $("#btnDemo").onclick = async () => { try { await api.post("/api/demo"); watchJob(); } catch (e) { fail(e); } };
 $("#btnSongs").onclick = () => { stopPreview(); $("#player").pause(); showWelcome(true); };
-$("#sepMode").onchange = e => { localStorage.setItem("sepMode", e.target.value); e.target.dataset.auto = ""; renderSpeedTip(); };
+$("#sepMode").onchange = e => { localStorage.setItem("sepMode", e.target.value); e.target.dataset.auto = ""; e.target.dataset.picked = "1"; renderSpeedTip(); };
 // Without a graphics card the best-quality model (4 passes) is slow, so start with Fast until the person picks
 function renderSpeedTip() {
   const m = st.state?.model || {}, sel = $("#sepMode");
@@ -1515,7 +1515,11 @@ function renderSteps() {
     const how = si ? ` on ${si.kind === "cuda" ? "your graphics card (" + si.device + ")" : si.kind === "mps" ? "the Mac's graphics" : "the processor"} in ${si.seconds >= 60 ? Math.floor(si.seconds / 60) + "m " + Math.round(si.seconds % 60) + "s" : Math.round(si.seconds) + "s"}` : "";
     $("#splitSub").textContent = `Split with ${ov.meta.separation || "a separator"}${how}: ${ov.stems.join(", ")} and vocals.`;
     split.textContent = "Split again"; split.className = "ghost small"; split.disabled = false;
-    sel.hidden = true;
+    // split again with any settings: the list shows what this song was split with until you pick another
+    sel.hidden = demo;
+    const used = (ov.meta.sep_mode || "").split("+")[0];
+    if (!sel.dataset.picked && used && [...sel.options].some(o => o.value === used)) sel.value = used;
+    split.title = "Split again with the settings chosen in the list (and the split options below). Your decisions are cleared.";
   } else if (demo) {
     $("#splitSub").textContent = "The demo comes pre-split, no model needed.";
     split.textContent = "Split"; split.className = "primary"; split.disabled = false;
