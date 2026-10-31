@@ -982,11 +982,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self._proj().spectro(q["stem"], q.get("kind", "raw")), "application/octet-stream")
             if path == "/api/audio":
                 p = self._proj()
-                key = (S.rev, q.get("version", "repaired"), q.get("stem"))
+                key = (S.rev, q.get("version", "repaired"), q.get("stem"), q.get("ref"))
                 with S.lock:
                     if key not in S.audio_cache:
                         S.audio_cache.clear()
-                        if q.get("stem"):
+                        if q.get("ref"):
+                            y = p.ref_audio(q["ref"])
+                        elif q.get("stem"):
                             y = p.mix(q.get("version", "repaired"), solo_stem=q["stem"])
                         else:
                             y = p.mix(q.get("version", "repaired"))
@@ -1000,6 +1002,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._audio(wav_bytes(y, p.sr))
             if path == "/api/candidates":
                 return self._send(200, {"candidates": self._proj().donor_candidates(q["id"])})
+            if path == "/api/drums":
+                p = self._proj()
+                k = q["stem"]
+                dm = p.drum_map(k)
+                return self._send(200, {"rows": dm["rows"], "hits": dm["hits"], "edits": p.drum_edits(k),
+                                        "beats": p.beat_times, "bars": [p.beat_times[s0] for s0, L in p.windows if s0 < len(p.beat_times)]})
             if path == "/api/report":
                 return self._send(200, self._proj().report())
             return self._send(404, {"error": "unknown endpoint"})
@@ -1299,6 +1307,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, res)
             elif path == "/api/quality":
                 p.quality()
+            elif path == "/api/ref_edit":
+                p.ref_edit(str(d["stem"]), d.get("change") or {})
+                p.display.get("raw", {}).pop(f"ref:{d['stem']}", None) if ("gain_db" in (d.get("change") or {}) or "nudge_ms" in (d.get("change") or {})) else None
+                p.save()
+            elif path == "/api/drums/edit":
+                p.drum_edit(str(d["stem"]), d.get("change") or {})
+            elif path == "/api/drums/pattern":
+                added = p.drum_fill_pattern(str(d["stem"]), float(d["start"]), float(d["end"]))
+                res = self._edited()
+                res["added"] = added
+                return self._send(200, res)
             elif path == "/api/ref_remove":
                 p.remove_reference(str(d["stem"]))
                 p.save()

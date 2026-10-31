@@ -415,6 +415,30 @@
     <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button type="button" id="btnRefPick">Choose files…</button><button type="button" class="primary" id="btnRefGo" hidden>Add</button></div>
   </form>
 </dialog>
+<dialog id="dlgGrid" class="grid-dlg">
+  <form method="dialog">
+    <div class="grid-top">
+      <h2 id="gridTitle">Grid</h2>
+      <button type="button" class="small" id="gridPrev" title="Earlier bars">◀</button>
+      <span id="gridWhere" class="dim small"></span>
+      <button type="button" class="small" id="gridNext" title="Later bars">▶</button>
+      <label class="small">Bars <select id="gridBars"><option>1</option><option>2</option><option selected>4</option><option>8</option></select></label>
+      <label class="small"><input type="checkbox" id="gridSnap" checked> Snap to 1/16</label>
+      <span class="spacer"></span>
+      <button type="button" class="small" id="gridPlay">▶ Play these bars</button>
+    </div>
+    <p class="help small">Each row is one sound on this track, each column a 16th note on the song's own beat. Click an empty cell to add that sound there (made from its cleanest hits), click a hit to take it out (red), click again to bring it back. Right-click an added hit to remove it.</p>
+    <canvas id="gridCanvas"></canvas>
+    <div class="grid-actions">
+      <button type="button" class="small" id="gridPattern" title="Add the hits the learned pattern is sure belong in these bars and the track is missing">Add missing hits (pattern)</button>
+      <button type="button" class="small" id="gridRebuild" title="Replace these bars with clean samples played at every hit shown: clears smeared, muddy or bleeding drums">Rebuild these bars from clean samples</button>
+      <button type="button" class="small ghost" id="gridUnrebuild">Undo rebuild here</button>
+      <button type="button" class="small ghost" id="gridClear">Clear my edits here</button>
+      <span class="spacer"></span>
+      <button value="close" class="primary">Done</button>
+    </div>
+  </form>
+</dialog>
 <dialog id="dlgAuto">
   <form method="dialog">
     <h2>Build the best instrumental</h2>

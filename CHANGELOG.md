@@ -1,5 +1,18 @@
 # What's new
 
+## 1.29.0
+
+- **Your clean stems get their own lanes**, right under the instrument they feed (marked ↳), with their own picture of the sound. Green shows where your stem is used and how much.
+  - **Drag across the lane** to use it there; **Alt + drag** (or right-drag) to leave it out there.
+  - **Click a section** to choose for the whole part: *where the singing damaged it*, *your stem*, *mix* (half and half) or *the split*.
+  - **Level** and **Timing** (nudge by milliseconds if the automatic line-up is slightly off), **M** to leave it out everywhere, **S** to hear only your stem, **×** to stop using it.
+  - The instrument's own lane always plays the combined result; every change updates it straight away.
+- **Grid editor for drums (and any instrument).** The **Grid** button on each lane opens a step-sequencer view on the song's own beat: one row per sound (kick, snare, hats... or repeated notes), one column per 16th, the song's bars and beats marked, a tick for each hit's exact timing.
+  - **Click an empty cell** to add that sound there (made from a merge of its cleanest hits); **click a hit** to take it out, again to bring it back; right-click an added hit to remove it. Snap to 1/16 or place freely.
+  - **Rebuild these bars from clean samples:** the bars are played again from clean samples at every hit shown, which clears smeared, muddy or bleeding drums.
+  - **Add missing hits (pattern)** fills in what the learned drum pattern is sure belongs there.
+  - **Play these bars**, move along with ◀ ▶, show 1 to 8 bars at a time. Edits are saved with the song and show up in the lanes and the export.
+
 ## 1.28.1
 
 - **Clean stems as part of the build.** The Build window has **Add clean stems first…**: choose your stems or samples, and the app adds them and goes straight on to building with them (they're used before anything else, and every other fix is checked against them). The clean stems window also has *Then build the best instrumental with them*.
