@@ -1875,23 +1875,54 @@ $("#btnMoveHome").onclick = async () => {
 };
 
 /* ---------- your own clean tracks and samples */
-$("#btnRefOpen").onclick = () => {
-  const sel = $("#refStem"); sel.innerHTML = "";
-  for (const k of st.ov.stems) { const o = document.createElement("option"); o.value = k; o.textContent = k; sel.appendChild(o); }
-  $("#refStemRow").hidden = $("#refKind").value !== "track";
-  $("#dlgRef").showModal();
+let refFiles = [];
+function guessStem(name) {
+  const n = name.toLowerCase(), have = st.ov.stems;
+  const tests = [["kick", /kick|bd\b/], ["snare", /snare|sn\b/], ["toms", /tom/], ["cymbals", /cymbal|hat|ride|crash|oh\b/],
+    ["drums", /drum|perc|beat|kit/], ["bass", /bass|808|sub/], ["guitar", /guitar|gtr/], ["piano", /piano|keys|rhodes/],
+    ["other", /synth|pad|lead|string|horn|other|melod|fx|keys/]];
+  for (const [k, re] of tests) if (have.includes(k) && re.test(n)) return k;
+  if (/drum|perc|beat/.test(n) && have.includes("drums")) return "drums";
+  return have.includes("other") ? "other" : have[0];
+}
+function renderRefRows() {
+  const box = $("#refRows"); box.innerHTML = "";
+  const track = $("#refKind").value === "track";
+  refFiles.forEach((f, i) => {
+    const r = document.createElement("div"); r.className = "ref-file";
+    const opts = st.ov.stems.map(k => `<option value="${k}"${k === f.stem ? " selected" : ""}>${nice(k)}</option>`).join("");
+    r.innerHTML = `<b></b>` + (track ? `<select data-i="${i}" data-f="stem" aria-label="Which instrument">${opts}</select>
+      <select data-i="${i}" data-f="use" aria-label="Where to use it">
+        <option value="vocals"${f.use === "vocals" ? " selected" : ""}>where the singing damaged it</option>
+        <option value="all"${f.use === "all" ? " selected" : ""}>the whole track</option></select>` : "");
+    r.querySelector("b").textContent = f.file.name;
+    box.appendChild(r);
+  });
+  box.querySelectorAll("select").forEach(s => s.onchange = () => { refFiles[+s.dataset.i][s.dataset.f] = s.value; });
+  $("#btnRefGo").hidden = !refFiles.length;
+  $("#btnRefPick").textContent = refFiles.length ? "Choose other files…" : (track ? "Choose files…" : "Choose the file…");
+  $("#refApplyRow").hidden = false;
+}
+$("#btnRefOpen").onclick = () => { refFiles = []; renderRefRows(); $("#dlgRef").showModal(); };
+$("#refKind").onchange = () => { if ($("#refKind").value === "sample") refFiles = refFiles.slice(0, 1); renderRefRows(); };
+$("#btnRefPick").onclick = () => { $("#refFile").multiple = $("#refKind").value === "track"; $("#refFile").click(); };
+$("#refFile").onchange = (e) => {
+  refFiles = [...e.target.files].map(file => ({ file, stem: guessStem(file.name), use: "vocals" }));
+  e.target.value = "";
+  renderRefRows();
 };
-$("#refKind").onchange = () => { $("#refStemRow").hidden = $("#refKind").value !== "track"; };
-$("#btnRefPick").onclick = () => $("#refFile").click();
-$("#refFile").onchange = async (e) => {
-  const file = e.target.files[0]; e.target.value = "";
-  if (!file) return;
-  const kind = $("#refKind").value, stem = $("#refStem").value;
+$("#btnRefGo").onclick = async () => {
+  const kind = $("#refKind").value, apply = $("#refApply").checked, files = refFiles.slice();
+  if (!files.length) return;
   $("#dlgRef").close();
   try {
-    showBusy(0.02, "Reading your file");
-    const up = await upload(file, "ref" + Date.now());
-    await api.post("/api/import_ref", { path: up.path, kind, stem, name: file.name });
+    const batch = "ref" + Date.now(), tracks = [];
+    for (let i = 0; i < files.length; i++) {
+      showBusy(0.02 + 0.2 * i / files.length, `Reading ${files[i].file.name}`);
+      const up = await upload(files[i].file, batch);
+      tracks.push({ path: up.path, stem: files[i].stem, use: files[i].use, name: files[i].file.name });
+    }
+    await api.post("/api/import_ref", { kind, tracks, apply });
     watchJob();
   } catch (err) { hideBusy(); fail(err); }
 };

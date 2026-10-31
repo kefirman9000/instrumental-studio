@@ -349,3 +349,6 @@ label.check input { margin-top: 3px; }
 .vinyl-strength { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; }
 .vinyl-actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
 #btnSplitAuto { font-size: 12px; }
+.ref-row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.ref-file { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: rgba(127,127,127,.08); }
+.ref-file b { flex: 1 1 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
