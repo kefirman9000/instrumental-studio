@@ -1398,9 +1398,13 @@ function renderHitsBars() {
   }
   bl.innerHTML = (ov.best_bars || []).length ? "" : `<p class="help">No damaged repeats of a bar found.</p>`;
   for (const g of ov.best_bars || []) {
+    const nClean = (g.members || []).length - g.damaged.length;
     bl.append(row(`${nice(g.stem)} bar from ${fmtP(g.best_time)}`, g.status ? statusText({ type: "bars", status: g.status }) : `${g.damaged.length} damaged`,
       `Played ${g.count} times; damaged at ${g.damaged_times.map(fmtP).join(", ")}.`,
-      added("/api/bars", { stem: g.stem, best: g.best, damaged: g.damaged }), ov.colors[g.stem] || "#888"));
+      added("/api/bars", { stem: g.stem, best: g.best, damaged: g.damaged }), ov.colors[g.stem] || "#888",
+      nClean >= 2 ? () => addFixes("/api/bars", { stem: g.stem, best: g.best, damaged: g.damaged, members: g.members, blend: true }, true) : null,
+      `Apply, replacing the damaged repeats with a merge of the ${Math.min(5, nClean)} cleanest repeats instead of just one. ` +
+      `What's only in one copy (a trace of singing, a click) drops out.`));
   }
 }
 function renderGrid() {
