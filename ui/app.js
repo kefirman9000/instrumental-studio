@@ -1426,6 +1426,9 @@ async function runTip(a) {
   if (a.kind === "lift") return edit("/api/mixer", { vocal_lift: { ...(st.ov.mixer.vocal_lift || {}), [a.stem]: a.db } });
   if (a.kind === "filter") { st.filter = a.filter; st.scope = null; activateTab("review"); return renderReview(); }
   if (a.kind === "detect") return $("#btnDetect").onclick();
+  if (a.kind === "click") { const el = $(a.el); if (el) el.click(); return; }
+  if (a.kind === "auto") return openAutoBuild();
+  if (a.kind === "scope") { setScope({ section: a.section }); seek(st.ov.sections[a.section].start); return; }
   if (a.kind === "tab") return activateTab(a.tab);
   if (a.kind === "alt") return tryAlt(a.mode, a.start, a.end, null);
   if (a.kind === "mute") return setMutes([...(st.ov.mixer.mute_ranges || []), { start: a.start, end: a.end, stem: a.stem }]);
