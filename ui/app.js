@@ -171,6 +171,34 @@ $("#fileSong").onchange = async e => {
   await openSongFile(f);
   e.target.value = "";
 };
+/* ---------- extract samples, straight from the start screen */
+$("#btnExtract").onclick = () => {
+  const s = st.state || {}, from = $("#exFrom");
+  from.innerHTML = `<option value="file">A song file…</option>` +
+    (s.projects || []).map(p => `<option value="${encodeURIComponent(p.id)}">${p.name.replace(/[<>&"]/g, "")}</option>`).join("");
+  fillModelSelect($("#exMode"), s.models || {});
+  const cpu = /CPU/i.test(s.model?.device || "");
+  $("#exMode").value = cpu ? "4stem_fast" : "6stem_best";
+  $("#dlgExtract").showModal();
+};
+async function runExtract(body) {
+  $("#dlgExtract").close();
+  try { showBusy(0.02, "Getting the song ready"); await api.post("/api/extract_samples", body); watchJob(); }
+  catch (e) { hideBusy(); fail(e); }
+}
+$("#btnExGo").onclick = async () => {
+  const kind = $("#exKind").value, mode = $("#exMode").value, from = $("#exFrom").value;
+  if (from !== "file") return runExtract({ project: decodeURIComponent(from), kind, mode });
+  const nat = await nativeReady();
+  if (nat) { const p = await nat.choose_song(); if (p) runExtract({ path: p, kind, mode }); return; }
+  $("#exFile").click();
+};
+$("#exFile").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  try { showBusy(0.01, "Copying the song into the app"); const j = await upload(f, "song" + Date.now());
+    runExtract({ path: j.path, kind: $("#exKind").value, mode: $("#exMode").value }); } catch (err) { hideBusy(); fail(err); }
+};
+
 let stemsAuto = false;          // set by "Import stems and build", used once by startStems
 async function pickStems(auto) {
   stemsAuto = auto;
