@@ -1,5 +1,10 @@
 # What's new
 
+## 1.30.1
+
+- **Drag and drop clean stems, loops and samples.** With a split song open, drop files anywhere on the window: the clean stems window opens with them listed and works out what each one is. Drop more onto that window to add them. Hold Shift while dropping to open a new song instead.
+- **Easier to find:** a **+ Clean stems / samples** button sits in the timeline toolbar, and step 4's button now shows as soon as the song is split (it used to wait until after Find damage).
+
 ## 1.30.0
 
 **Grid editor**
