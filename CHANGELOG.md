@@ -1,5 +1,9 @@
 # What's new
 
+## 1.27.1
+
+- **Scroll sideways along the song.** When zoomed in, a scrollbar under the tracks moves along the song. Also: the mouse wheel over the Sections bar, Shift + wheel anywhere on the tracks, a sideways trackpad swipe, or drag with the middle mouse button (or hold Space and drag).
+
 ## 1.27.0
 
 - **Fast model without a graphics card.** On the processor, each start begins on *Quick draft* (about 4 times faster than Best quality); pick another any time.

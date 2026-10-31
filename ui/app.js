@@ -406,11 +406,11 @@ $("#lanes").addEventListener("wheel", e => {
   if (e.ctrlKey || e.metaKey) {
     e.preventDefault();
     const z = $("#zoom"); z.value = clamp(+z.value - Math.sign(e.deltaY) * 6, 0, 100); z.oninput({ target: z });
-  } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+  } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.target.id === "ruler") {
+    // sideways: Shift + wheel, a sideways trackpad swipe, or the plain wheel over the Sections bar
+    if (st.view.pps * st.ov.meta.duration <= laneWidth() + 1) return;
     e.preventDefault();
-    const d = (e.deltaX || e.deltaY) / st.view.pps;
-    st.view.start = clamp(st.view.start + d, 0, Math.max(0, st.ov.meta.duration - viewSec()));
-    renderLanes();
+    panBy((e.deltaX || e.deltaY) / st.view.pps);
   }
 }, { passive: false });
 window.addEventListener("resize", () => { if (st.ov) { const was = st.view.pps * laneWidth(); renderLanes(); } });
@@ -523,7 +523,45 @@ function renderLanes() {
   renderRuler(); if (st.ov.stems.length) renderVox();
   for (const k of (st.ov.stems.length ? st.ov.stems : ["original"])) renderLane(k);
   movePlayhead();
+  syncHScroll();
 }
+// the scrollbar under the lanes: as wide as the whole song at this zoom, kept in step with the view
+let hsFromCode = false;
+function syncHScroll() {
+  const hs = $("#hscroll"), w = laneWidth(), total = st.view.pps * st.ov.meta.duration;
+  const zoomed = total > w + 1;
+  hs.hidden = !zoomed;
+  if (!zoomed) return;
+  $("#hscrollInner").style.width = Math.round(total) + "px";
+  const want = Math.round(st.view.start * st.view.pps);
+  if (Math.abs(hs.scrollLeft - want) > 1) { hsFromCode = true; hs.scrollLeft = want; }
+}
+$("#hscroll").addEventListener("scroll", () => {
+  if (hsFromCode) { hsFromCode = false; return; }
+  if (!st.ov) return;
+  st.view.start = clamp($("#hscroll").scrollLeft / st.view.pps, 0, Math.max(0, st.ov.meta.duration - viewSec()));
+  renderRuler(); if (st.ov.stems.length) renderVox();
+  for (const k of (st.ov.stems.length ? st.ov.stems : ["original"])) renderLane(k);
+  movePlayhead();
+});
+function panBy(sec) {
+  if (!st.ov) return;
+  st.view.start = clamp(st.view.start + sec, 0, Math.max(0, st.ov.meta.duration - viewSec()));
+  renderLanes();
+}
+// drag with the middle mouse button (or hold Space and drag) to slide along the song
+let spaceDown = false;
+window.addEventListener("keydown", e => { if (e.code === "Space" && e.target === document.body) spaceDown = true; });
+window.addEventListener("keyup", e => { if (e.code === "Space") spaceDown = false; });
+$("#lanes").addEventListener("mousedown", e => {
+  if (!st.ov || !(e.button === 1 || (e.button === 0 && spaceDown))) return;
+  e.preventDefault(); e.stopPropagation();
+  const x0 = e.clientX, s0 = st.view.start, lanes = $("#lanes");
+  lanes.classList.add("panning");
+  const move = ev => { st.view.start = clamp(s0 - (ev.clientX - x0) / st.view.pps, 0, Math.max(0, st.ov.meta.duration - viewSec())); renderLanes(); };
+  const up = () => { lanes.classList.remove("panning"); window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+}, true);
 
 function laneHit(k, t) {
   const hits = st.ov.suggestions.filter(s => s.stem === k && t >= s.start && t < s.end);
