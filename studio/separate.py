@@ -54,7 +54,7 @@ def _child_env():
     env = dict(os.environ)
     try:
         if device_info()[0] != "cuda":
-            env["CUDA_VISIBLE_DEVICES"] = ""
+            env["CUDA_VISIBLE_DEVICES"] = "-1"     # (an empty value counts as unset on Windows)
     except Exception:
         pass
     return env
@@ -78,7 +78,7 @@ def _run_extra(args, progress, frac0, frac1, label, _retry=True):
                 progress(frac0 + (frac1 - frac0) * int(m.group(1)) / 100.0, label)
     p.wait()
     if p.returncode != 0:
-        if _retry and "CUDA" in "\n".join(tail) and env.get("CUDA_VISIBLE_DEVICES") != "":
+        if _retry and "CUDA" in "\n".join(tail) and env.get("CUDA_VISIBLE_DEVICES") != "-1":
             log(f"{label}: the graphics card failed, running it again on the processor")
             global _DEVICE
             _DEVICE = ("cpu", "CPU (the graphics card didn't run this)")
@@ -155,7 +155,11 @@ def device_info():
 
 
 def _run_model(wav_path, model, outdir, progress, frac0, frac1):
-    cmd = [sys.executable, "-m", "studio.demucs_worker", model, wav_path, outdir, "auto"]
+    try:                                      # the card only when it really works; otherwise straight to the processor
+        dev = "auto" if device_info()[0] in ("cuda", "mps") else "cpu"
+    except Exception:
+        dev = "auto"
+    cmd = [sys.executable, "-m", "studio.demucs_worker", model, wav_path, outdir, dev]
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     log("Running: " + " ".join(cmd))
     progress(frac0, f"Loading {model} (downloads once, about 80-300 MB)")
