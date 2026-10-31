@@ -86,6 +86,9 @@
       <span class="pop-h">Keep as it is</span>
       <button class="small" data-mode="original">Use the original song here</button>
       <button class="small" data-mode="no_edits">Keep the split, no repairs</button>
+      <span class="pop-h" data-split-only>Mute (turn down)</span>
+      <div class="mute-row" id="muteRow" data-split-only></div>
+      <details class="pop-more" data-split-only><summary>More tools</summary>
       <span class="pop-h" data-split-only>Clean up</span>
       <button class="small" data-act="smooth" data-split-only title="Calms the warbling, watery sound separation leaves under the vocals. You review it before it's applied.">Smooth watery sound here</button>
       <button class="small" data-act="cleanup" data-split-only title="Finds clicks and gaps, smooths watery sound, and rebuilds damaged drum hits and repeated bars in this part. Everything goes to Review first.">Clean up this part (all of the below)</button>
@@ -131,8 +134,7 @@
       <label class="check small" data-split-only title="Only where someone is singing (measured continuously), so the gaps between lines keep their full sound"><input type="checkbox" id="eqOnlyVocals" checked><span>Only while someone sings</span></label>
       <label class="check small" data-split-only title="Reverb keeps ringing for up to a second after each line; include it"><input type="checkbox" id="eqTails" checked><span>Include the reverb after each line</span></label>
       <label class="check small" data-split-only title="The lead vocal sits in the middle of the mix; cut only the middle, so the instrument's stereo sides stay untouched"><input type="checkbox" id="eqCentre" checked><span>Only the centre of the mix (where the lead vocal sits)</span></label>
-      <span class="pop-h" data-split-only>Mute</span>
-      <div class="mute-row" id="muteRow" data-split-only></div>
+      </details>
       <button class="ghost small" data-mode="">Cancel</button>
     </div>
     <div class="hint" id="pickHint" hidden>Click a spot in the <b id="pickStem"></b> lane to borrow from there. <button class="ghost small" id="pickCancel">Cancel</button></div>
@@ -181,7 +183,7 @@
       <h3 class="panel-h">Best versions <button class="ghost small hdr-btn" data-kind="versions" data-accept="1">Apply all</button></h3>
       <p class="help">When an instrument plays the same part more than once, you can use its cleanest take every time, so the part sounds the same throughout. Each one is added to Review for you to listen to first.</p>
       <div id="bestList"></div>
-      <h3 class="panel-h" style="margin-top:14px">Best hits and note starts <button class="ghost small" id="btnPattern" title="Learn where each drum sound plays in the bar from the parts without singing, then restore hits the vocals took, only where the pattern is near-certain and the original recording has that drum there. Lands in Review.">Learn the drum pattern</button> <button class="ghost small" data-export-samples title="Save the song's loops and drum hits as WAV files: section loops, samples that repeat (1 to 4 bars, at the length they really repeat at), and drum one-shots, each as the cleanest copy and a merge of the cleanest copies">Export samples</button> <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples">Blend all</button></h3>
+      <h3 class="panel-h" style="margin-top:14px">Best hits and note starts <button class="ghost small" id="btnPattern" hidden title="Learn where each drum sound plays in the bar from the parts without singing, then restore hits the vocals took, only where the pattern is near-certain and the original recording has that drum there. Lands in Review.">Learn the drum pattern</button> <button class="ghost small" data-export-samples title="Save the song's loops and drum hits as WAV files: section loops, samples that repeat (1 to 4 bars, at the length they really repeat at), and drum one-shots, each as the cleanest copy and a merge of the cleanest copies">Export samples</button> <button class="ghost small hdr-btn" data-kind="hits" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples">Blend all</button></h3>
       <p class="help">Drum sounds repeat hundreds of times. Hits the vocals smeared are filled in from the cleanest identical hit.</p>
       <div id="hitList"></div>
       <h3 class="panel-h" style="margin-top:14px">Repeated bars <button class="ghost small hdr-btn" data-kind="bars" data-accept="1">Apply all</button><button class="ghost small hdr-btn" data-kind="bars" data-accept="1" data-blend="1" title="Replace every damaged repeat with a merge of the cleanest repeats">Blend all</button></h3>
@@ -196,12 +198,14 @@
       <h3 class="panel-h" style="margin-top:14px">Kept parts</h3>
       <p class="help">Parts you keep are never repaired or re-levelled. Drag across the Sections bar above the timeline to keep a part.</p>
       <div id="keepList"></div>
+      <details class="adv-lists"><summary>More level tools (stereo sides, lowered frequencies)</summary>
       <h3 class="panel-h" style="margin-top:14px">Original stereo sides</h3>
       <p class="help">Parts that use the stereo width of the original song (its sides hold the instruments, not the lead vocal). Drag across the Sections bar to add one.</p>
       <div id="sidesList"></div>
       <h3 class="panel-h" style="margin-top:14px">Lowered frequencies</h3>
       <p class="help">Frequencies lowered in part of the song, for one instrument or all of them. Drag across the Sections bar and choose Lower frequencies here.</p>
       <div id="eqList"></div>
+      </details>
       <h3 class="panel-h" style="margin-top:14px">Muted parts</h3>
       <p class="help">Silence everything, or one instrument, in part of the song. Drag across the Sections bar and choose Mute, or use the M buttons in the table below.</p>
       <div id="muteList"></div>
@@ -359,13 +363,16 @@
     <fieldset><legend>Files</legend>
       <label><input type="checkbox" name="mix" checked> Repaired instrumental (with your levels)</label>
       <label><input type="checkbox" name="stems" checked> Each instrument on its own</label>
-      <label><input type="checkbox" name="raw"> Raw instrumental, for comparison</label>
       <label><input type="checkbox" name="vocals"> Vocals</label>
-      <label><input type="checkbox" name="report" checked> Repair report</label>
     </fieldset>
     <fieldset><legend>Samples</legend>
       <label title="Every repeated drum hit, note and loop, as its cleanest single copy from the split"><input type="checkbox" name="samples_raw"> Cleanest hits, notes and loops (as they are)</label>
       <label title="The cleanest few copies of each blended into one, so noise in any one copy drops out"><input type="checkbox" name="samples_merged"> Merged from their cleanest copies</label>
+    </fieldset>
+    <details class="adv-lists"><summary>More export options</summary>
+    <fieldset><legend>Extras</legend>
+      <label><input type="checkbox" name="raw"> Raw instrumental, for comparison</label>
+      <label><input type="checkbox" name="report"> Repair report</label>
     </fieldset>
     <fieldset><legend>For music software</legend>
       <label title="A MIDI tempo map that follows the song beat by beat, with the sections as markers; Audacity section labels; and the tempo in a text file. Place everything at the start of the project and it lines up."><input type="checkbox" name="tempo"> Tempo map and section markers</label>
@@ -374,6 +381,7 @@
     <fieldset><legend>Vinyl rips</legend>
       <label title="Finds clicks and crackle in each exported file and rebuilds them from the sound around them. Better still: Remove vinyl crackle in step 1, before splitting."><input type="checkbox" name="declick"> Remove clicks and crackle from the files</label>
     </fieldset>
+    </details>
     <fieldset><legend>Level</legend>
       <label title="Measured only where nobody sings, where the instrumental and the original should sound the same. Every file gets the same change, and nothing is pushed into clipping."><input type="checkbox" name="match_level"> Match the original song's loudness</label>
       <label title="The level Spotify, YouTube and Apple Music play at (-14 LUFS), measured on the instrumental. Every file gets the same change; peaks stay under -1 dB, so a very dynamic song may end a little quieter."><input type="checkbox" name="lufs"> Match streaming loudness (-14 LUFS)</label>
