@@ -247,7 +247,7 @@ The **Levels** tab shows how loud every instrument is in every section. Type a n
 
 ## Support Instrumental Studio
 
-Instrumental Studio is free and open source. If it saves you time or you've made something you're happy with, you can support its development on **[GitHub Sponsors](https://github.com/sponsors/kefirman9000)**. It helps keep new features and fixes coming. Starring the repository and reporting problems (with **Export log**) help too.
+Instrumental Studio is free. If it saves you time or you've made something you're happy with, you can support its development on **[GitHub Sponsors](https://github.com/sponsors/kefirman9000)**. It helps keep new features and fixes coming. Starring the repository and reporting problems (with **Export log**) help too.
 
 ## Updates
 
@@ -328,3 +328,15 @@ You can also run it from a clone: `git clone https://github.com/kefirman9000/ins
 3. Push to `main`.
 
 A GitHub Action then publishes the release with a ready-to-download zip, using the changelog section as the release notes. Everyone's app finds it on their next update check.
+
+## License and disclaimer
+
+Copyright © 2026 kefirman9000. All rights reserved. Instrumental Studio is free to use; see [LICENSE](LICENSE) for what is and isn't allowed.
+
+- Only process audio you own or have the rights to use. You are responsible for how you use the results.
+
+Instrumental Studio is provided **as is**, without warranty of any kind. Use it at your own risk; the author is not liable for any damage, data loss or other loss arising from its use.
+
+Instrumental Studio is an independent project and is not affiliated with, endorsed by or sponsored by any of the companies or products named here. NVIDIA is a trademark of NVIDIA Corporation. Apple and macOS are trademarks of Apple Inc. Windows is a trademark of Microsoft Corporation.
+
+Found a security problem? Please report it privately; see [SECURITY.md](SECURITY.md).
