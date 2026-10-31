@@ -185,6 +185,13 @@ def free_port():
         s.close()
 
 
+# This session's secret. Made here and handed to the engine privately (in its environment, never on the command
+# line or in a page), and to the app's page in the address fragment, which browsers never send to any server.
+# Without it, nothing on this computer (another program, another user account, a web page) can read from or
+# drive the engine.
+SESSION_TOKEN = __import__("secrets").token_urlsafe(32)
+
+
 def start_engine(port, args, safe):
     from studio import proc
     cmd = [proc.gui_python(), "-m", "studio.engine_main", "--port", str(port), "--parent", str(os.getpid())]
@@ -194,7 +201,7 @@ def start_engine(port, args, safe):
     # The engine watches this process and stops when it ends. proc.popen tracks it, so Restart
     # (proc.kill_all) stops it as well. Its output goes to app.log, never to a pipe nobody reads.
     return proc.popen(cmd, cwd=APP_DIR, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                      stderr=subprocess.DEVNULL)
+                      stderr=subprocess.DEVNULL, env={**os.environ, "STUDIO_TOKEN": SESSION_TOKEN})
 
 
 def wait_for_engine(url, engine, timeout=60):
@@ -243,6 +250,7 @@ def main():
 
     port = args.port or free_port()
     url = f"http://127.0.0.1:{port}/"
+    app_url = url + "#t=" + SESSION_TOKEN          # only the app's own window gets the secret
     holder = {"closing": False}
 
     def launch():
@@ -297,6 +305,11 @@ def main():
         except ImportError:
             webview = None
         if webview is not None:
+            try:                    # links to other sites open in the normal browser, never inside the app window
+                webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+                webview.settings["ALLOW_DOWNLOADS"] = False
+            except Exception:
+                pass
             api = JsApi()
             # the window opens straight away with a "Starting" page; the app loads into it once the
             # engine answers, or an error page with the log and what to do shows instead
@@ -316,7 +329,7 @@ def main():
                     win.load_html(error_html(problem))
                     return
                 follow(win.destroy)
-                win.load_url(url)
+                win.load_url(app_url)
             webview.start(boot)
             diag.line("window closed")
             stop_engine()
@@ -328,7 +341,7 @@ def main():
         browser = find_chromium()
         if browser:
             profile = os.path.join(tempfile.gettempdir(), "instrumental-studio-window")
-            bproc = subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={profile}",
+            bproc = subprocess.Popen([browser, f"--app={app_url}", f"--user-data-dir={profile}",
                                       "--window-size=1480,920", "--autoplay-policy=no-user-gesture-required"])
             follow(bproc.terminate)
             try:
@@ -344,7 +357,7 @@ def main():
         problem = launch()
         if problem:
             _open_setup_check(problem)
-    webbrowser.open(url)
+    webbrowser.open(app_url)
     follow(lambda: None)
     print("Press Ctrl+C to quit.")
     try:
