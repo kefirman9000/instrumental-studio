@@ -16,7 +16,7 @@
     <span class="time" id="timeNow">0:00</span><span class="time dim" id="timeTotal">/ 0:00</span>
     <div class="seg" id="versionSeg" role="radiogroup" aria-label="What you hear">
       <button data-v="original" title="The original song with vocals">Original</button>
-      <button data-v="raw" title="Instrumental straight out of separation">Raw instrumental</button>
+      <button data-v="raw" title="Instrumental straight out of separation. Tip: hold B to hear it for a moment, let go to come back">Raw instrumental</button>
       <button data-v="repaired" class="on" title="Instrumental with repairs and your levels">Repaired</button>
     </div>
   </div>
@@ -78,6 +78,7 @@
     <div class="keep-pop" id="keepPop" hidden>
       <b id="keepPopTitle"></b>
       <p id="keepPopWarn" class="warn" hidden></p>
+      <button class="small" data-act="compare" title="Plays this part three times in a row: the original song, the split as it came, and your result">▶ Compare: original, split, result</button>
       <span class="pop-h">Keep as it is</span>
       <button class="small" data-mode="original">Use the original song here</button>
       <button class="small" data-mode="no_edits">Keep the split, no repairs</button>
@@ -424,16 +425,26 @@
       <button type="button" class="small" id="gridNext" title="Later bars">▶</button>
       <label class="small">Bars <select id="gridBars"><option>1</option><option>2</option><option selected>4</option><option>8</option></select></label>
       <label class="small"><input type="checkbox" id="gridSnap" checked> Snap to 1/16</label>
+      <label class="small"><input type="checkbox" id="gridLoop" checked> Loop</label>
       <span class="spacer"></span>
       <button type="button" class="small" id="gridPlay">▶ Play these bars</button>
     </div>
-    <p class="help small">Each row is one sound on this track, each column a 16th note on the song's own beat. Click an empty cell to add that sound there (made from its cleanest hits), click a hit to take it out (red), click again to bring it back. Right-click an added hit to remove it.</p>
+    <p class="help small">Each row is one sound on this track (or one note, for pitched instruments), each column a 16th on the song's own beat. Click an empty cell to add it; click a hit to take it out (only that sound is removed), again to bring it back; drag a hit up or down for louder or softer; right-click an added hit to remove it. Click a row's name to choose the sample it plays.</p>
     <canvas id="gridCanvas"></canvas>
     <div class="grid-actions">
       <button type="button" class="small" id="gridPattern" title="Add the hits the learned pattern is sure belong in these bars and the track is missing">Add missing hits (pattern)</button>
       <button type="button" class="small" id="gridRebuild" title="Replace these bars with clean samples played at every hit shown: clears smeared, muddy or bleeding drums">Rebuild these bars from clean samples</button>
       <button type="button" class="small ghost" id="gridUnrebuild">Undo rebuild here</button>
       <button type="button" class="small ghost" id="gridClear">Clear my edits here</button>
+      <button type="button" class="small" id="gridCopy" title="Copy the hits in these bars">Copy bars</button>
+      <button type="button" class="small" id="gridPaste" title="Put the copied hits here, replacing these bars (made from clean samples)" disabled>Paste here</button>
+      <label class="small" title="Pull the hits toward the grid without making them robotic">Tighten
+        <select id="gridTightAmt"><option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option></select></label>
+      <button type="button" class="small" id="gridTighten">Tighten timing</button>
+      <button type="button" class="small" id="gridMidiOut">Export MIDI</button>
+      <button type="button" class="small" id="gridMidiIn">Import MIDI…</button>
+      <input type="file" id="gridMidiFile" accept=".mid,.midi" hidden>
+      <input type="file" id="gridSampleFile" accept="audio/*,.wav,.mp3,.flac,.aiff,.ogg" hidden>
       <span class="spacer"></span>
       <button value="close" class="primary">Done</button>
     </div>

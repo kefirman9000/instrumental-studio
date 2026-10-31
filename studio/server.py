@@ -1313,6 +1313,31 @@ class Handler(BaseHTTPRequestHandler):
                 p.save()
             elif path == "/api/drums/edit":
                 p.drum_edit(str(d["stem"]), d.get("change") or {})
+            elif path == "/api/drums/sample":
+                k_, sid_ = str(d["stem"]), int(d["s"])
+                if d.get("path"):
+                    src = os.path.realpath(str(d["path"]))
+                    if not src.startswith(os.path.realpath(UPLOADS) + os.sep) or not os.path.isfile(src):
+                        raise ValueError("That file isn't available.")
+                    p.drum_load_sample(k_, sid_, load_audio(src, p.sr)[0], os.path.basename(src)[:80])
+                else:
+                    p.drum_edit(k_, {"sample": {"s": sid_, "mode": d.get("mode", "merge"), "t": d.get("t")}})
+            elif path == "/api/drums/midi_export":
+                k_ = str(d["stem"])
+                folder = os.path.join(EXPORTS, re.sub(r"[^\w\- ()]", "", p.meta.get("name", "song")) or "song")
+                os.makedirs(folder, exist_ok=True)
+                out = p.drum_midi_export(k_, os.path.join(folder, f"{re.sub(r'[^\w\- ()]', '', p.meta.get('name', 'song'))} - {k_} grid.mid"))
+                reveal(out)
+                return self._send(200, {"ok": True, "path": out})
+            elif path == "/api/drums/midi_import":
+                src = os.path.realpath(str(d.get("path") or ""))
+                if not src.startswith(os.path.realpath(UPLOADS) + os.sep) or not os.path.isfile(src):
+                    raise ValueError("That file isn't available.")
+                with open(src, "rb") as fh:
+                    used = p.drum_midi_import(str(d["stem"]), fh.read())
+                res = self._edited()
+                res["used"] = used
+                return self._send(200, res)
             elif path == "/api/drums/pattern":
                 added = p.drum_fill_pattern(str(d["stem"]), float(d["start"]), float(d["end"]))
                 res = self._edited()
