@@ -352,3 +352,6 @@ label.check input { margin-top: 3px; }
 .ref-row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
 .ref-file { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: rgba(127,127,127,.08); }
 .ref-file b { flex: 1 1 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.hscroll { flex: none; margin-left: 168px; height: 16px; overflow-x: auto; overflow-y: hidden; border-top: 1px solid var(--line); background: var(--bg2); }
+.hscroll > div { height: 1px; }
+.lanes.panning, .lanes.panning canvas { cursor: grabbing; }
