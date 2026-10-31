@@ -392,10 +392,11 @@
 <dialog id="dlgRef">
   <form method="dialog">
     <h2>Add clean tracks or a sample</h2>
-    <p>Use clean parts of this song to guide the repairs: official stems or session tracks (bass, drums, anything you have), or one clean hit or note. Tracks are lined up with the song automatically and level-matched, kept with the song, and every other fix on that instrument is checked against them.</p>
+    <p>Use clean parts of this song to guide the repairs: official stems or session tracks (bass, drums, anything you have), loops and samples the song uses, or one clean hit or note. The app works out which instrument each is and where it goes; loops are placed everywhere they play. Tracks are lined up with the song automatically and level-matched, kept with the song, and every other fix on that instrument is checked against them.</p>
     <label class="ref-row">What are they
       <select id="refKind" aria-label="What the files are">
-        <option value="track">Clean tracks of instruments (choose one or several)</option>
+        <option value="auto">Work it out for me: full tracks, loops or one-shots (choose one or several)</option>
+        <option value="track">Full clean tracks of instruments</option>
         <option value="sample">One hit or note (matched to the sound it is in the song)</option></select></label>
     <div id="refRows"></div>
     <label class="ref-row" id="refApplyRow"><input type="checkbox" id="refApply" checked> Apply right away (Undo takes it back; unticked, it waits in Review)</label>
