@@ -1076,6 +1076,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._refuse("token")
             if path == "/api/session":
                 # lets the audio player (which can't send headers) prove it's the app: strict same-site cookie
+                self._body()              # read what was sent, or it's left on the connection and garbles the next request
                 return self._send(200, {"ok": True}, extra={
                     "Set-Cookie": f"{COOKIE}={TOKEN}; HttpOnly; SameSite=Strict; Path=/"})
             if path == "/api/upload":
