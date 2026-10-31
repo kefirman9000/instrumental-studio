@@ -5851,261 +5851,56 @@ class Project:
         return out
 
     def tips(self):
-        """Suggestions for keeping the fixed parts high quality and consistent with the rest of the song.
-        Each tip carries an action the app can perform in one click (and undo)."""
+        """What to do next: ONE step that fits where the song is, plus at most two extras that truly apply.
+        (Build the best instrumental does all the individual fixes, so they aren't suggested one by one.)"""
         out = []
-        if self.stage == "imported" or not len(self.VA):
-            return out
-        imported_stems = self.meta.get("separation") == "Imported stems"
-        kept = self.keep_ranges()
-
-        def covered(a, b):
-            return any(r["start"] <= a + 0.05 and r["end"] >= b - 0.05 for r in kept)
-
-        # 1. vocal-free parts: the original recording already is a perfect instrumental there
-        if not imported_stems:
-            free = []
-            for sec in self.sections:
-                a = int(np.searchsorted(self.beat_times, sec["start"]))
-                b = int(np.searchsorted(self.beat_times, sec["end"]))
-                va = np.asarray(self.VA[a:max(b, a + 1)])
-                if len(va) and float(va.max()) < 0.04 and not covered(sec["start"], sec["end"]):
-                    free.append(sec)
-            if free:
-                names = ", ".join(s["name"] for s in free)
-                out.append({
-                    "id": "keep_free", "title": f"Use the original recording in the parts without singing",
-                    "detail": f"{names} {'has' if len(free) == 1 else 'have'} no singing, so the original recording already is "
-                              f"a clean instrumental there, with no separation artifacts.",
-                    "button": "Keep original there",
-                    "action": {"kind": "keep", "ranges": [{"start": s["start"], "end": s["end"], "mode": "original"} for s in free]}})
-        if self.stage != "detected":
-            out.append({"id": "detect", "title": "Find the damage", "detail": "Step 3 finds the spots the vocals damaged and suggests repairs taken from the same instrument elsewhere in the song.",
-                        "button": "Find damage", "action": {"kind": "detect"}})
-            return out
-
-        sugs = list(self.suggestions.values())
-        rec = [x for x in sugs if x["type"] == "repair" and x["status"] == "pending" and x.get("recommended")]
-        if rec:
-            out.append({"id": "apply_rec", "title": f"Apply the {len(rec)} recommended repair{'s' if len(rec) != 1 else ''}",
-                        "detail": "Each has a close match elsewhere in the song. Afterwards, look here again for anything that still sounds thinner.",
-                        "button": "Apply recommended", "action": {"kind": "bulk", "action": "accept_recommended"}})
-
-        # 2. tone match: what's still missing under the vocals, judged against the same part elsewhere
-        lift_now = self.mixer.get("vocal_lift", {})
-        for k in ([] if rec else [x for x in self.instruments if x not in NOT_REPAIRED]):     # judge what's left only once the repairs are in
-            loss = self.remaining_loss(k, lazy=True)
-            if loss is None:
-                continue
-            want = float(np.clip(round((loss + float(lift_now.get(k, 0))) * 2) / 2, 0, 6))
-            threshold = 1.5 if lift_now.get(k) else 1.0
-            if loss >= threshold and want - float(lift_now.get(k, 0)) >= 0.5:
-                out.append({"id": f"lift_{k}", "title": f"Fill in the {k} under the vocals (+{want:.1f} dB)",
-                            "detail": f"Next to the same part where nobody sings, the {k} is still about {loss:.1f} dB thinner in the "
-                                      f"vocal range (250 Hz to 5 kHz) under the singing. This lifts only that range, only there.",
-                            "button": f"Fill in +{want:.1f} dB", "action": {"kind": "lift", "stem": k, "db": want}})
-
-        # mud: extra low-mid under the vocals, judged against the same part where nobody sings
-        cut_now = self.mixer.get("mud_cut", {})
-        for k in ([] if rec else [x for x in self.instruments if x not in NOT_REPAIRED]):
-            try:
-                ex = self.mud_excess(k, lazy=True)
-            except Exception as e:
-                log(f"mud check skipped for {k}: {e}")
-                continue
-            if ex is None:
-                continue
-            have = abs(float(cut_now.get(k, 0)))
-            want = float(np.clip(round((ex + have) * 2) / 2, 0, 6))
-            if ex >= 1.5 and want - have >= 0.5:
-                out.append({"id": f"mud_{k}", "title": f"Clear the mud from the {k} under the vocals (-{want:.1f} dB)",
-                            "detail": f"Under the singing the {k} has about {ex:.1f} dB more low-mid (150 to 500 Hz) than the same "
-                                      f"part where nobody sings: leftover voice and stacked repairs build up there and sound muddy. "
-                                      f"This cuts only that range, only under the vocals. Undo takes it back.",
-                            "button": f"Cut -{want:.1f} dB", "action": {"kind": "mud", "stem": k, "db": -want}})
-
-        # double-check against the original: things that don't fit, and the beat grid
-        flagged = [i for i, x in self.suggestions.items() if (x.get("check") or {}).get("flag")
-                   and x["status"] in ("pending", "accepted", "auto")]
-        if flagged:
-            on = sum(1 for i in flagged if self.suggestions[i]["status"] in ("accepted", "auto"))
-            out.append({"id": "misfit", "title": f"{len(flagged)} fix{'es' if len(flagged) != 1 else ''} don't line up with the original"
-                                                 + (f" ({on} applied)" if on else ""),
-                        "detail": "They add sound the original recording doesn't have at that spot (usually a different part, "
-                                  "or the backing guitar standing in for the lead) or land off the original's beat. They're "
-                                  "listed under Doesn't fit in Review. This takes them all out; Undo puts them back.",
-                        "button": "Take them out", "action": {"kind": "status", "ids": flagged, "status": "rejected"}})
-        ver = self.meta.get("verified")
-        if not ver or ver.get("applied") != self._applied_count():
-            out.append({"id": "verify", "title": "Double-check every fix against the original",
-                        "detail": "Checks each repair, hit and take against the original recording: that everything it adds "
-                                  "is really in the song at that moment, and that its hits land on the original's beat. "
-                                  "Anything that doesn't fit is listed so you can take it out.",
-                        "button": "Check now", "action": {"kind": "verify"}})
-        drift = self.meta.get("grid_drift") or []
-        if drift:
-            where = ", ".join(f"{d['start'] // 60:.0f}:{d['start'] % 60:04.1f}" for d in drift[:4]) + ("..." if len(drift) > 4 else "")
-            out.append({"id": "drift", "title": f"The beat the app found wobbles in {len(drift)} bar{'s' if len(drift) != 1 else ''}",
-                        "detail": f"At {where} the beat grid sits off the original's attacks, so fixes borrowed there are the "
-                                  f"most likely to land off the beat. The check flags any that did; listen to those parts.",
-                        "button": "Show what doesn't fit", "action": {"kind": "filter", "filter": "misfit"}})
-
-        bleed = [x for x in sugs if x["type"] == "bleed" and x["status"] == "pending"]
-        if bleed:
-            stems_b = sorted({x["stem"] for x in bleed})
-            out.append({"id": "bleed", "title": f"Remove leftover singing from the {', '.join(stems_b)}",
-                        "detail": f"{len(bleed)} spot{'s' if len(bleed) != 1 else ''} still {'have' if len(bleed) != 1 else 'has'} a faint copy of the vocal.",
-                        "button": "Review leftovers", "action": {"kind": "filter", "filter": "bleed"}})
-
-        # an instrument that's mostly leftover singing in a section is better muted there
-        mutes = self.mixer.get("mute_ranges", [])
-        for si, sec in enumerate(self.sections):
-            if not sec.get("vocal"):
-                continue
-            a, b = int(sec["start"] * self.sr), int(sec["end"] * self.sr)
-            for k in self.instruments:
-                if any(r.get("stem") in (None, k) and r["start"] <= sec["start"] + 0.05 and r["end"] >= sec["end"] - 0.05 for r in mutes):
-                    continue
-                bl = [x for x in sugs if x["type"] == "bleed" and x["stem"] == k and x["section"] == si]
-                bars = max(1, sum(1 for (s0, L) in self.windows
-                                  if sec["start"] <= self.beat_times[s0] < sec["end"]))
-                if len(bl) < 0.6 * bars:
-                    continue
-                here = self._beat_levels(self.render_stem(k))
-                bt = np.asarray(self.beat_times[:len(here)])
-                inside = here[(bt >= sec["start"]) & (bt < sec["end"])]
-                if len(inside) and np.median(inside) < np.median(here) - 10:
-                    out.append({"id": f"mute_{k}_{si}", "title": f"Mute the {k} in {sec['name']}",
-                                "detail": f"There the {k} is quiet and mostly leftover singing, so muting it removes the ghost vocal without losing much.",
-                                "button": "Mute it there", "action": {"kind": "mute", "start": sec["start"], "end": sec["end"], "stem": k}})
-
-        # bar by bar: stretches where an instrument is only the singer's ghost or separation noise
-        done = {t["action"]["stem"] for t in out if t["id"].startswith("mute_")}
-        for k in self.instruments:
-            if k in done:
-                continue
-            try:
-                runs = self.ghost_runs(k, lazy=True)
-            except Exception as e:
-                log(f"ghost check skipped for {k}: {e}")
-                continue
-            if not runs:
-                continue
-            secs = sum(r["end"] - r["start"] for r in runs)
-            ghost = any(r["why"] == "ghost" for r in runs)
-            where = ", ".join(f"{r['start'] // 60:.0f}:{r['start'] % 60:04.1f}" for r in runs[:4]) + ("..." if len(runs) > 4 else "")
-            out.append({"id": f"ghost_{k}", "title": f"Mute the {k} where it's only {'leftover singing' if ghost else 'separation noise'} "
-                                                     f"({len(runs)} part{'s' if len(runs) != 1 else ''}, {secs:.0f} s)",
-                        "detail": f"Under the vocals at {where} the {k} is far quieter than it plays on its own, and what's left "
-                                  f"{'moves with the singer' if ghost else 'is mostly noise from the split'}. Muting just those bars "
-                                  f"cleans up the instrumental without losing anything you'd hear. Each part is listed in the "
-                                  f"Levels tab, and Undo takes them all back.",
-                        "button": "Mute those parts",
-                        "action": {"kind": "mutes", "ranges": [{"start": r["start"], "end": r["end"], "stem": k} for r in runs]}})
-
-        if not any(x.get("deep") for x in sugs) and [k for k in self.instruments if k not in NOT_REPAIRED and k not in self.PERCUSSIVE]:
-            out.append({"id": "deep", "title": "Look for leftover singing with a second vocal-removal pass",
-                        "detail": "Runs the vocal model again on each instrument and offers to take out what it finds, only where "
-                                  "it moves like the singer. The strongest way to remove ghost vocals. Takes a few minutes.",
-                        "button": "Run it", "action": {"kind": "deep"}})
-        if not any(r.get("mode") == "pitch" for r in self.mixer.get("eq_ranges", [])):
-            out.append({"id": "notch", "title": "Notch the singer's notes in every instrument",
-                        "detail": "Narrow cuts on exactly the notes being sung and their overtones, only while singing. Takes out "
-                                  "ghost vocals more precisely than a band cut; listen for any instrument that plays the same notes.",
-                        "button": "Notch them (-9 dB)", "action": {"kind": "notch"}})
-
-        bv = [x for x in self.best_versions() if not x["status"]]
-        if bv:
-            out.append({"id": "best_versions", "title": f"Use cleaner takes of repeating parts ({len(bv)})",
-                        "detail": "Some instruments play the same part elsewhere with less of it lost under the vocals. "
-                                  "Using that take keeps the part consistent every time it comes round.",
-                        "button": "Show them", "action": {"kind": "tab", "tab": "grid"}})
-
-        bh = [h for h in self.best_hits(lazy=True) if not h["status"]]
-        bb = [g for g in self.best_bars() if not g["status"]]
-        if bh or bb:
-            what = []
-            if bh:
-                dr = [h for h in bh if h.get("kind") != "note"]
-                nt = [h for h in bh if h.get("kind") == "note"]
-                if dr:
-                    what.append(f"{sum(h['damaged'] for h in dr)} drum hits ({', '.join(sorted({h['name'] for h in dr}))})")
-                if nt:
-                    what.append(f"{sum(h['damaged'] for h in nt)} note starts on the {', '.join(sorted({h['stem'] for h in nt}))}")
-            if bb:
-                what.append(f"{sum(len(g['damaged']) for g in bb)} repeated bars")
-            out.append({"id": "best_parts", "title": "Rebuild repeated sounds from their cleanest copy",
-                        "detail": f"{' and '.join(what).capitalize()} repeat elsewhere without singing over them. "
-                                  "The clean copy fills in what the vocals took, so every repeat sounds the same.",
-                        "button": "Show them", "action": {"kind": "tab", "tab": "grid"}})
-
-        if self._applied_count() != self.meta.get("glitch_scan_applied", 0):
-            out.append({"id": "rescan", "title": "Listen for clicks and dropouts again",
-                        "detail": "You've changed repairs since the last check. A quick scan catches any new click or gap.",
-                        "button": "Check now", "action": {"kind": "scan"}})
-        glitches = [x for x in sugs if x["type"] == "glitch" and x["status"] == "pending"]
-        if glitches:
-            out.append({"id": "glitches", "title": f"{len(glitches)} click{'s' if len(glitches) != 1 else ''} or dropout{'s' if len(glitches) != 1 else ''} found",
-                        "detail": "Short pops or gaps that don't belong. Each fix smooths over just a few milliseconds.",
-                        "button": "Review them", "action": {"kind": "filter", "filter": "cleanup"}})
-
-        ess = [x for x in sugs if x["type"] == "ess" and x["status"] == "pending"]
-        if ess:
-            out.append({"id": "ess", "title": f"Remove the singer's leftover \"s\" sounds ({len(ess)})",
-                        "detail": "Short hissy \"s\" and \"t\" sounds from the vocal are still in some instruments.",
-                        "button": "Review them", "action": {"kind": "filter", "filter": "bleed"}})
-
-        hard = [x for x in sugs if x["type"] == "repair" and x["status"] in ("low", "nodonor")]
-        if hard:
-            out.append({"id": "hard", "title": f"{len(hard)} spot{'s have' if len(hard) != 1 else ' has'} no close match",
-                        "detail": "Pick a source by hand, or leave them. A weak match can add notes that weren't there.",
-                        "button": "Show them", "action": {"kind": "filter", "filter": "hard"}})
-
-        # the worst-hit part may come out better with a different model
-        if self.meta.get("source") not in ("demo",) and not imported_stems and self.sections:
-            worst = None
-            for si, sec in enumerate(self.sections):
-                cells = [self.grid.get(f"{si}:{k}", {}) for k in self.instruments]
-                dmg = max((c.get("damage", 0) for c in cells), default=0)
-                rep = min((c.get("repairability", 1) for c in cells if c.get("count")), default=1)
-                score = dmg * (1.5 - rep)
-                if sec.get("vocal") and dmg > 0.05 and (worst is None or score > worst[0]):
-                    worst = (score, si, dmg)
-            if worst:
-                from .installer import extra_installed
-                base = (self.meta.get("sep_mode") or "4stem").split("+")[0]
-                from .updater import load_prefs
-                from .diag import home_dir
-                rof = extra_installed("roformer") and bool(load_prefs(home_dir()).get("roformer_passes"))
-                alt = {"4stem_fast": "4stem", "4stem": "hybrid" if rof else "ensemble", "ensemble": "hybrid" if rof else None,
-                       "6stem": "hybrid6" if rof else "6stem_best", "6stem_best": "hybrid6" if rof else None,
-                       "hybrid": "ensemble", "hybrid6": "6stem_best"}.get(base)
-                if alt and alt not in self.alt_modes():
-                    sec = self.sections[worst[1]]
-                    out.append({"id": "try_alt", "title": f"Try a different model on {sec['name']}",
-                                "detail": f"It lost the most under the vocals ({worst[2]:.0%}). Another model splits the song "
-                                          f"once more and you compare its version of this part, track by track, before choosing.",
-                                "button": "Try it", "action": {"kind": "alt", "mode": alt, "start": sec["start"], "end": sec["end"]}})
-
-        if self.alt_modes() and not any(i.startswith("e_") for i in self.suggestions):
-            out.append({"id": "best_of", "title": "Build each instrument from the cleanest model, bar by bar",
-                        "detail": f"You have {len(self.alt_modes())} other split{'s' if len(self.alt_modes()) != 1 else ''} of this song. "
-                                  "Each model leaves different artifacts in different places, so this scores every bar of every "
-                                  "instrument in each split against the original and uses the cleanest. One item per instrument "
-                                  "lands in Review under Other takes.",
-                        "button": "Build it", "action": {"kind": "best_of"}})
-
-        mode = (self.meta.get("sep_mode") or "").split("+")[0]
-        dmg = np.mean([v["damage"] for v in self.stem_summary.values()]) if self.stem_summary else 0
-        if mode in ("4stem_fast", "6stem") and dmg > 0.04 and not imported_stems:
-            out.append({"id": "resplit", "title": "Split again with Best quality",
-                        "detail": "Best quality takes less of the instruments with the vocals, so fewer repairs are needed.",
-                        "button": "Split with Best quality", "action": {"kind": "resplit", "mode": "4stem"}})
-        if not out:
-            out.append({"id": "good", "title": "Nothing else to suggest",
-                        "detail": "Compare Raw instrumental and Repaired at the top to hear the difference, then export.",
-                        "button": None, "action": None})
-        return out
+        stage = self.stage
+        built = bool(self.meta.get("verified"))
+        if stage == "imported":
+            return [{"id": "split", "title": "Split it and build the instrumental",
+                     "detail": "Splits the song into instruments, finds what the singing damaged and builds the cleanest "
+                               "instrumental in one go (Split + build in step 2).",
+                     "button": "Split + build", "action": {"kind": "click", "el": "#btnSplitAuto"}}]
+        if stage == "split":
+            return [{"id": "detect", "title": "Find the damage, then build",
+                     "detail": "Step 3 finds the spots the singing damaged; then Build the best instrumental fixes them.",
+                     "button": "Find damage", "action": {"kind": "detect"}}]
+        if not built:
+            out.append({"id": "build", "title": "Build the best instrumental",
+                        "detail": "Works through every kind of fix, picks one where they overlap, checks each against the "
+                                  "original and applies it all as one step you can undo.",
+                        "button": "Build it", "action": {"kind": "auto"}})
+        else:
+            q = (self.meta.get("quality") or {}).get("now") or {}
+            if q:
+                si, sc = min(((int(k), v) for k, v in q.items()), key=lambda kv: kv[1])
+                sec = self.sections[si] if si < len(self.sections) else None
+                if sec is not None and sc < 85:
+                    out.append({"id": "listen", "title": f"Listen to {sec['name']}: the part the app is least sure about",
+                                "detail": f"Clean score {sc} of 100. Play it with Repaired selected (hold B to hear the split); "
+                                          f"if something sounds off, reject its fixes in Review.",
+                                "button": "Show it", "action": {"kind": "scope", "section": si}})
+            out.append({"id": "export", "title": "Export your instrumental",
+                        "detail": "Save the instrumental, the instruments on their own, and samples if you like.",
+                        "button": "Export…", "action": {"kind": "click", "el": "#btnExport"}})
+        # extras, only when they apply
+        cells = getattr(self, "grid", None) or {}
+        refs = self.meta.get("refs") or {}
+        try:
+            per_stem = {}
+            for key, c in (cells.items() if isinstance(cells, dict) else []):
+                k = key.split(":", 1)[1] if ":" in key else None
+                if k and c.get("count"):
+                    per_stem.setdefault(k, []).append(c.get("damage", 0))
+            weak = [k for k, v in per_stem.items() if np.mean(v) > 0.15 and k not in refs]
+            if weak:
+                out.append({"id": "stems", "title": f"Have a clean {weak[0]} track? Add it",
+                            "detail": f"The {weak[0]} lost the most to the singing. A clean stem, loop or sample from this "
+                                      f"song fixes it far better than any repair (drag it onto the window).",
+                            "button": "Add clean stems…", "action": {"kind": "click", "el": "#btnRefOpen2"}})
+        except Exception:
+            pass
+        return out[:3]
 
     def _safe(self, fn, default):
         try:

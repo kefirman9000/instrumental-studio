@@ -1,5 +1,11 @@
 # What's new
 
+## 1.36.0
+
+- **"What to do next" is one clear step**, chosen by where the song is: *Split + build* → *Find damage* → *Build the best instrumental* → *Listen to the part the app is least sure about* and *Export*. At most two extras show, and only when they apply (like adding a clean stem for the instrument that lost the most).
+- The twenty-odd individual suggestions it used to list (fill in, clear the mud, mute, notch, remove leftover singing, double-check, clicks again...) are gone: Build the best instrumental does all of them, and checks every fix itself.
+- **Faster window:** those checks were worked out on every refresh; refreshes should now be noticeably quicker.
+
 ## 1.35.1
 
 - **Fix: songs (and their samples folder) could be named "source".** Choosing the app's own copy of a song (the *source* file inside a project folder) now names it after the song; Extract samples also renames such songs.
