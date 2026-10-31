@@ -186,7 +186,10 @@
       <div id="gridWrap"></div>
     </div>
     <div class="tab" id="tab-levels" hidden>
-      <h3 class="panel-h">Kept parts</h3>
+      <h3 class="panel-h">Your clean tracks</h3>
+      <p class="help">Clean stems you added (step 4, Add clean stems or a sample). They're used where shown and every other fix on that instrument is checked against them.</p>
+      <div id="refList"></div>
+      <h3 class="panel-h" style="margin-top:14px">Kept parts</h3>
       <p class="help">Parts you keep are never repaired or re-levelled. Drag across the Sections bar above the timeline to keep a part.</p>
       <div id="keepList"></div>
       <h3 class="panel-h" style="margin-top:14px">Original stereo sides</h3>
@@ -301,6 +304,11 @@
     </div>
     <p class="drop-hint">You can also drag a song, or a full set of stems, straight into this window.</p>
     <div class="recent" id="recent"></div>
+    <div class="safe-banner" id="pyBanner" hidden>
+      <b>Test version of Python</b>
+      <span id="pyText"></span>
+      <a class="small" href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org/downloads</a>
+    </div>
     <div class="safe-banner" id="backupBanner" hidden>
       <b>This is an old backup copy of the app</b>
       <span id="backupText"></span>
@@ -360,6 +368,7 @@
     </fieldset>
     <fieldset><legend>Level</legend>
       <label title="Measured only where nobody sings, where the instrumental and the original should sound the same. Every file gets the same change, and nothing is pushed into clipping."><input type="checkbox" name="match_level"> Match the original song's loudness</label>
+      <label title="The level Spotify, YouTube and Apple Music play at (-14 LUFS), measured on the instrumental. Every file gets the same change; peaks stay under -1 dB, so a very dynamic song may end a little quieter."><input type="checkbox" name="lufs"> Match streaming loudness (-14 LUFS)</label>
     </fieldset>
     <fieldset><legend>Format</legend>
       <label><input type="radio" name="fmt" value="wav" checked> WAV</label>

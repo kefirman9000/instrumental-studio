@@ -639,17 +639,29 @@ class Project:
         va = np.pad(va, (0, len(Ei) - len(va)))
         lim, lim_v, min_share, min_beats = (-8, -4, 0.5, 1) if aggressive else (-20, -12, 0.7, 2)
         ok = loud & (va > 0.3) & (share > min_share) & ((ratio < lim) | ((ratio < lim_v) & voice_like))
-        runs, j = [], 0
+        # the singer pausing inside an a cappella part (instruments silent there too) joins the stretch
+        ref_lvl = float(np.median(Eo[Eo > 1e-10])) if np.any(Eo > 1e-10) else 1.0
+        silent = 10 * np.log10(Ei / ref_lvl) < -35
+        bt_s = np.asarray(self.beat_times, float)
+        idx, j = [], 0
         while j < len(ok):
             if ok[j]:
                 e = j
                 while e + 1 < len(ok) and ok[e + 1]:
                     e += 1
-                if e - j + 1 >= min_beats:
-                    runs.append((float(self.beat_times[j]), float(self.beat_times[min(e + 1, len(self.beat_times) - 1)])))
+                idx.append([j, e])
                 j = e + 1
             else:
                 j += 1
+        merged = []
+        for r in idx:
+            if merged:
+                g0, g1 = merged[-1][1] + 1, r[0]               # beats in the gap
+                if g1 > g0 and bt_s[min(g1, len(bt_s) - 1)] - bt_s[g0] <= 1.0 and silent[g0:g1].all():
+                    merged[-1][1] = r[1]
+                    continue
+            merged.append(list(r))
+        runs = [(float(bt_s[j]), float(bt_s[min(e + 1, len(bt_s) - 1)])) for j, e in merged if e - j + 1 >= min_beats]
         cache[key] = runs
         return runs
 
@@ -1138,6 +1150,22 @@ class Project:
             what = (f"a {'half-bar' if m == 0.5 else f'{m:g}-bar'} loop on the {k}, found in {len(hits)} "
                     f"place{'s' if len(hits) != 1 else ''} ({top:.0%} match)")
             return ids, what
+
+    def remove_reference(self, k):
+        """Stop using your clean track of instrument k: its parts are taken out (Undo brings them back) and
+        fixes stop being checked against it."""
+        with self.lock:
+            ids = [i for i, x in self.suggestions.items() if x.get("alt_mode") == "imported" and x["stem"] == k
+                   and i.startswith(f"ref_{k}_") and x["status"] != "rejected"]
+            if ids:
+                self.set_status(ids, "rejected", f"Stopped using your clean {k} track")
+            (self.meta.get("refs") or {}).pop(k, None)
+            self.__dict__.get("_refs", {}).pop(k, None)
+            try:
+                os.remove(self._ref_path(k))
+            except OSError:
+                pass
+            return ids
 
     def add_reference_track(self, audio, k, name, use="vocals"):
         """A clean recording of one instrument from this song (an official stem, a session file...): line it up
@@ -2715,7 +2743,7 @@ class Project:
         return float(np.clip(np.sqrt(o / (m + EPS)), 0.5, 4.0)) if m > 0 else 1.0
 
     def export(self, folder, fmt="wav", what=("mix", "stems", "raw", "vocals", "report"), bits=24, match_level=False,
-               declick=False):
+               declick=False, lufs=None):
         """Write the chosen files. Every audio file gets the SAME gain, so the exported instruments still
         add up to the exported mix and keep the balance you heard (they used to be turned down one by one
         when they came near clipping). match_level: bring everything to the original song's level."""
@@ -2740,12 +2768,40 @@ class Project:
         g = 1.0
         if match_level and self.original is not None:
             g = self._match_gain(self.mix("repaired"))
-        peak = max([float(np.abs(f()).max()) for _, f in jobs] or [0.0]) * g
-        if peak > 0.999:
-            g *= 0.999 / peak                     # one shared trim keeps every file in step
+        self.meta.pop("last_export_lufs", None)
+        if lufs is not None:
+            # streaming loudness, measured on the instrumental; every file gets the same gain. Never louder than
+            # -1 dB peak: a dynamic song may stay a little under the target rather than clip
+            from .loudness import lufs as measure
+            now = measure(self.mix("repaired"), self.sr)
+            if np.isfinite(now):
+                g = 10 ** ((float(lufs) - now) / 20)
+        env = None
+        if lufs is not None:
+            # a gentle limiter (at most 6 dB, 5 ms look-ahead, 120 ms release), worked out on the instrumental and
+            # applied to every file the same way, so the stems still add up to the mix
+            from scipy.ndimage import minimum_filter1d, uniform_filter1d
+            pk = np.abs(self.mix("repaired")).max(0) * g
+            need = np.minimum(1.0, 0.891 / np.maximum(pk, 1e-9))
+            if float(need.min()) < 1.0:
+                floor = 10 ** (-6 / 20)
+                if float(need.min()) < floor:
+                    g *= float(need.min()) / floor        # more than 6 dB would pump: settle a little quieter
+                    need = np.minimum(1.0, 0.891 / np.maximum(pk * float(need.min()) / floor, 1e-9))
+                env = minimum_filter1d(need, int(0.005 * self.sr) * 2 + 1)
+                env = np.minimum(env, uniform_filter1d(env, int(0.12 * self.sr)))
+                env = minimum_filter1d(env, int(0.005 * self.sr) * 2 + 1).astype(np.float32)
+        lim_audio = (lambda y: y * env[None, :y.shape[1]]) if env is not None else (lambda y: y)
+        peak = max([float(np.abs(lim_audio(f() * g)).max()) for _, f in jobs] or [0.0])
+        lim = 0.891 if lufs is not None else 0.999
+        if peak > lim:
+            g *= lim / peak                       # one shared trim keeps every file in step
+        if lufs is not None:
+            from .loudness import lufs as measure
+            self.meta["last_export_lufs"] = round(measure(lim_audio(self.mix("repaired") * g), self.sr), 1)
         for fname, f in jobs:
             p = os.path.join(folder, fname + ext)
-            audio = (f() * g).astype(np.float32)
+            audio = lim_audio(f() * g).astype(np.float32)
             if declick:                       # vinyl rips: clicks and crackle out of each file
                 from . import vinyl as VN
                 audio = VN.declick(audio, self.sr, "normal")[0]
