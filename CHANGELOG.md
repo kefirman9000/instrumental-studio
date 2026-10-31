@@ -1,5 +1,14 @@
 # What's new
 
+## 1.27.2
+
+- **Tighter security.** The engine listens only on this computer (127.0.0.1), but other programs and other user accounts on the same computer can reach that too. Now nothing can read from it or control it without this session's secret:
+  - the secret is made fresh at every start, handed to the engine privately and to the app window in the address fragment (never sent over the network, never written into a page or onto a command line), and removed from the address right away;
+  - every request now needs it, including reading data (song lists, audio, spectrograms), not just changes; the audio player uses a strict same-site, script-proof cookie;
+  - links to other sites always open in your normal browser, never inside the app window (where they could reach the app's controls);
+  - uploads are capped at 4 GB, and idle connections are closed after 2 minutes.
+- Unchanged and still in place: other sites are refused, requests must name 127.0.0.1 or localhost (stops DNS-rebinding tricks), the app can't be framed or embedded, *Show folder* only opens the app's own folders and never runs files, and updates are checked against their published checksum before installing.
+
 ## 1.27.1
 
 - **Scroll sideways along the song.** When zoomed in, a scrollbar under the tracks moves along the song. Also: the mouse wheel over the Sections bar, Shift + wheel anywhere on the tracks, a sideways trackpad swipe, or drag with the middle mouse button (or hold Space and drag).

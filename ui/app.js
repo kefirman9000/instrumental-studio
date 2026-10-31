@@ -2,14 +2,22 @@
 /* Instrumental Studio UI */
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-// This session's secret, written into the page by the app. Every change sent to the app carries it,
-// so other web pages open in a browser can't drive the app.
-const TOKEN = document.querySelector('meta[name="studio-token"]')?.content || "";
+// This session's secret. The app window opens the page with it in the address fragment (#t=..., which is
+// never sent anywhere); it's moved into this window's session storage and wiped from the address. Every
+// request carries it, so nothing else on this computer can read from or drive the app.
+const TOKEN = (() => {
+  const m = location.hash.match(/[#&]t=([\w-]+)/);
+  try {
+    if (m) { sessionStorage.setItem("studioToken", m[1]); history.replaceState(null, "", location.pathname); return m[1]; }
+    return sessionStorage.getItem("studioToken") || "";
+  } catch { if (m) history.replaceState(null, "", location.pathname); return m ? m[1] : ""; }
+})();
+const authed = { "X-Studio-Token": TOKEN };
 const api = {
   async get(path, timeoutMs = 15000) {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), timeoutMs);
     try {
-      const r = await fetch(path, { signal: ctl.signal }); const j = await r.json();
+      const r = await fetch(path, { signal: ctl.signal, headers: authed }); const j = await r.json();
       if (!r.ok) throw new Error(j.error || r.statusText); noteAlive(); return j;
     } catch (e) { if (e.name === "AbortError") { noteStuck(); throw new Error("The app took too long to answer."); } throw e; }
     finally { clearTimeout(t); }
@@ -277,7 +285,7 @@ async function loadSpectros(stems, kinds) {
   const { cols, rows } = st.ov.display;
   await Promise.all(stems.flatMap(k => kinds.map(async kind => {
     if ((k === "vocals" || k === "original") && kind !== "raw") return;
-    const buf = new Uint8Array(await (await fetch(`/api/spectro?stem=${k}&kind=${kind}&r=${st.rev}`)).arrayBuffer());
+    const buf = new Uint8Array(await (await fetch(`/api/spectro?stem=${k}&kind=${kind}&r=${st.rev}`, { headers: authed })).arrayBuffer());
     (st.specs[k] ||= {})[kind + "Data"] = buf;
   })));
   for (const k of stems) {
@@ -627,7 +635,7 @@ function movePlayhead() {
 let actx, pv = null;
 function ctx() { return actx ||= new (window.AudioContext || window.webkitAudioContext)(); }
 async function fetchBuf(id, mode) {
-  const r = await fetch(`/api/preview?id=${id}&mode=${mode}&hear=${st.hear || "mix"}&r=${st.rev}`);
+  const r = await fetch(`/api/preview?id=${id}&mode=${mode}&hear=${st.hear || "mix"}&r=${st.rev}`, { headers: authed });
   return ctx().decodeAudioData(await r.arrayBuffer());
 }
 function stopPreview() {
@@ -1852,8 +1860,12 @@ $$("[data-reset]").forEach(b => b.onclick = async () => {
   $("#welcome").hidden = false;          // usable right away; its lists fill in as soon as the app answers
   try {
     let s;
+    if (!TOKEN) {
+      msg("This page was opened without the app's key. Close it and start Instrumental Studio with its Start file.");
+      return;
+    }
     for (let i = 0; ; i++) {
-      try { s = await refreshState(); break; }
+      try { await api.post("/api/session"); s = await refreshState(); break; }
       catch (e) {
         if (i >= 4) throw e;
         msg(i ? "Still starting. The first start after an update or restart can take a little longer." : "Waking up the app");
