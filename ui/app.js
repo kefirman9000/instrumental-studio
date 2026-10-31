@@ -1883,14 +1883,15 @@ function guessStem(name) {
     ["other", /synth|pad|lead|string|horn|other|melod|fx|keys/]];
   for (const [k, re] of tests) if (have.includes(k) && re.test(n)) return k;
   if (/drum|perc|beat/.test(n) && have.includes("drums")) return "drums";
-  return have.includes("other") ? "other" : have[0];
+  return "auto";
 }
 function renderRefRows() {
   const box = $("#refRows"); box.innerHTML = "";
-  const track = $("#refKind").value === "track";
+  const track = $("#refKind").value !== "sample";
   refFiles.forEach((f, i) => {
     const r = document.createElement("div"); r.className = "ref-file";
-    const opts = st.ov.stems.map(k => `<option value="${k}"${k === f.stem ? " selected" : ""}>${nice(k)}</option>`).join("");
+    const opts = `<option value="auto"${f.stem === "auto" ? " selected" : ""}>Auto-detect instrument</option>` +
+      st.ov.stems.map(k => `<option value="${k}"${k === f.stem ? " selected" : ""}>${nice(k)}</option>`).join("");
     r.innerHTML = `<b></b>` + (track ? `<select data-i="${i}" data-f="stem" aria-label="Which instrument">${opts}</select>
       <select data-i="${i}" data-f="use" aria-label="Where to use it">
         <option value="vocals"${f.use === "vocals" ? " selected" : ""}>where the singing damaged it</option>
@@ -1905,7 +1906,7 @@ function renderRefRows() {
 }
 $("#btnRefOpen").onclick = () => { refFiles = []; renderRefRows(); $("#dlgRef").showModal(); };
 $("#refKind").onchange = () => { if ($("#refKind").value === "sample") refFiles = refFiles.slice(0, 1); renderRefRows(); };
-$("#btnRefPick").onclick = () => { $("#refFile").multiple = $("#refKind").value === "track"; $("#refFile").click(); };
+$("#btnRefPick").onclick = () => { $("#refFile").multiple = $("#refKind").value !== "sample"; $("#refFile").click(); };
 $("#refFile").onchange = (e) => {
   refFiles = [...e.target.files].map(file => ({ file, stem: guessStem(file.name), use: "vocals" }));
   e.target.value = "";

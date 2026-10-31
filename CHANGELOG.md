@@ -1,5 +1,13 @@
 # What's new
 
+## 1.26.0
+
+- **Work it out for me** (the new default in *Add clean stems or a sample…*): drop in any clean files and the app decides what each one is:
+  - a **full track** is matched to the instrument it lines up with best (the instrument list now starts on *Auto-detect*) and lined up with the song;
+  - a **loop or sample** (half a bar to 8 bars) is found everywhere it plays, on the instrument it sounds like, stretched to each spot's exact length, lined up and level-matched, and used there (only where the singing damaged it, or everywhere);
+  - a **one-shot** rebuilds the matching hits, as before.
+- **Silence the parts where only the singer sings.** A new Build step finds a cappella moments (the instruments are far under the voice and the voice is nearly all of the original) and silences every instrument track there, since all they hold is leftover singing. On by default, careful. **Be aggressive there** (off by default) also catches shorter, less certain moments. They're listed under Muted parts, where each can be removed.
+
 ## 1.25.0
 
 - **Use your clean stems to guide the repairs.** *Add clean stems or a sample…* (step 4) now takes several files at once: the bass, the drums, anything you have. Each is matched to an instrument from its file name (change it if needed) and lined up with the song automatically. For each track choose where to use it: **where the singing damaged it** (the split stays everywhere else) or **the whole track**. Your tracks are kept with the song, and:

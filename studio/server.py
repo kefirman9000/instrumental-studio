@@ -433,9 +433,21 @@ def _job_import_ref(todo, kind, apply):
         _progress(0.05 + 0.85 * f0, f"Reading {name}")
         try:
             audio = load_audio(src, p.sr)[0]
-            _progress(0.05 + 0.85 * (f0 + 0.4 / len(todo)),
-                      f"Lining {name} up with the song" if kind == "track" else "Finding that sound in the song")
-            if kind == "track":
+            _progress(0.05 + 0.85 * (f0 + 0.4 / len(todo)), f"Working out where {name} goes")
+            how = kind
+            if kind == "auto":
+                dur, song = audio.shape[1] / p.sr, p.original.shape[1] / p.sr
+                bar = 60.0 / max(1e-3, float(np.median(np.diff(p.beat_times)))) if len(p.beat_times) > 1 else 120.0
+                bar_s = 4 * 60.0 / bar
+                how = "track" if dur >= min(max(20.0, 0.35 * song), 0.9 * song) else ("loop" if dur >= 0.4 * bar_s else "sample")
+            if how == "track" and stem in ("", "auto", None):
+                stem, val = p.identify_track(audio)
+                if not stem:
+                    raise ValueError("couldn't tell which instrument it is; choose it in the list and add it again.")
+            if how == "loop":
+                ids, what = p.add_reference_loop(audio, name, use, None if stem in ("", "auto", None) else stem)
+                report.append(f"{name}: {what}; used in {len(ids)} part{'s' if len(ids) != 1 else ''}.")
+            elif how == "track":
                 ids = p.add_reference_track(audio, stem, name, use)
                 stems.add(stem)
                 where = "where the singing damaged it" if use == "vocals" else "for the whole track"
@@ -443,7 +455,7 @@ def _job_import_ref(todo, kind, apply):
                               f"in {len(ids)} part{'s' if len(ids) != 1 else ''}.")
             else:
                 ids, what = p.add_reference_sample(audio, name)
-                report.append(f"{name}: matched to {what}; rebuilds {len(ids)} part{'s' if len(ids) != 1 else ''}.")
+                report.append(f"{name}: a one-shot, matched to {what}; rebuilds {len(ids)} part{'s' if len(ids) != 1 else ''}.")
             all_ids += ids
         except ValueError as e:
             report.append(f"{name}: {e}")
@@ -463,7 +475,7 @@ def _job_import_ref(todo, kind, apply):
         report.append(f"{len(misfit)} other fix{'es' if len(misfit) != 1 else ''} on those instruments add sound your "
                       f"clean track doesn't have; they're under Doesn't fit.")
     p.save()
-    S.job["result"] = {"title": "Your clean tracks are in" if kind == "track" else "Your sample is in",
+    S.job["result"] = {"title": "Your files are in",
                        "new_ids": all_ids, "report": report}
 
 
@@ -1059,7 +1071,7 @@ class Handler(BaseHTTPRequestHandler):
                 _start_job(_job_build, steps)
                 return self._send(200, {"ok": True})
             if path == "/api/import_ref":
-                kind = "sample" if d.get("kind") == "sample" else "track"
+                kind = d.get("kind") if d.get("kind") in ("sample", "track", "auto") else "auto"
                 items = d.get("tracks") or [{"path": d.get("path"), "stem": d.get("stem"), "name": d.get("name"),
                                              "use": d.get("use")}]
                 todo = []
@@ -1068,7 +1080,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not src.startswith(os.path.realpath(UPLOADS) + os.sep) or not os.path.isfile(src):
                         return self._send(400, {"error": "That file isn't available."})
                     stem = str(it.get("stem") or "")
-                    if kind == "track" and stem not in self._proj().instruments:
+                    if kind == "track" and stem not in self._proj().instruments and stem != "auto":
                         return self._send(400, {"error": f"Choose which instrument {it.get('name') or 'each file'} is."})
                     todo.append((src, stem, os.path.basename(str(it.get("name") or src))[:80],
                                  "all" if it.get("use") == "all" else "vocals"))

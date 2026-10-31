@@ -108,7 +108,7 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
-        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache"):
+        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs"):
             self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
@@ -606,6 +606,53 @@ class Project:
             m = np.maximum(m, np.minimum(up, dn).astype(np.float32))
         return m
 
+    def vocal_only_runs(self, aggressive=False):
+        """Stretches where only the singer is heard (a cappella): whatever the instrument tracks hold there is
+        leftover singing, so it's safe to silence all of them. [(start_s, end_s)].
+        Careful: the split vocal holds nearly all of the original there, the instruments are at least 20 dB
+        under it (or 12 dB and shaped like the voice), for 2 beats or more. Aggressive: 8 dB (or 4 dB and shaped
+        like the voice), from a single beat."""
+        key = ("vo", bool(aggressive))
+        cache = self.__dict__.setdefault("_vo_cache", {})
+        if key in cache:
+            return cache[key]
+        if not len(self.beats) or not self.instruments or self.meta.get("separation") == "Imported stems":
+            return []
+        bt = (np.asarray(self.beats, int) * HOP).clip(0, self.original.shape[1])
+        cum = lambda y: np.r_[0, np.cumsum(np.asarray(y, np.float64).mean(0) ** 2)]
+        Ci, Cv, Co = cum(self.inst_sum), cum(self.stems["vocals"]), cum(self.original)
+        per = lambda C: np.diff(C[bt]) + 1e-12
+        Ei, Ev, Eo = per(Ci), per(Cv), per(Co)
+        loud = Ev > 1e-3 * float(np.median(Eo[Eo > 1e-10])) if np.any(Eo > 1e-10) else np.zeros_like(Ev, bool)
+        Bi = np.log(VF.band_energy(self.inst_sum.mean(0), self.B) + 1e-10)
+        Bv = np.log(VF.band_energy(self.stems["vocals"].mean(0), self.B) + 1e-10)
+        fb = np.asarray(self.beats, int).clip(0, Bi.shape[1] - 1)
+        voice_like = np.zeros(len(Ei), bool)
+        for j in range(len(Ei)):
+            a, b = fb[j], max(fb[j] + 1, fb[j + 1])
+            x, y = Bi[:, a:b].mean(1), Bv[:, a:b].mean(1)
+            if x.std() > 1e-3 and y.std() > 1e-3:
+                voice_like[j] = np.corrcoef(x, y)[0, 1] > 0.75
+        ratio = 10 * np.log10(Ei / Ev)
+        share = Ev / Eo
+        va = np.asarray(self.VA[:len(Ei)], float) if len(self.VA) else np.ones(len(Ei))
+        va = np.pad(va, (0, len(Ei) - len(va)))
+        lim, lim_v, min_share, min_beats = (-8, -4, 0.5, 1) if aggressive else (-20, -12, 0.7, 2)
+        ok = loud & (va > 0.3) & (share > min_share) & ((ratio < lim) | ((ratio < lim_v) & voice_like))
+        runs, j = [], 0
+        while j < len(ok):
+            if ok[j]:
+                e = j
+                while e + 1 < len(ok) and ok[e + 1]:
+                    e += 1
+                if e - j + 1 >= min_beats:
+                    runs.append((float(self.beat_times[j]), float(self.beat_times[min(e + 1, len(self.beat_times) - 1)])))
+                j = e + 1
+            else:
+                j += 1
+        cache[key] = runs
+        return runs
+
     def _vocal_curve(self, a, b):
         """How much singing there is at each sample, 0..1, from the per-beat vocal measure."""
         if not len(self.VA):
@@ -946,13 +993,158 @@ class Project:
                 return None
         return cache[k]
 
+    def _align_track(self, audio, k):
+        """(offset in samples where the file starts in the song, match 0..1) against instrument k: attack
+        envelopes cross-correlated."""
+        from scipy import signal as sig
+        sr = self.sr
+        ea = VF.onset_env(np.asarray(audio, np.float32).mean(0), sr)
+        eo = VF.onset_env(self.stems[k].mean(0), sr)
+        if len(ea) < 200 or len(eo) < 200:
+            raise ValueError("That file is too short to line up with the song.")
+        xc = sig.fftconvolve(eo, ea[::-1], mode="full")
+        lag_ms = int(np.argmax(xc)) - (len(ea) - 1)
+        o0, o1 = max(0, lag_ms), min(len(eo), lag_ms + len(ea))
+        sa = ea[o0 - lag_ms:o1 - lag_ms]
+        score = float(xc.max()) / (np.linalg.norm(eo[o0:o1]) * np.linalg.norm(sa) + 1e-9)
+        return int(round(lag_ms * sr / 1000)), float(score)
+
+    def identify_track(self, audio):
+        """Which instrument a clean full-length track is: the one it lines up with best, weighted by how alike
+        their sound (overall band shape) is. Returns (instrument, match) or (None, 0)."""
+        audio = np.asarray(audio, np.float32)
+        if audio.shape[0] == 1:
+            audio = np.repeat(audio, 2, axis=0)
+        shape = lambda y: (lambda e: e - e.mean())(np.log(VF.band_energy(np.asarray(y, np.float32).mean(0)[::4], self.B,
+                                                                         max_frames=512).mean(1) + 1e-9))
+        sa = shape(audio)
+        best = (None, 0.0)
+        for k in self.instruments:
+            try:
+                off, sc = self._align_track(audio, k)
+            except ValueError:
+                continue
+            sk = shape(self.stems[k])
+            cos = float(sa @ sk / (np.linalg.norm(sa) * np.linalg.norm(sk) + 1e-9))
+            val = sc * (0.5 + 0.5 * max(cos, 0))
+            if val > best[1]:
+                best = (k, val)
+        return best
+
+    def add_reference_loop(self, audio, name, use="vocals", k=None):
+        """A clean sample or loop used in the song (half a bar or longer): find every place it plays, on the
+        instrument it sounds like (or `k`), and offer it there, stretched to each spot's exact length, lined up and
+        level-matched. use="vocals": only where the singing damaged it. Returns (ids, what in words)."""
+        with self.lock:
+            sr = self.sr
+            smp = np.asarray(audio, np.float32)
+            if smp.shape[0] == 1:
+                smp = np.repeat(smp, 2, axis=0)
+            on = HT.onsets(smp.mean(0), sr)
+            if len(on) and on[0] < 0.25 * sr:
+                smp = smp[:, max(0, int(on[0]) - int(0.003 * sr)):]          # trim leading silence
+            full = max(L for _, L in self.windows)
+            bar_s = float(np.median([self._window_samples(s0, L)[1] - self._window_samples(s0, L)[0]
+                                     for s0, L in self.windows if L == full]))
+            nbars = smp.shape[1] / bar_s
+            cands = [m for m in (0.5, 1, 2, 4, 8) if abs(nbars / m - 1) < 0.12]
+            if not cands:
+                raise ValueError(f"\"{name}\" is {nbars:.2f} bars long at this song's tempo; a loop needs to be half a "
+                                 f"bar, 1, 2, 4 or 8 bars.")
+            m = cands[0]
+            nb = int(round(m * full))
+            # its quarter-beat pattern, from the file stretched to an even grid
+            E = np.log(VF.band_energy(smp.mean(0), self.B) + 1e-9)
+            idx = np.linspace(0, E.shape[1], nb * 4 + 1).astype(int)
+            Qs = np.stack([E[:, idx[i]:max(idx[i] + 1, idx[i + 1])].mean(1) for i in range(nb * 4)])
+            Qs = Qs - Qs.mean(0, keepdims=True)
+            vs = Qs.ravel() / (np.linalg.norm(Qs) + 1e-9)
+            shape_s = E.mean(1) - E.mean()
+            bar_starts = [s0 for s0, L in self.windows if L == full]
+            if m == 0.5:
+                bar_starts = sorted(bar_starts + [b + nb for b in bar_starts])
+            best = None
+            for kk in ([k] if k else self.instruments):
+                Q = self._quarter_beat_feats(self.stems[kk])
+                Ek = Q.mean(0) - Q.mean()
+                cos_shape = float(shape_s @ Ek / (np.linalg.norm(shape_s) * np.linalg.norm(Ek) + 1e-9))
+                sims = []
+                for b0 in bar_starts:
+                    if (b0 + nb) * 4 > len(Q):
+                        continue
+                    X = Q[b0 * 4:(b0 + nb) * 4]
+                    X = X - X.mean(0, keepdims=True)
+                    sims.append((float(X.ravel() @ vs / (np.linalg.norm(X) + 1e-9)), b0))
+                if not sims:
+                    continue
+                top = max(x for x, _ in sims)
+                score = top * (0.5 + 0.5 * max(cos_shape, 0))
+                if best is None or score > best[0]:
+                    best = (score, kk, sims, top)
+            if best is None or best[3] < 0.6:
+                raise ValueError(f"Couldn't find where \"{name}\" plays in this song.")
+            _, k, sims, top = best
+            hits = sorted(b0 for x, b0 in sims if x >= max(0.6, top - 0.15))
+            raw, n = self.stems[k], self.stems[k].shape[1]
+            if use == "vocals":
+                from scipy.ndimage import maximum_filter1d, uniform_filter1d
+                vw = np.clip(self._vocal_curve(0, n) * 4, 0, 1)
+                vw = uniform_filter1d(maximum_filter1d(vw, int(0.25 * sr)), int(0.04 * sr)).astype(np.float32)
+            by_sec = {}
+            for b0 in hits:
+                a, b = int(self.beats[b0] * HOP), int(self.beats[b0 + nb] * HOP)
+                ratio = (b - a) / smp.shape[1]
+                if abs(ratio - 1) > 0.08 or b > n:
+                    continue                                  # this spot is too far off the file's speed
+                if use == "vocals" and float(vw[a:b].max()) < 0.05:
+                    continue                                  # clean already
+                xi = np.linspace(0, smp.shape[1] - 1, b - a)
+                placed = np.stack([np.interp(xi, np.arange(smp.shape[1]), smp[c]) for c in range(2)]).astype(np.float32)
+                sh = HT.align(placed.mean(0)[:sr // 2], raw[:, a:a + sr // 2].mean(0), int(0.01 * sr))
+                a2 = int(np.clip(a - sh, 0, n - placed.shape[1]))
+                vc = self._vocal_curve(a2, a2 + placed.shape[1]) < 0.1
+                mk = vc if vc.sum() > sr // 8 else np.ones(placed.shape[1], bool)
+                g = float(np.clip(np.sqrt(float((raw[:, a2:a2 + placed.shape[1]][:, mk] ** 2).mean()) /
+                                          (float((placed[:, mk] ** 2).mean()) + 1e-12)), 0.1, 10))
+                by_sec.setdefault(self._section_of(a2 / sr), []).append((a2, placed * g))
+            ids = []
+            for si, items in by_sec.items():
+                lo = max(0, min(x[0] for x in items) - XFADE)
+                hi = min(n, max(x[0] + x[1].shape[1] for x in items) + XFADE)
+                tgt = raw[:, lo:hi].copy()
+                W = np.zeros(hi - lo, np.float32)
+                ramp = int(0.01 * sr)
+                for a2, y in items:
+                    L = y.shape[1]
+                    w = np.ones(L, np.float32)
+                    w[:ramp] = np.linspace(0, 1, ramp)
+                    w[-ramp:] = np.linspace(1, 0, ramp)
+                    tgt[:, a2 - lo:a2 - lo + L] = y
+                    W[a2 - lo:a2 - lo + L] = np.maximum(W[a2 - lo:a2 - lo + L], w)
+                if use == "vocals":
+                    W *= vw[lo:hi]
+                rid = f"loop_{k}_{si}_{__import__('zlib').crc32(name.encode()) % 10000}"
+                sec = self.sections[si]
+                self.suggestions[rid] = {
+                    "id": rid, "type": "alt", "stem": k, "status": "pending", "start": lo / sr, "end": hi / sr,
+                    "section": si, "conf": round(float(top), 2), "severity": 0.0, "strength": 1.0, "donors": [],
+                    "alt_mode": "imported", "blend": 0.0, "reference": name, "use": use,
+                    "note": f"Places your \"{name}\" ({'half a bar' if m == 0.5 else f'{m:g} bar' + ('s' if m > 1 else '')}) "
+                            f"where it plays in {sec['name']}, {len(items)} time{'s' if len(items) != 1 else ''}, lined up and "
+                            f"level-matched" + (" (only where the singing damaged it)" if use == "vocals" else "")}
+                self.patches[rid] = (lo, (W[None, :] * (tgt - raw[:, lo:hi])).astype(np.float16))
+                self.take_w[rid] = (lo, W.astype(np.float16))
+                ids.append(rid)
+            what = (f"a {'half-bar' if m == 0.5 else f'{m:g}-bar'} loop on the {k}, found in {len(hits)} "
+                    f"place{'s' if len(hits) != 1 else ''} ({top:.0%} match)")
+            return ids, what
+
     def add_reference_track(self, audio, k, name, use="vocals"):
         """A clean recording of one instrument from this song (an official stem, a session file...): line it up
         with the song, match its level, keep it with the song, and offer it for that instrument, section by
         section. use="vocals": only where the singing damaged the split (the rest of the split stays);
         use="all": the whole track. From then on every fix on that instrument is also checked against it.
         Returns ids."""
-        from scipy import signal as sig
         with self.lock:
             if k not in self.stems:
                 raise ValueError(f"No {k} track in this song.")
@@ -960,21 +1152,10 @@ class Project:
             audio = np.asarray(audio, np.float32)
             if audio.shape[0] == 1:
                 audio = np.repeat(audio, 2, axis=0)
-            # line up: attack envelopes at 1 kHz, cross-correlated against the original song
-            ea = VF.onset_env(audio.mean(0), sr)
-            eo = VF.onset_env(self.stems[k].mean(0), sr)
-            if len(ea) < 200 or len(eo) < 200:
-                raise ValueError("That file is too short to line up with the song.")
-            xc = sig.fftconvolve(eo, ea[::-1], mode="full")
-            lag_ms = int(np.argmax(xc)) - (len(ea) - 1)          # where the file starts in the song, in ms
-            peak = float(xc.max())
-            o0, o1 = max(0, lag_ms), min(len(eo), lag_ms + len(ea))
-            sa = ea[o0 - lag_ms:o1 - lag_ms]
-            score = peak / (np.linalg.norm(eo[o0:o1]) * np.linalg.norm(sa) + 1e-9)
+            off, score = self._align_track(audio, k)
             if score < 0.3:
                 raise ValueError(f"Couldn't line \"{name}\" up with the {k} in this song (match {score:.0%}). Is it from "
                                  f"this recording, at the same speed?")
-            off = int(round(lag_ms * sr / 1000))
             ref = np.zeros((2, n), np.float32)
             s0, s1 = max(0, off), min(n, off + audio.shape[1])
             ref[:, s0:s1] = audio[:, s0 - off:s1 - off]
@@ -3397,7 +3578,7 @@ class Project:
 
     # ------------------------------------------------------------------ build the best instrumental
     AUTO_STEPS = ("keep", "refs", "bestof", "versions", "bars", "hits", "pattern", "repairs", "recover", "deep", "leftovers",
-                  "clicks", "improve", "mutes", "notch", "tone", "seams")
+                  "clicks", "improve", "mutes", "acappella", "acappella_hard", "notch", "tone", "seams")
 
     def _free_sections(self):
         """Sections with no singing: the original recording already is a clean instrumental there."""
@@ -3411,6 +3592,13 @@ class Project:
             if len(va) and float(va.max()) < 0.04:
                 out.append(sec)
         return out
+
+    def _safe_runs(self, aggressive):
+        try:
+            return self.vocal_only_runs(aggressive)
+        except Exception as e:
+            log(f"a cappella check skipped: {e}")
+            return []
 
     def build_plan(self):
         """What Build the best instrumental would do, without changing anything."""
@@ -3458,6 +3646,12 @@ class Project:
                                                 "model's split, a half-and-half blend with it, other source parts) and keeps "
                                                 "whichever is clearly cleaner and still fits the original.", 1),
             ("mutes", "Mute bars where an instrument is only leftover singing or noise", "Worked out after the fixes.", 1),
+            ("acappella", "Silence the parts where only the singer sings",
+             "Careful: only where the instruments are far under the voice and the voice is nearly all of the original.",
+             len(self._safe_runs(False))),
+            ("acappella_hard", "Be aggressive there",
+             "Also silences shorter and less certain voice-only moments (a single beat, instruments only 8 dB under). "
+             "Off by default: can cut a soft instrument that plays under the voice.", len(self._safe_runs(True))),
             ("notch", "Notch the singer's notes where leftover singing remains",
              "After everything else: narrow cuts on exactly the notes being sung (and their reverb), only in the centre of "
              "the mix and only in the stretches where an instrument still moves like the singer.", 1),
@@ -3468,7 +3662,8 @@ class Project:
                                           "switch would be heard.", 1),
         ]
         return [{"key": k, "title": t, "detail": d, "count": int(c),
-                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k != "deep"} for k, t, d, c in steps]
+                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k not in ("deep", "acappella_hard")}
+                for k, t, d, c in steps]
 
     def build_best(self, steps=None, progress=lambda f, m: None):
         """Work through every kind of fix in order, choose one where they overlap, check everything against
@@ -3629,6 +3824,18 @@ class Project:
                 if mutes:
                     self.mixer["mute_ranges"] = self.mixer.get("mute_ranges", []) + mutes
                     self._render_cache.clear()
+            acap = []
+            if "acappella" in steps or "acappella_hard" in steps:
+                progress(0.72, "Finding the parts where only the singer sings")
+                try:
+                    kept_r = self.keep_ranges("original") + keep
+                    acap = [{"start": round(a_, 3), "end": round(b_, 3), "stem": None, "acappella": True}
+                            for a_, b_ in self.vocal_only_runs("acappella_hard" in steps)
+                            if not any(r["start"] <= a_ and r["end"] >= b_ for r in kept_r)]
+                    self.mixer["mute_ranges"] = [r for r in self.mixer.get("mute_ranges", []) if not r.get("acappella")] + acap
+                    self._render_cache.clear()
+                except Exception as e:
+                    log(f"build: a cappella check skipped: {e}")
             notched = 0
             if "notch" in steps:
                 progress(0.78, "Finding where leftover singing remains")
@@ -3709,6 +3916,10 @@ class Project:
                 report.append(f"Original recording kept in {len(keep)} part{'s' if len(keep) != 1 else ''} without singing")
             if mutes:
                 report.append(f"Muted {len(mutes)} stretch{'es' if len(mutes) != 1 else ''} that were only leftover singing or noise")
+            if acap:
+                tot = sum(r["end"] - r["start"] for r in acap)
+                report.append(f"Silenced {len(acap)} part{'s' if len(acap) != 1 else ''} where only the singer sings "
+                              f"({tot:.1f} s in all{', aggressive' if 'acappella_hard' in steps else ''}); listed under Muted parts")
             report += improved
             if notched:
                 report.append(f"Notched the singer's notes in {notched} stretch{'es' if notched != 1 else ''} where leftover "
