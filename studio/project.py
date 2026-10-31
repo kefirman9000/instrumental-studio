@@ -952,6 +952,16 @@ class Project:
                 return []
             n = self.stems[k].shape[1]
             rec = np.asarray(rec, np.float32)[:, :n]
+            # only what stands clear of the noise floor comes back: per frequency, anything within 8 dB of its
+            # quiet level (20th percentile over the song) is separation hiss, not a part
+            gated = np.empty_like(rec)
+            for c in range(rec.shape[0]):
+                R = stft(rec[c])
+                mag = np.abs(R)
+                floor = np.percentile(mag, 20, axis=1, keepdims=True) * 10 ** (8 / 20)
+                keep = np.clip((mag - floor) / (floor + 1e-9), 0, 1)
+                gated[c] = istft(R * keep, rec.shape[1])
+            rec = gated
             vb = (np.asarray(self.centers) >= 250) & (np.asarray(self.centers) <= 5000)
             w = np.zeros(n, np.float32)
             inst_level = float((self.inst_sum[:, :n] ** 2).mean()) + 1e-12
@@ -961,8 +971,8 @@ class Project:
                 if b - a < self.sr // 4:
                     continue
                 seg = rec[:, a:b]
-                if float((seg ** 2).mean()) < 1e-4 * inst_level:
-                    continue                                       # nothing there worth bringing back
+                if float((seg ** 2).mean()) < 3e-3 * inst_level:
+                    continue                                       # too quiet to be a real part (-25 dB under the music)
                 Er = VF.band_energy(seg.mean(0), self.B)[vb]
                 Ev = VF.band_energy(self.stems["vocals"][:, a:b].mean(0), self.B)[vb]
                 x, y = np.log(Er + 1e-10).ravel(), np.log(Ev + 1e-10).ravel()
@@ -2222,7 +2232,7 @@ class Project:
         db = np.where(den > 0.5, num / np.maximum(den, 1e-9), 0.0) * 10 / np.log(10)
         db = gaussian_filter1d(db, 1.5, mode="nearest")
         db = np.where(np.abs(db) < 0.75, 0.0, db)
-        return np.clip(db, -6, 6)
+        return np.clip(db, -6, 2)          # lifting more brings up the separation noise under the vocals
 
     def mud_excess(self, k, lazy=False):
         """dB of extra low-mid (150-500 Hz) the instrument has under the vocals, next to the same part
@@ -4403,7 +4413,7 @@ class Project:
              len([x for x in pend(("repair",)) if x.get("recommended")])),
             ("recover", "Bring back details the split put in the vocal track",
              "Synths, effects and small parts often get filed as \"vocals\". One quick model run on the vocal track finds "
-             "them (done once per song) and brings them back where they don't move like the singer.",
+             "them and brings back the clear ones. Off by default: on some songs it brings back noise too.",
              1 if self._recover_target() else 0),
             ("deep", "Second vocal-removal pass on the instruments",
              "Runs the vocal model again on each instrument (not the drums). Off by default: slow, and the notches below "
@@ -4431,7 +4441,7 @@ class Project:
                                           "switch would be heard.", 1),
         ]
         return [{"key": k, "title": t, "detail": d, "count": int(c),
-                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k != "deep"}
+                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k not in ("deep", "recover")}
                 for k, t, d, c in steps]
 
     def build_best(self, steps=None, progress=lambda f, m: None):

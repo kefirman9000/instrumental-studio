@@ -1,5 +1,12 @@
 # What's new
 
+## 1.30.8
+
+- **Less noise under the instruments.**
+  - *Bring back details from the vocal track* is now **off by default** and much stricter: it ignores the hiss the model leaves (anything near the noise floor) and only brings back parts at least 25 dB loud. It could add a wash of noise on some songs.
+  - *Matching the tone under the vocals* may still cut freely, but now lifts at most +2 dB (it was up to +6): lifting there also raised leftover separation noise.
+  - To apply this to a song you've already built, run **Build the best instrumental** again (it starts fresh).
+
 ## 1.30.7
 
 - **You can always see when the app is working:** a small spinner next to the model light, with what it's doing (a job's progress message, "Working" for anything taking more than a moment, or "Still analysing the song" while background measurements finish).
