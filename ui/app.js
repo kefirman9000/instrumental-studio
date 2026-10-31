@@ -1288,6 +1288,7 @@ function sugItem(s) {
   }
   if (s.note && !s.manual_donor && s.type === "repair") facts.push(["Note", esc(s.note)]);
   if (s.check && s.check.flag) facts.push(["Doesn't fit", esc(s.check.flag)]);
+  if (s.skip_reason && s.status === "rejected") facts.push(["Not used by the build", esc(s.skip_reason) + ". Apply it to try it anyway."]);
   if (["glitch", "smooth", "take", "alt", "hits", "bars", "ess", "rebuild"].includes(s.type)) facts.push(["What", esc(s.note || "")]);
   if (s.type === "rebuild" && s.donors?.length) facts.push(["Borrowed from", s.donors.map(x => `${esc(sec[x.section].name)} at ${fmtP(x.start)}`).join(", ")]);
   if (s.type === "take") facts.push(["How alike", `${pct(s.conf)}, level matched by ${(s.gain_db || 0) >= 0 ? "+" : ""}${(s.gain_db || 0).toFixed(1)} dB`]);
@@ -1930,8 +1931,10 @@ $("#dlgAuto").addEventListener("close", async () => {
     watchJob();
   } catch (e) { fail(e); }
 });
+$("#btnAutoExport").onclick = () => { $("#dlgAutoDone").close(); $("#dlgExport").showModal(); };
 function showAutoReport(lines, title) {
   $("#autoDoneTitle").textContent = title || "Built";
+  $("#btnAutoExport").hidden = !/built|instrumental/i.test(title || "Built");
   const ul = $("#autoReport"); ul.innerHTML = "";
   for (const l of (lines.length ? lines : ["Nothing needed changing."])) { const li = document.createElement("li"); li.textContent = l; ul.append(li); }
   $("#dlgAutoDone").showModal();
