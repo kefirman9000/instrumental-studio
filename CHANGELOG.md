@@ -1,5 +1,9 @@
 # What's new
 
+## 1.30.5
+
+- **Fix: helpers still tried the graphics card when it can't run** (so the drum split could still fail). On Windows, the way 1.30.4 hid the card from them didn't take effect; now they're told to use the processor directly.
+
 ## 1.30.4
 
 - **Fix: splitting the drums (kick, snare, toms, cymbals) crashed** when the graphics card couldn't run it. Helpers now only use the card when it really works, and anything that fails on the card runs again on the processor.
