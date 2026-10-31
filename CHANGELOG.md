@@ -1,5 +1,22 @@
 # What's new
 
+## 1.33.0
+
+**Drums**
+- **"Same sound" slider** in the Grid: loose merges more hits into one sound (fewer rows), strict keeps more apart. Your edits follow their sounds into the new grouping.
+- **Odd hits are marked** (dashed outline): hits that don't sound much like the rest of their sound.
+- **Repair odd hits by their place in the bar:** where a sound plays at the same spot in almost every bar (90%+) and the hit there sounds off, or got grouped as something else, it's rebuilt from the merge of that sound's best hits. Fills before a new section are left alone. Buttons in the Grid (here / whole song), or per sound from its name.
+- **The Grid is much quicker:** clicks update it straight away; the tracks and audio catch up when you pause (they used to reload with every click).
+
+**Smarter swaps**
+- **Chords must match:** a bar or part only replaces another when the chords around them are the same, not just the sound.
+- **Song form first:** Chorus 2 is fixed from Chorus 1 (and bar 5 from bar 5) before anything else in the song.
+
+**Samples**
+- **Whole notes** for bass, keys and other pitched parts: each note to where it really ends (pads and long notes come out complete), cleanest copy and merged.
+- **Phrases:** the same few notes in the same rhythm, repeated (even shorter than a bar), saved as samples.
+- **Extract samples** has a drop box: drop a song straight onto it.
+
 ## 1.32.0
 
 - **Fewer wrong swaps.** Parts and bars are only swapped in when they're near-identical (rhythm and notes) and line up with the original closely; alike-but-different parts (a verse and a pre-chorus, two guitar lines) no longer replace each other.

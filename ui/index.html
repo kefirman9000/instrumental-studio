@@ -433,12 +433,15 @@
       <label class="small">Bars <select id="gridBars"><option>1</option><option>2</option><option selected>4</option><option>8</option></select></label>
       <label class="small"><input type="checkbox" id="gridSnap" checked> Snap to 1/16</label>
       <label class="small"><input type="checkbox" id="gridLoop" checked> Loop</label>
+      <label class="small" title="How alike hits must be to count as the same sound. Loose merges more (fewer rows), strict keeps more apart">Same sound <input type="range" id="gridSim" min="0.80" max="0.97" step="0.01" value="0.9" style="width:90px"> <span id="gridSimOut" class="dim">normal</span></label>
       <span class="spacer"></span>
       <button type="button" class="small" id="gridPlay">▶ Play these bars</button>
     </div>
     <p class="help small">Each row is one sound on this track (or one note, for pitched instruments), each column a 16th on the song's own beat. Click an empty cell to add it; click a hit to take it out (only that sound is removed), again to bring it back; drag a hit up or down for louder or softer; right-click an added hit to remove it. Click a row's name to choose the sample it plays.</p>
     <canvas id="gridCanvas"></canvas>
     <div class="grid-actions">
+      <button type="button" class="small" id="gridOddHere" title="Where a sound plays at the same place in almost every bar, rebuild the copies that sound off (dashed outline) from the merge of its best hits">Repair odd hits here</button>
+      <button type="button" class="small" id="gridOddAll">…in the whole song</button>
       <button type="button" class="small" id="gridPattern" title="Add the hits the learned pattern is sure belong in these bars and the track is missing">Add missing hits (pattern)</button>
       <button type="button" class="small" id="gridRebuild" title="Replace these bars with clean samples played at every hit shown: clears smeared, muddy or bleeding drums">Rebuild these bars from clean samples</button>
       <button type="button" class="small ghost" id="gridUnrebuild">Undo rebuild here</button>
@@ -470,6 +473,7 @@
         <option value="merged">A merge of the cleanest copies (cleanest sound)</option></select></label>
     <label class="ref-row" id="exModeRow">Split with
       <select id="exMode"></select></label>
+    <div class="ex-drop" id="exDrop" tabindex="0">Drop a song here<span>or click to choose one (or pick one of your songs above and press Extract)</span></div>
     <input type="file" id="exFile" accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aiff" hidden>
     <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button type="button" class="primary" id="btnExGo">Extract</button></div>
   </form>

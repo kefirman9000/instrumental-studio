@@ -108,7 +108,7 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
-        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples", "_ref_dis"):
+        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples", "_ref_dis", "_bar_chords"):
             self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
@@ -1523,20 +1523,131 @@ class Project:
                 return cache[k]
             except Exception as e:
                 log(f"note rows skipped for {k}: {e}")
-        pos, clusters, F, lv, centers = HT.find_sounds(x, self.sr, min_count=3)
+        sim = float((self.mixer.get("drum_sim") or {}).get(k, 0.9))
+        pos, clusters, F, lv, centers = HT.find_sounds(x, self.sr, min_count=3, similarity=sim)
         rows, seen, hits = [], {}, []
         order = sorted(range(len(clusters)), key=lambda ci: -len(clusters[ci]))[:10]
         top = float(np.max(lv)) if len(lv) else 0.0
+        Z = None
+        if F is not None and len(F):
+            Z = F - F.mean(1, keepdims=True)
+            Z /= np.linalg.norm(Z, axis=1, keepdims=True) + 1e-9
         for ci in order:
             c = clusters[ci]
             nm = HT.name_sound(F[c].mean(0), centers) if k in self.PERCUSSIVE else f"note {chr(65 + len(rows) % 26)}"
             seen[nm] = seen.get(nm, 0) + 1
             rows.append({"id": int(ci), "name": nm + (f" {seen[nm]}" if seen[nm] > 1 else ""), "count": len(c)})
+            cen = Z[c].mean(0) if Z is not None else None
+            if cen is not None:
+                cen /= np.linalg.norm(cen) + 1e-9
             for i in c:
-                hits.append([round(float(pos[i]) / self.sr, 4), int(ci), round(float(np.clip(np.exp((lv[i] - top) / 2), 0, 1)), 3)])
+                fit = float(Z[i] @ cen) if cen is not None else 1.0       # how alike this hit is to its sound
+                hits.append([round(float(pos[i]) / self.sr, 4), int(ci), round(float(np.clip(np.exp((lv[i] - top) / 2), 0, 1)), 3),
+                             round(fit, 3)])
         hits.sort()
-        cache[k] = {"rows": rows, "hits": hits, "_pos": pos, "_clusters": clusters, "_F": F, "_lv": lv}
+        cache[k] = {"rows": rows, "hits": hits, "_pos": pos, "_clusters": clusters, "_F": F, "_lv": lv, "sim": sim}
         return cache[k]
+
+    def drum_set_similarity(self, k, sim):
+        """How alike hits must be to count as the same sound (0.80 loose .. 0.97 strict). Your edits follow
+        their sounds by name into the new grouping."""
+        with self.lock:
+            old = self.drum_map(k)
+            names = {r["id"]: r["name"].rstrip(" 0123456789") for r in old["rows"]}
+            self._push(f"Grid: {k} grouping", [])
+            self.mixer.setdefault("drum_sim", {})[k] = float(np.clip(float(sim), 0.8, 0.97))
+            self.__dict__.get("_drum_map", {}).pop(k, None)
+            for key in list(self.__dict__.get("_drum_samples", {})):
+                if key[0] == k:
+                    self.__dict__["_drum_samples"].pop(key, None)
+            new = self.drum_map(k)
+            by_name = {}
+            for r in new["rows"]:
+                by_name.setdefault(r["name"].rstrip(" 0123456789"), r["id"])
+            remap = {sid: by_name.get(nm) for sid, nm in names.items()}
+            e = (self.mixer.get("drum_edits") or {}).get(k)
+            if e:
+                e["add"] = [{**a, "s": remap[a["s"]]} for a in e.get("add", []) if remap.get(a["s"]) is not None]
+                e["samples"] = {str(remap[int(sid)]): v for sid, v in (e.get("samples") or {}).items()
+                                if remap.get(int(sid)) is not None}
+                e["assign"] = [{**a, "s": remap[a["s"]]} for a in e.get("assign", []) if remap.get(a["s"]) is not None]
+            self._render_cache.pop(("stem", k), None)
+            self._render_cache.pop("mix", None)
+            return new
+
+    def drum_odd_hits(self, k, sid=None, start=None, end=None, sure=0.9, fit_min=0.8):
+        """Hits that are almost certainly a given sound but came out damaged or mislabelled: the sound plays at
+        that place in the bar in at least `sure` of the song's bars, and the hit there doesn't sound like it (a
+        poor match to its sound, or grouped as something else). Fills (the bar before a new section) are left alone.
+        Returns [(time, sound id)]."""
+        dm = self.drum_map(k)
+        full = max(L for _, L in self.windows)
+        bars = [(wi, s0) for wi, (s0, L) in enumerate(self.windows) if L == full and s0 + L < len(self.beat_times)]
+        if len(bars) < 4:
+            return []
+        sec_start_bars = {sec.get("start_bar") for sec in self.sections}
+        slot_of = {}
+        for t, ci, lv, fit in dm["hits"]:
+            j = int(np.searchsorted(self.beat_times, t, side="right")) - 1
+            if j < 0 or j + 1 >= len(self.beat_times):
+                continue
+            q = int(round((t - self.beat_times[j]) / (self.beat_times[j + 1] - self.beat_times[j]) * 4))
+            slot_of[(t, ci)] = (j, q)
+        rows = [r["id"] for r in dm["rows"]] if sid is None else [sid]
+        out = []
+        for ci in rows:
+            per_bar = {}
+            for (t, c), (j, q) in slot_of.items():
+                for wi, s0 in bars:
+                    if s0 <= j < s0 + full:
+                        per_bar.setdefault(wi, {}).setdefault(c, set()).add((j - s0) * 4 + q)
+                        break
+            counts = {}
+            for wi, d in per_bar.items():
+                for sl in d.get(ci, ()):
+                    counts[sl] = counts.get(sl, 0) + 1
+            steady = [sl for sl, n_ in counts.items() if n_ >= sure * len(bars)]
+            if not steady:
+                continue
+            fit_of = {(h[0], h[1]): h[3] for h in dm["hits"]}
+            for wi, s0 in bars:
+                if (wi + 1) in sec_start_bars:
+                    continue                                   # a fill before the next section: on purpose
+                b0, b1 = self.beat_times[s0], self.beat_times[s0 + full]
+                if start is not None and not (start <= b0 < end):
+                    continue
+                for sl in steady:
+                    j, q = s0 + sl // 4, sl % 4
+                    tt = self.beat_times[j] + q / 4 * (self.beat_times[j + 1] - self.beat_times[j])
+                    near = [(t, c) for (t, c) in slot_of if abs(t - tt) < 0.045]
+                    mine = [(t, c) for t, c in near if c == ci]
+                    if mine:
+                        t, c = mine[0]
+                        if fit_of.get((t, c), 1) < fit_min:
+                            out.append((t, ci))                # its own sound, but damaged
+                    elif near:
+                        out.append((near[0][0], ci))           # grouped as something else: it's this sound
+        return sorted(set(out))
+
+    def drum_repair_odd(self, k, sid=None, start=None, end=None):
+        """Rebuild the odd hits (see drum_odd_hits) from the merge of their sound's best hits. Returns how many."""
+        with self.lock:
+            odd = self.drum_odd_hits(k, sid, start, end)
+            if not odd:
+                return 0
+            self._push(f"Grid: {k} odd hits", [])
+            e = self.mixer.setdefault("drum_edits", {}).setdefault(k, {"add": [], "off": [], "rebuild": []})
+            e.setdefault("assign", [])
+            dm = self.drum_map(k)
+            pos = dm["_pos"] / self.sr
+            for t, ci in odd:
+                i = int(np.argmin(np.abs(pos - t)))
+                nxt = pos[i + 1] if i + 1 < len(pos) else t + 0.3
+                e["assign"] = [a for a in e["assign"] if abs(a["t"] - t) > 0.012] + [{"t": round(float(t), 4), "s": int(ci)}]
+                e["rebuild"].append({"start": round(float(t) - 0.004, 4), "end": round(float(min(nxt, t + 0.3)) - 0.002, 4)})
+            self._render_cache.pop(("stem", k), None)
+            self._render_cache.pop("mix", None)
+            return len(odd)
 
     NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -1888,6 +1999,13 @@ class Project:
                 t = p / sr
                 if q["start"] <= t < q["end"] and not any(abs(t - o) < 0.012 for o in offs) and int(p) in lvl_of:
                     ci, lv = lvl_of[int(p)]
+                    re_ = next((a for a in e.get("assign", []) if abs(a["t"] - t) < 0.012), None)
+                    if re_ is not None:                      # repaired as the sound it really is, at its usual level
+                        ci = re_["s"]
+                        try:
+                            lv = self._drum_sample(k, ci)[1]
+                        except Exception:
+                            pass
                     place(synth, moves.get(round(t, 3), t), ci, vels.get(round(t, 3), 1.0), lv)
             for ad in e.get("add", []):
                 if q["start"] <= ad["t"] < q["end"]:
@@ -2600,12 +2718,17 @@ class Project:
                     if si == ti or not i_s or i_s["quality"] < it["quality"] + 0.03 or i_s["level"] < it["level"] - 15:
                         continue
                     sim = self.section_similarity(k, ti, si)
-                    if sim >= 0.85:                 # (was 0.7: alike-but-different parts got swapped in)
+                    bt_, bs_ = self._bars_in(self.sections[ti]), self._bars_in(self.sections[si])
+                    chord_ok = (not bt_ or not bs_ or
+                                np.mean([self.chords_match(a_, b_) for a_, b_ in zip(bt_, bs_)]) >= 0.8)
+                    same_part = self.sections[ti].get("label") == self.sections[si].get("label")
+                    if sim >= 0.85 and chord_ok:    # (was 0.7: alike-but-different parts got swapped in)
                         cands.append({"section": si, "name": self.sections[si]["name"], "similarity": sim,
-                                      "cover": i_s["cover"], "quality": i_s["quality"]})
+                                      "cover": i_s["cover"], "quality": i_s["quality"], "same_part": same_part})
                 if not cands:
                     continue
-                cands.sort(key=lambda c: (round(c["quality"], 2), c["similarity"]), reverse=True)
+                # the same part of the song (Chorus 2 from Chorus 1) first, then the cleanest
+                cands.sort(key=lambda c: (c["same_part"], round(c["quality"], 2), c["similarity"]), reverse=True)
                 existing = self.suggestions.get(f"t_{k}_{ti}")
                 out.append({"stem": k, "section": ti, "name": sec["name"], "cover": it["cover"], "quality": it["quality"],
                             "best": cands[0], "candidates": cands[:5],
@@ -2965,6 +3088,25 @@ class Project:
         return float(max(3 * lost, (E * R[s0:s0 + L]).sum() / (E.sum() + EPS))), float(np.log(E.sum(1).mean() + EPS))
 
     SWAP_SIM = 0.93          # how alike two bars/parts must be before one may replace the other
+    CHORD_SIM = 0.88         # ...and the chords around them (all instruments) must match this closely
+
+    def _bar_chords(self):
+        """Pitch content of the whole instrumental per bar (unit vectors), for 'same chord here?' checks."""
+        if "_bar_chords" not in self.__dict__:
+            C = self._beat_chroma(self.inst_sum)
+            out = []
+            for s0, L in self.windows:
+                v = C[s0:s0 + L].sum(0) if L else np.zeros(12)
+                out.append(v / (np.linalg.norm(v) + 1e-9))
+            self.__dict__["_bar_chords"] = np.array(out)
+        return self.__dict__["_bar_chords"]
+
+    def chords_match(self, w1, w2):
+        try:
+            C = self._bar_chords()
+            return float(C[w1] @ C[w2]) >= self.CHORD_SIM
+        except Exception:
+            return True
 
     def best_bars(self, min_sim=None):
         """Groups of bars where an instrument plays the same thing, with a clean one to copy from."""
@@ -2988,7 +3130,7 @@ class Project:
                     if v == w or v in used:
                         continue
                     d = self._bar_dist(k, w, v)
-                    if d and 1.3 * (1 - (0.5 * d[0] / mb + 0.5 * d[1] / mc)) >= min_sim:
+                    if d and 1.3 * (1 - (0.5 * d[0] / mb + 0.5 * d[1] / mc)) >= min_sim and self.chords_match(w, v):
                         group.append(v)
                 damaged = [v for v in group if info[v][0] >= 0.1]
                 if len(group) >= 3 and damaged:
@@ -3025,14 +3167,30 @@ class Project:
             b = min(n, max(x[1] for x in starts) + XFADE)
             acc = np.zeros((2, b - a), np.float32)
             W = np.zeros(b - a, np.float32)
+            def form_source(v):
+                """The same bar of the same kind of section (bar 5 of Chorus 2 -> bar 5 of Chorus 1), when that
+                copy is clean; else the overall cleanest."""
+                if n_blend:
+                    return sb
+                try:
+                    sv = self.sections[self._section_of(self.beat_times[self.windows[v][0]])]
+                    off = v - sv.get("start_bar", 0)
+                    for m in clean_m:
+                        sm = self.sections[self._section_of(self.beat_times[self.windows[m][0]])]
+                        if sm is not sv and sm.get("label") == sv.get("label") and m - sm.get("start_bar", 0) == off:
+                            return self.windows[m][0]
+                except Exception:
+                    pass
+                return sb
             for v, (t0, t1) in zip(damaged, starts):
                 st_, Lt = self.windows[v]
                 if Lt != Lb:
                     continue
-                rel = (1 - R[st_:st_ + Lt]) * (1 - R[sb:sb + Lb])
-                dlog = float((rel * (F[st_:st_ + Lt] - F[sb:sb + Lb])).sum() / (rel.sum() + EPS))
+                sbv = form_source(v)
+                rel = (1 - R[st_:st_ + Lt]) * (1 - R[sbv:sbv + Lb])
+                dlog = float((rel * (F[st_:st_ + Lt] - F[sbv:sbv + Lb])).sum() / (rel.sum() + EPS))
                 g = float(np.clip(np.exp(dlog / 2), 0.5, 2.0))
-                lag = refine_lag(self.stem_env[k], self.beats[st_], self.beats[st_ + Lt], self.beats[sb])
+                lag = refine_lag(self.stem_env[k], self.beats[st_], self.beats[st_ + Lt], self.beats[sbv])
                 lo, hi = max(a, t0 - XFADE // 2), min(b, t1 + XFADE // 2)
                 w = _window_weight(hi - lo, t0 - lo, t1 - lo)
                 acc[:, lo - a:hi - a] += segment(src_audio, lo + lag, hi + lag) * g * w[None, :]
@@ -4296,6 +4454,94 @@ class Project:
                             clips.append(x[:, q0:q0 + best.shape[1]])
                     if len(clips) >= 2:
                         put(f"Hits - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
+
+        # 2b. pitched instruments: whole notes (to where they really end) and the short phrases they repeat
+        try:
+            vc_all = self._vocal_curve(0, self.original.shape[1])
+            for k in [x for x in self.instruments if self._tonal(x)]:
+                try:
+                    dm = self.drum_map(k)
+                except Exception:
+                    continue
+                if not dm["rows"] or dm["rows"][0].get("midi") is None:
+                    continue
+                x = self.stems[k]
+                pos = dm["_pos"]
+                env = np.sqrt(np.convolve(x.mean(0) ** 2, np.ones(1024) / 1024, mode="same"))
+                def note_end(i):
+                    p0 = int(pos[i])
+                    nx = int(pos[i + 1]) if i + 1 < len(pos) else x.shape[1]
+                    pk = float(env[p0:min(nx, p0 + int(0.15 * self.sr))].max(initial=0))
+                    lim = min(nx, p0 + int(4 * self.sr))
+                    quiet = np.flatnonzero(env[p0 + int(0.05 * self.sr):lim] < pk * 10 ** (-30 / 20))
+                    return p0 + int(0.05 * self.sr) + int(quiet[0]) if len(quiet) else lim
+                clean_i = lambda i: float(vc_all[int(pos[i]):note_end(i)].max(initial=0)) < 0.05
+                for r in dm["rows"]:                       # whole notes
+                    idx = [int(i) for i in dm["_clusters"][r["id"]] if clean_i(int(i))]
+                    if len(idx) < 2:
+                        continue
+                    ends = {i: note_end(i) for i in idx}
+                    best = max(idx, key=lambda i: ends[i] - int(pos[i]))       # the fullest-sounding copy
+                    a0, b0 = max(0, int(pos[best]) - pre), ends[best]
+                    label = f"{r['name']} - played {r['count']}x"
+                    if raw:
+                        put(f"Notes - {k}", f"{label} - cleanest", x[:, a0:b0])
+                    if merged:
+                        L = b0 - a0
+                        clips = [x[:, a0:b0]] + [x[:, max(0, int(pos[i]) - pre):max(0, int(pos[i]) - pre) + L]
+                                                 for i in idx if i != best and int(pos[i]) - pre + L <= x.shape[1]][:4]
+                        if len(clips) >= 2:
+                            put(f"Notes - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
+                # phrases: the same few notes in the same rhythm, repeated (shorter than a bar is fine)
+                bt = np.asarray(self.beat_times, float)
+                seq = []
+                note_of = {}
+                for r in dm["rows"]:
+                    for i in dm["_clusters"][r["id"]]:
+                        note_of[int(i)] = r["midi"]
+                for i in sorted(note_of):
+                    j = int(np.searchsorted(bt, pos[i] / self.sr, side="right")) - 1
+                    if 0 <= j < len(bt) - 1:
+                        seq.append((i, note_of[i], j + (pos[i] / self.sr - bt[j]) / (bt[j + 1] - bt[j])))
+                found = {}
+                for L in (6, 5, 4):
+                    for a_ in range(len(seq) - L):
+                        win = seq[a_:a_ + L]
+                        if win[-1][2] - win[0][2] > 8:          # at most 2 bars long
+                            continue
+                        key = tuple((w[1] - win[0][1], round((w[2] - win[0][2]) * 4)) for w in win)
+                        found.setdefault((L, key), []).append(a_)
+                used, n_ph = set(), 0
+                for (L, key), starts_ in sorted(found.items(), key=lambda kv: -(len(kv[1]) * kv[0][0])):
+                    starts_ = [a_ for a_ in starts_ if not any(a_ + d in used for d in range(L))]
+                    if len(starts_) < 3 or n_ph >= 4:
+                        continue
+                    clean_s = [a_ for a_ in starts_ if clean_i(seq[a_][0]) and clean_i(seq[a_ + L - 1][0])]
+                    if not clean_s:
+                        continue
+                    for a_ in starts_:
+                        used.update(range(a_, a_ + L))
+                    a_ = clean_s[0]
+                    p0, p1 = max(0, int(pos[seq[a_][0]]) - pre), note_end(seq[a_ + L - 1][0])
+                    n_ph += 1
+                    t0 = p0 / self.sr
+                    secn = self.sections[self._section_of(t0)]["name"] if self.sections else ""
+                    label = f"phrase {n_ph} - {L} notes - repeats {len(starts_)}x{tempo} ({secn}, {ts(t0)})"
+                    if raw:
+                        put(f"Phrases - {k}", f"{label} - cleanest", x[:, p0:p1])
+                    if merged and len(clean_s) >= 2:
+                        clips = [x[:, p0:p1]]
+                        for a2 in clean_s[1:5]:
+                            q0, q1 = max(0, int(pos[seq[a2][0]]) - pre), note_end(seq[a2 + L - 1][0])
+                            c = x[:, q0:q1]
+                            if c.shape[1] < 64:
+                                continue
+                            xi = np.linspace(0, c.shape[1] - 1, p1 - p0)
+                            clips.append(np.stack([np.interp(xi, np.arange(c.shape[1]), c[ch]) for ch in range(c.shape[0])]).astype(np.float32))
+                        if len(clips) >= 2:
+                            put(f"Phrases - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
+        except Exception as e:
+            log(f"samples: notes and phrases skipped: {e}")
 
         # 3. repeating samples at their true length (1 to 4 bars), from the whole instrumental and
         #    from each instrument: the cleanest copy and a merge of the cleanest copies
