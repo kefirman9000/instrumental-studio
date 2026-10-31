@@ -407,6 +407,7 @@ class Project:
         # Replacing edits are laid down widest first, so the most specific wins where they overlap:
         # another model's split (alt) < a repeated bar < a best version of the whole part.
         takes.sort(key=lambda i: 3 if self.suggestions[i].get("alt_mode") == "imported" else
+                   1.5 if self.suggestions[i].get("alt_mode") in ("notes", "pattern") else
                    {"alt": 0, "bars": 1, "take": 2}.get(self.suggestions[i]["type"], 0))
         for sid in takes:      # a best-version edit replaces the part outright, other edits included
             lo, p = self.patches[sid]
@@ -4572,8 +4573,191 @@ class Project:
             log(f"samples: repeating samples skipped: {e}")
         return written
 
+    # ------------------------------------------------------------------ rebuild from notes / from patterns
+    def _note_end(self, x_env, pos, i, n):
+        p0 = int(pos[i])
+        nx = int(pos[i + 1]) if i + 1 < len(pos) else n
+        pk = float(x_env[p0:min(nx, p0 + int(0.15 * self.sr))].max(initial=0))
+        lim = min(nx, p0 + int(4 * self.sr))
+        quiet = np.flatnonzero(x_env[p0 + int(0.05 * self.sr):lim] < pk * 10 ** (-30 / 20))
+        return p0 + int(0.05 * self.sr) + int(quiet[0]) if len(quiet) else lim
+
+    def make_note_repairs(self, ks=None):
+        """Bass (and other pitched parts): notes the singing damaged are rebuilt AS THOSE NOTES, from a merge of
+        the clean copies of the same note elsewhere in the song (or the nearest clean note, retuned up to 3
+        semitones, when that note is never heard clean). A note counts as damaged when it's under the singing and
+        clearly weaker than its clean copies. One review item per section. Returns ids."""
+        ids = []
+        sr = self.sr
+        for k in (ks or [x for x in self.instruments if self._tonal(x)]):
+            try:
+                dm = self.drum_map(k)
+            except Exception as e:
+                log(f"note repairs skipped for {k}: {e}")
+                continue
+            if not dm["rows"] or dm["rows"][0].get("midi") is None:
+                continue
+            x = self.stems[k]
+            n = x.shape[1]
+            pos = dm["_pos"]
+            env = np.sqrt(np.convolve(x.mean(0) ** 2, np.ones(1024) / 1024, mode="same"))
+            vc = self._vocal_curve(0, n)
+            pre = int(0.003 * sr)
+            midi_of = {}
+            for r in dm["rows"]:
+                for i in dm["_clusters"][r["id"]]:
+                    midi_of[int(i)] = r["midi"]
+            ends = {i: self._note_end(env, pos, i, n) for i in midi_of}
+            sung = lambda i: float(vc[int(pos[i]):ends[i]].mean()) > 0.3
+            lvl = lambda i: float(np.sqrt(np.mean(x[:, int(pos[i]):ends[i]] ** 2) + 1e-12))
+            clean = {}
+            for i, m in midi_of.items():
+                if float(vc[int(pos[i]):ends[i]].max(initial=0)) < 0.05 and ends[i] - int(pos[i]) > int(0.08 * sr):
+                    clean.setdefault(m, []).append(i)
+            med = {m: float(np.median([lvl(i) for i in v])) for m, v in clean.items()}
+            by_sec = {}
+            for i, m in midi_of.items():
+                if not sung(i):
+                    continue
+                src_m = m if m in clean else min(clean, key=lambda q: abs(q - m), default=None)
+                if src_m is None or abs(src_m - m) > 3:
+                    continue
+                if lvl(i) > med[src_m] * 10 ** (-3 / 20):
+                    continue                                  # about as strong as its clean copies: leave it
+                a0, b0 = max(0, int(pos[i]) - pre), ends[i]
+                L = b0 - a0
+                ratio = 2 ** ((m - src_m) / 12)
+                clips = []
+                for j in clean[src_m][:5]:
+                    q0 = max(0, int(pos[j]) - pre)
+                    need = int(L * ratio) + 2
+                    c = np.asarray(x[:, q0:q0 + need], np.float32)
+                    if c.shape[1] < need * 0.8:
+                        continue
+                    if ratio != 1:                            # retune by resampling (a few semitones at most)
+                        xi = np.arange(L) * ratio
+                        c = np.stack([np.interp(xi, np.arange(c.shape[1]), c[ch], right=0) for ch in range(c.shape[0])]).astype(np.float32)
+                    clips.append(np.pad(c[:, :L], ((0, 0), (0, max(0, L - c.shape[1])))))
+                if not clips:
+                    continue
+                y = self._merge_clips(clips) if len(clips) >= 2 else clips[0]
+                y *= med[src_m] / (float(np.sqrt(np.mean(y ** 2) + 1e-12)))
+                by_sec.setdefault(self._section_of(a0 / sr), []).append((a0, y, m, src_m))
+            for si, items in by_sec.items():
+                rid = f"nt_{k}_{si}"
+                if rid in self.suggestions and self.suggestions[rid]["status"] != "pending" and not self.suggestions[rid].get("by_build"):
+                    continue                                  # you decided this one: leave it
+                lo = max(0, min(a for a, *_ in items) - XFADE)
+                hi = min(n, max(a + y.shape[1] for a, y, *_ in items) + XFADE)
+                tgt = np.asarray(x[:, lo:hi], np.float32).copy()
+                W = np.zeros(hi - lo, np.float32)
+                rmp = int(0.008 * sr)
+                for a, y, m, src_m in items:
+                    L = min(y.shape[1], hi - a)
+                    w = np.ones(L, np.float32)
+                    w[:rmp] = np.linspace(0, 1, rmp)
+                    w[-rmp:] = np.linspace(1, 0, rmp)
+                    tgt[:, a - lo:a - lo + L] = y[:, :L]
+                    W[a - lo:a - lo + L] = np.maximum(W[a - lo:a - lo + L], w)
+                sec = self.sections[si]
+                names = sorted({self.NOTE_NAMES[m % 12] + str(m // 12 - 1) for _, _, m, _ in items})
+                retuned = sum(1 for *_, m, sm in items if m != sm)
+                self.suggestions[rid] = {
+                    "id": rid, "type": "alt", "stem": k, "status": "pending", "start": lo / sr, "end": hi / sr,
+                    "section": si, "conf": 0.9, "severity": 0.0, "strength": 1.0, "donors": [], "alt_mode": "notes",
+                    "blend": 0.0,
+                    "note": f"Rebuilds {len(items)} damaged {k} note{'s' if len(items) != 1 else ''} in {sec['name']} "
+                            f"({', '.join(names[:6])}{'...' if len(names) > 6 else ''}) from clean copies of the same note"
+                            + (f"; {retuned} retuned from a nearby note" if retuned else "")}
+                self.patches[rid] = (lo, (W[None, :] * (tgt - x[:, lo:hi])).astype(np.float16))
+                self.take_w[rid] = (lo, W.astype(np.float16))
+                ids.append(rid)
+        self.check_ids(ids)
+        return ids
+
+    def make_pattern_rebuilds(self, ks=None):
+        """For loop-based songs: in parts with singing, each instrument's loop is played again from a merge of
+        its clean copies (stretched to each copy's exact length), instead of patching the damaged copy. Only
+        loops (1, 2 or 4 bars) with at least two copies heard clean. One review item per section. Returns ids."""
+        ids = []
+        sr = self.sr
+        vc = self._vocal_curve(0, self.original.shape[1])
+        for k in (ks or [x for x in self.instruments if x not in NOT_REPAIRED]):
+            raw = self.stems[k]
+            n = raw.shape[1]
+            try:
+                groups = self.find_loops(raw, drums=k in self.PERCUSSIVE, limit=8)
+            except Exception as e:
+                log(f"pattern rebuild skipped for {k}: {e}")
+                continue
+            by_sec = {}
+            for g in groups:
+                span = lambda u: (int(self.beats[u[0]] * HOP), int(self.beats[u[1]] * HOP))
+                clean = [u for u in g["members"] if float(vc[slice(*span(u))].max(initial=0)) < 0.05]
+                dirty = [u for u in g["members"] if float(vc[slice(*span(u))].mean()) > 0.2]
+                if len(clean) < 2 or not dirty:
+                    continue
+                ref = self._loop_audio(raw, {**g, "members": clean, "beats": clean[0]}, True)
+                for u in dirty:
+                    a, b = span(u)
+                    if b - a < 64 or b > n:
+                        continue
+                    xi = np.linspace(0, ref.shape[1] - 1, b - a)
+                    y = np.stack([np.interp(xi, np.arange(ref.shape[1]), ref[c]) for c in range(ref.shape[0])]).astype(np.float32)
+                    by_sec.setdefault(self._section_of(a / sr), []).append((a, b, y, g["len_bars"]))
+            for si, items in by_sec.items():
+                rid = f"pt_{k}_{si}"
+                if rid in self.suggestions and self.suggestions[rid]["status"] != "pending" and not self.suggestions[rid].get("by_build"):
+                    continue
+                lo = max(0, min(a for a, *_ in items) - XFADE)
+                hi = min(n, max(b for _, b, *_ in items) + XFADE)
+                tgt = np.asarray(raw[:, lo:hi], np.float32).copy()
+                W = np.zeros(hi - lo, np.float32)
+                rmp = int(0.01 * sr)
+                for a, b, y, _ in sorted(items, key=lambda t: t[0]):
+                    L = b - a
+                    w = np.ones(L, np.float32)
+                    w[:rmp] = np.linspace(0, 1, rmp)
+                    w[-rmp:] = np.linspace(1, 0, rmp)
+                    tgt[:, a - lo:b - lo] = tgt[:, a - lo:b - lo] * (1 - w) + y * w
+                    W[a - lo:b - lo] = np.maximum(W[a - lo:b - lo], w)
+                sec = self.sections[si]
+                self.suggestions[rid] = {
+                    "id": rid, "type": "alt", "stem": k, "status": "pending", "start": lo / sr, "end": hi / sr,
+                    "section": si, "conf": 0.85, "severity": 0.0, "strength": 1.0, "donors": [], "alt_mode": "pattern",
+                    "blend": 0.0,
+                    "note": f"Plays the {k} loop again in {sec['name']} ({len(items)} cop{'ies' if len(items) != 1 else 'y'}) "
+                            f"from a merge of its clean copies, instead of patching the damaged ones"}
+                self.patches[rid] = (lo, (W[None, :] * (tgt - raw[:, lo:hi])).astype(np.float16))
+                self.take_w[rid] = (lo, W.astype(np.float16))
+                ids.append(rid)
+        self.check_ids(ids)
+        return ids
+
+    def start_over(self):
+        """Back to the song as it was split and analysed: every fix undecided again, levels, kept parts, mutes,
+        cuts, clean tracks and grid edits cleared (the split itself and the analysis stay). Undo brings it back."""
+        with self.lock:
+            self._push("Start over", list(self.suggestions))
+            for x in self.suggestions.values():
+                for key in ("by_build", "by_build_was", "skip_reason"):
+                    x.pop(key, None)
+                x["status"] = "pending"
+            self.mixer = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}, "keep": [], "vocal_lift": {},
+                          "mute_ranges": [], "sides": [], "mud_cut": {}, "tone_eq": {}, "seams": [], "eq_ranges": []}
+            for k in list((self.meta.get("refs") or {})):
+                self.remove_reference(k)
+            self.meta.pop("quality", None)
+            self._render_cache.clear()
+            for c in ("_drum_map", "_drum_samples", "_metric_cache"):
+                self.__dict__.pop(c, None)
+            for k in self.instruments:
+                self._refresh_after(k, 0, self.stems[k].shape[1])
+            self._compute_grid()
+
     # ------------------------------------------------------------------ build the best instrumental
-    AUTO_STEPS = ("keep", "gaps", "refs", "bestof", "versions", "bars", "hits", "pattern", "repairs", "recover", "deep", "leftovers",
+    AUTO_STEPS = ("keep", "gaps", "refs", "bestof", "versions", "bars", "hits", "pattern", "notes", "loops", "repairs",
+                  "recover", "deep", "leftovers",
                   "clicks", "improve", "mutes", "acappella", "acappella_hard", "notch", "tone", "seams")
 
     def vocal_gaps(self, min_len=1.0):
@@ -4625,7 +4809,7 @@ class Project:
 
     # A simple build is the default: the best split, the original wherever nobody sings, your clean tracks,
     # careful repairs and cleanup. These guess more (and can guess wrong), so they're extras you tick yourself.
-    EXTRA_STEPS = ("versions", "bars", "pattern", "recover", "deep", "improve", "mutes", "notch", "tone")
+    EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone")
 
     def _safe_runs(self, aggressive):
         try:
@@ -4674,6 +4858,14 @@ class Project:
             ("pattern", "Learn the drum and bass patterns and restore hits and notes the vocals took",
              "Only where the pattern is near-certain one belongs, the original recording has that sound there, and the "
              "track is missing it.", len([x for x in self.instruments if x in self.PERCUSSIVE or x == "bass"])),
+            ("notes", "Rebuild damaged bass notes (and other pitched notes) as the notes they are",
+             "Notes under the singing that came out clearly weaker are made again from clean copies of the same note "
+             "elsewhere in the song (or a nearby note retuned a little).",
+             len([x for x in self.instruments if self._tonal(x)])),
+            ("loops", "Loop-based songs: play each loop again from its clean copies",
+             "Where an instrument repeats a 1-4 bar loop, copies under the singing are replaced by a merge of the clean "
+             "copies. Best for electronic and loop-based music; off by default.",
+             len([x for x in self.instruments if x not in NOT_REPAIRED])),
             ("repairs", "Apply the repairs with a close match",
              "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
              len([x for x in pend(("repair",)) if x.get("recommended")])),
@@ -4795,6 +4987,18 @@ class Project:
                             self.make_hits(hh["stem"], hh["sound"], blend=hh.get("blend_n", 0) >= 3)
                         except Exception as e:
                             log(f"build: hits skipped: {e}")
+            if "notes" in steps:
+                progress(0.32, "Rebuilding damaged notes")
+                try:
+                    self.make_note_repairs()
+                except Exception as e:
+                    log(f"build: note repairs skipped: {e}")
+            if "loops" in steps:
+                progress(0.34, "Playing the loops again from clean copies")
+                try:
+                    self.make_pattern_rebuilds()
+                except Exception as e:
+                    log(f"build: loop rebuild skipped: {e}")
             if "pattern" in steps:
                 progress(0.35, "Learning the drum pattern")
                 try:
@@ -4839,6 +5043,10 @@ class Project:
                         accept.add(i)
             if "refs" in steps:
                 pick("alt", lambda x: x.get("alt_mode") == "imported")
+            if "loops" in steps:
+                pick("alt", lambda x: x.get("alt_mode") == "pattern" and (x.get("check") or {}).get("u", 1) < 0.2)
+            if "notes" in steps:
+                pick("alt", lambda x: x.get("alt_mode") == "notes")
             if "bestof" in steps:
                 pick("alt", lambda x: x.get("alt_mode") == "best-of" and self.ref_track(x["stem"]) is None)
             if "versions" in steps:

@@ -1477,6 +1477,9 @@ class Handler(BaseHTTPRequestHandler):
                 res = self._edited()
                 res["added"] = added
                 return self._send(200, res)
+            elif path == "/api/start_over":
+                p.start_over()
+                p.save()
             elif path == "/api/ref_remove":
                 p.remove_reference(str(d["stem"]))
                 p.save()

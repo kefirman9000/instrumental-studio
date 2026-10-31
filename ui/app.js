@@ -1138,6 +1138,11 @@ function followWarm() {
   }, 2500);
 }
 $("#btnUndo").onclick = () => edit("/api/undo", {});
+$("#btnStartOver").onclick = async () => {
+  if (!st.ov || !confirm("Start over on this song? Every fix goes back to undecided, and levels, kept parts, mutes, cuts, clean tracks and grid edits are cleared. The split stays. Undo brings it all back.")) return;
+  try { await api.post("/api/start_over", {}); await openWorkspace(); toast("Back to the start: the song as it was split. Undo brings your work back."); }
+  catch (e) { fail(e); }
+};
 
 /* ---------- kept parts */
 function vocalsIn(a, b) {
