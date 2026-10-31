@@ -1,5 +1,9 @@
 # What's new
 
+## 1.37.0
+
+- **✨ Clean instrumental** (above the tracks): one click for the cleanest copy of the song the app can make from its own best material. The drums are played again from merged clean samples at every hit (odd hits put right by their place in the bar), damaged notes are rebuilt as notes, loops replayed from clean copies, leftover noise cleaned up, and the original recording used wherever nobody sings. Then Export. Undo takes the build back (the drum rebuild has its own Undo step, or use the Grid's *Undo rebuild here*).
+
 ## 1.36.0
 
 - **"What to do next" is one clear step**, chosen by where the song is: *Split + build* → *Find damage* → *Build the best instrumental* → *Listen to the part the app is least sure about* and *Export*. At most two extras show, and only when they apply (like adding a clean stem for the instrument that lost the most).

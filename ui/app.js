@@ -1138,6 +1138,16 @@ function followWarm() {
   }, 2500);
 }
 $("#btnUndo").onclick = () => edit("/api/undo", {});
+$("#btnClean").onclick = async () => {
+  if (!st.ov) return;
+  const drums = st.ov.stems.some(k => ["drums", "kick", "snare", "toms", "cymbals"].includes(k));
+  if (!confirm("Make the cleanest instrumental the app can?\n\nIt rebuilds the song from its own best material:" +
+      (drums ? " the drums are played again from merged clean hits at every hit," : "") +
+      " damaged notes are rebuilt as notes, loops replayed from clean copies, leftover noise cleaned, and the original used wherever nobody sings." +
+      "\n\nIt can sound a little more 'produced' than the original. Undo takes it back.")) return;
+  try { stopPreview(); player.pause(); await api.post("/api/clean_instrumental", { drums }); showBusy(0.02, "Making the clean instrumental"); watchJob(); }
+  catch (e) { fail(e); }
+};
 $("#btnStartOver").onclick = async () => {
   if (!st.ov || !confirm("Start over on this song? Every fix goes back to undecided, and levels, kept parts, mutes, cuts, clean tracks and grid edits are cleared. The split stays. Undo brings it all back.")) return;
   try { await api.post("/api/start_over", {}); await openWorkspace(); toast("Back to the start: the song as it was split. Undo brings your work back."); }
@@ -1482,6 +1492,7 @@ function renderSteps() {
   $("#vinylBox").hidden = !fromFile;
   $("#refBox").hidden = true;          // the toolbar's "+ Clean stems / samples" does this (it crowded step 4)
   $("#btnRefOpen2").hidden = !ov.stems.length;
+  $("#btnClean").hidden = !ov.stems.length;
   const vy = ov.meta.vinyl;
   $("#btnVinylUndo").hidden = !vy;
   $("#importSub").textContent = vy ? `Vinyl crackle removed (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks)`
