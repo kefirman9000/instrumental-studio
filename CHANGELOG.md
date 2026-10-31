@@ -1,5 +1,9 @@
 # What's new
 
+## 1.31.0
+
+- **Extract samples from the start screen.** A new **Extract samples** button: choose a song file (or one of your songs), whether you want the single cleanest copies, merged copies, or both, and how to split it. The app splits it if needed, finds the drum hits, section loops and repeating parts, saves them as WAV files and opens the folder.
+
 ## 1.30.9
 
 - **Fix: the Grid window opened empty.** Its drawing code clashed with another part of the app, so the grid of hits never appeared.
