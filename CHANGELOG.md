@@ -1,5 +1,13 @@
 # What's new
 
+## 1.25.0
+
+- **Use your clean stems to guide the repairs.** *Add clean stems or a sample…* (step 4) now takes several files at once: the bass, the drums, anything you have. Each is matched to an instrument from its file name (change it if needed) and lined up with the song automatically. For each track choose where to use it: **where the singing damaged it** (the split stays everywhere else) or **the whole track**. Your tracks are kept with the song, and:
+  - they're applied right away if you like (Undo takes them back), and come before every other fix on that instrument;
+  - every other fix on that instrument is checked against your clean track instead of the full mix, which is much stricter, and fixes that add sound it doesn't have go to *Doesn't fit*;
+  - Build the best instrumental has a new first step, *Use your clean tracks*, and the other steps skip the parts they cover.
+- **Fix: Use my graphics card on newer cards (RTX 50 series).** 1.23.4 installed a PyTorch build that's too old for the newest cards ("no kernel image is available"). The app now picks the build by card generation, tests it on the card, and if the card rejects it, removes it and tries the next build automatically. The device check also tests the card for real, so it never says the card is used when it isn't.
+
 ## 1.24.0
 
 - **Samples are whole loops now, not tiny bits.** Export samples finds what repeats at the length it really repeats at: 1, 2 or 4 bars, always starting on the bar, from the whole instrumental and from each instrument. Rhythm and harmony both have to match (so a chord change makes it a 2- or 4-bar loop), and a loop made of two identical halves is reported at the shorter length. Each comes as the cleanest copy and as a merge of the cleanest copies, named with its length, how often it repeats, the tempo, and where it first plays.

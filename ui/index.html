@@ -48,7 +48,7 @@
       </li>
       <li class="step" data-step="review"><span class="num">4</span><div class="step-text"><b>Review and export</b><span id="reviewSub"></span></div>
         <div class="step-actions" id="refBox" hidden>
-          <button class="ghost small" id="btnRefOpen" title="Have a clean recording of one instrument, or a clean sample of a sound in the song? Use it to rebuild the original">Add a clean track or sample…</button>
+          <button class="ghost small" id="btnRefOpen" title="Have a clean recording of one instrument, or a clean sample of a sound in the song? Use it to rebuild the original">Add clean stems or a sample…</button>
         </div></li>
     </ol>
     <div class="split-extra" id="splitExtra" hidden>
@@ -391,16 +391,16 @@
 </dialog>
 <dialog id="dlgRef">
   <form method="dialog">
-    <h2>Add a clean track or sample</h2>
-    <p>Use something clean from this song to rebuild it: an official stem or session track of one instrument, or one clean hit or note (a drum sample, a synth stab). Everything it makes goes to Review first.</p>
-    <label class="ref-row">What is it
-      <select id="refKind" aria-label="What the file is">
-        <option value="track">A full track of one instrument (lined up with the song automatically)</option>
+    <h2>Add clean tracks or a sample</h2>
+    <p>Use clean parts of this song to guide the repairs: official stems or session tracks (bass, drums, anything you have), or one clean hit or note. Tracks are lined up with the song automatically and level-matched, kept with the song, and every other fix on that instrument is checked against them.</p>
+    <label class="ref-row">What are they
+      <select id="refKind" aria-label="What the files are">
+        <option value="track">Clean tracks of instruments (choose one or several)</option>
         <option value="sample">One hit or note (matched to the sound it is in the song)</option></select></label>
-    <label class="ref-row" id="refStemRow">Which instrument
-      <select id="refStem" aria-label="Which instrument it is"></select></label>
-    <input type="file" id="refFile" accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aiff" hidden>
-    <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button type="button" class="primary" id="btnRefPick">Choose the file…</button></div>
+    <div id="refRows"></div>
+    <label class="ref-row" id="refApplyRow"><input type="checkbox" id="refApply" checked> Apply right away (Undo takes it back; unticked, it waits in Review)</label>
+    <input type="file" id="refFile" accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aiff" multiple hidden>
+    <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button type="button" id="btnRefPick">Choose files…</button><button type="button" class="primary" id="btnRefGo" hidden>Add</button></div>
   </form>
 </dialog>
 <dialog id="dlgAuto">

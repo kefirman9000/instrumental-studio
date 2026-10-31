@@ -406,7 +406,8 @@ class Project:
                 delta[:, a:b] += p[:, a - lo:b - lo].astype(np.float32)
         # Replacing edits are laid down widest first, so the most specific wins where they overlap:
         # another model's split (alt) < a repeated bar < a best version of the whole part.
-        takes.sort(key=lambda i: {"alt": 0, "bars": 1, "take": 2}.get(self.suggestions[i]["type"], 0))
+        takes.sort(key=lambda i: 3 if self.suggestions[i].get("alt_mode") == "imported" else
+                   {"alt": 0, "bars": 1, "take": 2}.get(self.suggestions[i]["type"], 0))
         for sid in takes:      # a best-version edit replaces the part outright, other edits included
             lo, p = self.patches[sid]
             _, w = self.take_w[sid]
@@ -930,9 +931,27 @@ class Project:
             return ids
 
     # ------------------------------------------------------------------ your own clean tracks and samples
-    def add_reference_track(self, audio, k, name):
+    def _ref_path(self, k):
+        return os.path.join(self.root, "stems", f"_ref_{k}.npy")
+
+    def ref_track(self, k):
+        """Your clean track of instrument k, lined up with the song and level-matched, or None."""
+        if k not in (self.meta.get("refs") or {}):
+            return None
+        cache = self.__dict__.setdefault("_refs", {})
+        if k not in cache:
+            try:
+                cache[k] = np.load(self._ref_path(k), mmap_mode="r")
+            except (OSError, ValueError):
+                return None
+        return cache[k]
+
+    def add_reference_track(self, audio, k, name, use="vocals"):
         """A clean recording of one instrument from this song (an official stem, a session file...): line it up
-        with the song, match its level, and offer it for that instrument, section by section. Returns ids."""
+        with the song, match its level, keep it with the song, and offer it for that instrument, section by
+        section. use="vocals": only where the singing damaged the split (the rest of the split stays);
+        use="all": the whole track. From then on every fix on that instrument is also checked against it.
+        Returns ids."""
         from scipy import signal as sig
         with self.lock:
             if k not in self.stems:
@@ -967,11 +986,31 @@ class Project:
                 ref = np.roll(ref, -sh, axis=1)
             ids = []
             raw = self.stems[k]
+            # one overall level for the stored copy (used to check fixes): matched where nobody sings
+            vq = self._vocal_curve(0, n) < 0.1
+            mq = vq if vq.sum() > sr else np.ones(n, bool)
+            g_all = float(np.clip(np.sqrt(float((raw[:, mq] ** 2).mean()) / (float((ref[:, mq] ** 2).mean()) + 1e-12)), 0.1, 10))
+            os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
+            np.save(self._ref_path(k), (ref * g_all).astype(np.float16))
+            self.__dict__.setdefault("_refs", {}).pop(k, None)
+            self.meta.setdefault("refs", {})[k] = {"name": name, "match": round(float(score), 2), "use": use}
+            for rid in [i for i, x in self.suggestions.items() if i.startswith(f"ref_{k}_") and x["status"] == "pending"]:
+                self.suggestions.pop(rid, None)
+                self.patches.pop(rid, None)
+                self.take_w.pop(rid, None)
+            if use == "vocals":
+                # where the singing was, widened a little so the switch happens before the damage starts
+                from scipy.ndimage import maximum_filter1d, uniform_filter1d
+                vw = np.clip(self._vocal_curve(0, n) * 4, 0, 1)
+                vw = maximum_filter1d(vw, int(0.25 * sr))
+                vw = uniform_filter1d(vw, int(0.04 * sr)).astype(np.float32)
             for si, sec in enumerate(self.sections):
                 a, b = int(sec["start"] * sr), min(n, int(sec["end"] * sr))
                 rs = ref[:, a:b]
                 if b - a < sr // 2 or float((rs ** 2).mean()) < 1e-8:
                     continue
+                if use == "vocals" and float(vw[a:b].max()) < 0.05:
+                    continue                                   # no singing here: the split is already clean
                 # level: match the instrument where nobody sings (else the whole section)
                 vc = self._vocal_curve(a, b) < 0.1
                 m = vc if vc.sum() > sr // 4 else np.ones(b - a, bool)
@@ -982,12 +1021,15 @@ class Project:
                 ramp = 0.02
                 W = np.minimum(np.clip((t - sec["start"] + ramp / 2) / ramp, 0, 1),
                                np.clip((sec["end"] + ramp / 2 - t) / ramp, 0, 1)).astype(np.float32)
+                if use == "vocals":
+                    W = W * vw[lo:hi]
                 rid = f"ref_{k}_{si}"
                 self.suggestions[rid] = {
                     "id": rid, "type": "alt", "stem": k, "status": "pending", "start": sec["start"], "end": sec["end"],
                     "section": si, "conf": round(float(score), 2), "severity": 0.0, "strength": 1.0, "donors": [],
-                    "alt_mode": "imported", "blend": 0.0, "reference": name,
-                    "note": f"Uses your imported \"{name}\" for the {k} here (lined up with the song, level-matched)"}
+                    "alt_mode": "imported", "blend": 0.0, "reference": name, "use": use,
+                    "note": (f"Uses your clean \"{name}\" for the {k} where the singing damaged it" if use == "vocals" else
+                             f"Uses your clean \"{name}\" for the {k} here") + " (lined up with the song, level-matched)"}
                 self.patches[rid] = (lo, (W[None, :] * (ref[:, lo:hi] * g - raw[:, lo:hi])).astype(np.float16))
                 self.take_w[rid] = (lo, W.astype(np.float16))
                 ids.append(rid)
@@ -3354,7 +3396,7 @@ class Project:
         return written
 
     # ------------------------------------------------------------------ build the best instrumental
-    AUTO_STEPS = ("keep", "bestof", "versions", "bars", "hits", "pattern", "repairs", "recover", "deep", "leftovers",
+    AUTO_STEPS = ("keep", "refs", "bestof", "versions", "bars", "hits", "pattern", "repairs", "recover", "deep", "leftovers",
                   "clicks", "improve", "mutes", "notch", "tone", "seams")
 
     def _free_sections(self):
@@ -3382,6 +3424,10 @@ class Project:
             ("keep", "Use the original recording where nobody sings",
              f"{len(free)} part{'s' if len(free) != 1 else ''} ({', '.join(s['name'] for s in free[:4])}{'...' if len(free) > 4 else ''}): "
              "the cleanest sound there is. Fixes inside them are skipped.", len(free)),
+            ("refs", "Use your clean tracks",
+             "Where the singing damaged an instrument you have a clean track of, that track is used (lined up with the "
+             "song); the other fixes skip those parts.",
+             len([x for x in sugs if x.get("alt_mode") == "imported" and x["status"] == "pending"])),
             ("bestof", "Build each instrument from the cleanest model, bar by bar",
              "Uses the other models' splits you already have." if self.alt_modes() else
              "Needs another model's split first (Try another model here); skipped for now.", len(self.alt_modes())),
@@ -3514,8 +3560,10 @@ class Project:
                 for i, x in S.items():
                     if x["type"] == kind and usable(i) and cond(x) and S[i]["status"] == "pending":
                         accept.add(i)
+            if "refs" in steps:
+                pick("alt", lambda x: x.get("alt_mode") == "imported")
             if "bestof" in steps:
-                pick("alt", lambda x: x.get("alt_mode") == "best-of")
+                pick("alt", lambda x: x.get("alt_mode") == "best-of" and self.ref_track(x["stem"]) is None)
             if "versions" in steps:
                 pick("take", lambda x: x.get("conf", 0) >= 0.8)
             def active(kind):
@@ -3526,6 +3574,8 @@ class Project:
                         d.setdefault(y["stem"], []).append(y)
                 return d
             takes_on = active("take")
+            for k_, ys in active("alt").items():          # your clean tracks cover what they replace
+                takes_on.setdefault(k_, []).extend(y for y in ys if y.get("alt_mode") == "imported")
             covered = lambda x: any(ov(y, x) for y in takes_on.get(x["stem"], ()))
             if "bars" in steps:
                 pick("bars", lambda x: not covered(x))
@@ -3704,10 +3754,14 @@ class Project:
         if b - a < int(0.05 * self.sr) or (b - a) > self.CHECK_MAX_S * self.sr:
             return None
         P = p[:, a - lo:b - lo].astype(np.float32)
-        r = VF.check_region(self.stems[k][:, a:b], P, self.original[:, a:b], self.sr)
+        ref = self.ref_track(k) if x.get("alt_mode") != "imported" else None
+        against = np.asarray(ref[:, a:b], np.float32) if ref is not None and ref.shape[1] >= b else self.original[:, a:b]
+        r = VF.check_region(self.stems[k][:, a:b], P, against, self.sr)
         flag = None
-        if r["u"] > 0.35:
-            flag = (f"Adds sound the original doesn't have here ({r['u']:.0%} of what it adds), so it is probably "
+        if r["u"] > (0.3 if ref is not None else 0.35):
+            flag = (f"Adds sound your clean {k} track doesn't have here ({r['u']:.0%} of what it adds). Try another "
+                    f"source, or reject it." if ref is not None else
+                    f"Adds sound the original doesn't have here ({r['u']:.0%} of what it adds), so it is probably "
                     f"a different part, note or instrument. Try another source, or reject it.")
         elif r["offset_ms"]:
             ms = r["offset_ms"]
