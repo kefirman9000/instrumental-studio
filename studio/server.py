@@ -425,22 +425,46 @@ def _pre_build(p, steps, f0, f1):
             log(f"build: second pass skipped: {e}")
 
 
-def _job_import_ref(src, kind, stem, name):
+def _job_import_ref(todo, kind, apply):
     p = S.project
-    _progress(0.1, f"Reading {name}")
-    audio = load_audio(src, p.sr)[0]
-    _progress(0.4, "Lining it up with the song" if kind == "track" else "Finding that sound in the song")
-    if kind == "track":
-        ids = p.add_reference_track(audio, stem, name)
-        what = f"the {stem}"
-    else:
-        ids, what = p.add_reference_sample(audio, name)
-    p.check_ids(ids)
+    report, all_ids, stems = [], [], set()
+    for i, (src, stem, name, use) in enumerate(todo):
+        f0 = i / len(todo)
+        _progress(0.05 + 0.85 * f0, f"Reading {name}")
+        try:
+            audio = load_audio(src, p.sr)[0]
+            _progress(0.05 + 0.85 * (f0 + 0.4 / len(todo)),
+                      f"Lining {name} up with the song" if kind == "track" else "Finding that sound in the song")
+            if kind == "track":
+                ids = p.add_reference_track(audio, stem, name, use)
+                stems.add(stem)
+                where = "where the singing damaged it" if use == "vocals" else "for the whole track"
+                report.append(f"{name}: lined up with the {stem} ({p.meta['refs'][stem]['match']:.0%} match), used {where} "
+                              f"in {len(ids)} part{'s' if len(ids) != 1 else ''}.")
+            else:
+                ids, what = p.add_reference_sample(audio, name)
+                report.append(f"{name}: matched to {what}; rebuilds {len(ids)} part{'s' if len(ids) != 1 else ''}.")
+            all_ids += ids
+        except ValueError as e:
+            report.append(f"{name}: {e}")
+    _progress(0.92, "Checking the other fixes against your clean tracks")
+    p.check_ids(all_ids)
+    others = [i for i, x in p.suggestions.items() if x["stem"] in stems and i not in all_ids
+              and x["status"] in ("pending", "accepted", "auto")]
+    p.check_ids(others)
+    misfit = [i for i in others if p.flagged(i)]
+    good = [i for i in all_ids if not p.flagged(i)]
+    if apply and good:
+        p.set_status(good, "accepted", f"Used your clean track{'s' if len(todo) != 1 else ''}")
+        report.append(f"Applied {len(good)} part{'s' if len(good) != 1 else ''}. Undo (Ctrl+Z) takes them back.")
+    elif all_ids:
+        report.append(f"Added {len(all_ids)} part{'s' if len(all_ids) != 1 else ''} to Review to hear before applying.")
+    if misfit:
+        report.append(f"{len(misfit)} other fix{'es' if len(misfit) != 1 else ''} on those instruments add sound your "
+                      f"clean track doesn't have; they're under Doesn't fit.")
     p.save()
-    S.job["result"] = {"title": "Your file is in", "new_ids": ids, "report": [
-        f"Matched \"{name}\" to {what}." if kind == "sample" else f"Lined up \"{name}\" with {what}.",
-        f"Added {len(ids)} part{'s' if len(ids) != 1 else ''} to Review to hear before applying." if ids else
-        "Nothing in the song needed it: every hit it matches is already clean."]}
+    S.job["result"] = {"title": "Your clean tracks are in" if kind == "track" else "Your sample is in",
+                       "new_ids": all_ids, "report": report}
 
 
 def _job_deep():
@@ -1035,14 +1059,22 @@ class Handler(BaseHTTPRequestHandler):
                 _start_job(_job_build, steps)
                 return self._send(200, {"ok": True})
             if path == "/api/import_ref":
-                src = os.path.realpath(str(d.get("path") or ""))
-                if not src.startswith(os.path.realpath(UPLOADS) + os.sep) or not os.path.isfile(src):
-                    return self._send(400, {"error": "That file isn't available."})
                 kind = "sample" if d.get("kind") == "sample" else "track"
-                stem = str(d.get("stem") or "")
-                if kind == "track" and stem not in self._proj().instruments:
-                    return self._send(400, {"error": "Choose which instrument it is."})
-                _start_job(_job_import_ref, src, kind, stem, os.path.basename(str(d.get("name") or src))[:80])
+                items = d.get("tracks") or [{"path": d.get("path"), "stem": d.get("stem"), "name": d.get("name"),
+                                             "use": d.get("use")}]
+                todo = []
+                for it in items[:12]:
+                    src = os.path.realpath(str(it.get("path") or ""))
+                    if not src.startswith(os.path.realpath(UPLOADS) + os.sep) or not os.path.isfile(src):
+                        return self._send(400, {"error": "That file isn't available."})
+                    stem = str(it.get("stem") or "")
+                    if kind == "track" and stem not in self._proj().instruments:
+                        return self._send(400, {"error": f"Choose which instrument {it.get('name') or 'each file'} is."})
+                    todo.append((src, stem, os.path.basename(str(it.get("name") or src))[:80],
+                                 "all" if it.get("use") == "all" else "vocals"))
+                if not todo:
+                    return self._send(400, {"error": "Choose a file."})
+                _start_job(_job_import_ref, todo, kind, bool(d.get("apply", True)))
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
                 folder = d["folder"]

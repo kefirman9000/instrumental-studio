@@ -58,8 +58,17 @@ def main():
     if k_ref:
         # a clean track of one instrument, starting a little late, as an official stem with silence trimmed would
         trim = int(1.3 * p.sr)
-        ids = step("import a clean track", lambda: p.add_reference_track(clean[k_ref][:, trim:], k_ref, "clean.wav"))
+        ids = step("import a clean track (whole track)", lambda: p.add_reference_track(clean[k_ref][:, trim:], k_ref, "clean.wav", "all"))
         print(f"       {len(ids or [])} parts")
+        ids = step("import a clean track (only where damaged)", lambda: p.add_reference_track(clean[k_ref], k_ref, "clean.wav"))
+        print(f"       {len(ids or [])} parts")
+        def checked():
+            p.set_status(ids, "accepted", "test")
+            others = [i for i, x in p.suggestions.items() if x["stem"] == k_ref and i not in ids]
+            p.check_ids(others)
+            return sum(1 for i in others if p.flagged(i))
+        r = step("check other fixes against the clean track", checked)
+        print(f"       {r} flagged")
     drum = next((k for k in p.instruments if k in p.PERCUSSIVE), None)
     if drum:
         def sample():
