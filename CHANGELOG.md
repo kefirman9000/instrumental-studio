@@ -1,5 +1,15 @@
 # What's new
 
+## 1.38.0
+
+**Fewer, clearer tools** (nothing you've done to a song is lost):
+- **Drums:** one way to repair them: odd hits by their place in the bar, from the merged best hits, plus the Grid for your own edits. The separate "learn the drum pattern" step is gone from Build (the Grid's *Add missing hits* still does it).
+- **Vinyl crackle:** one way: clean the recording (best before splitting).
+- **Cleanup:** leftover singing, "s" sounds and smart cleanup are one Build step, *Clean up leftovers*.
+- **The drag-across-the-timeline menu** shows Compare, Keep as it is and Mute up front; smoothing, clicks, rebuilding, other models, stereo sides and lowering frequencies are under *More tools*.
+- **Levels:** stereo sides and lowered frequencies are under *More level tools*.
+- **Export:** the main files up front; raw instrumental, report, tempo map, drum MIDI and declicking under *More export options*.
+
 ## 1.37.3
 
 - **No more hard cuts to silence from the build.** Parts the app mutes are now turned down 15 dB with smooth fades instead of cut off, and only stretches of 2 seconds or more (short cuts did more harm than good). Mutes you make yourself still mute fully.

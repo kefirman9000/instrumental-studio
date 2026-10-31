@@ -382,3 +382,4 @@ label.check input { margin-top: 3px; }
 .minor-toggle { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
 .adv-lists { margin-top: 14px; }
 .adv-lists > summary { cursor: pointer; color: var(--dim, #9aa3b2); margin-bottom: 8px; }
+.pop-more > summary { cursor: pointer; color: var(--dim, #9aa3b2); margin: 6px 0; font-size: 12px; }

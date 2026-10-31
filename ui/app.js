@@ -1503,7 +1503,7 @@ function renderSteps() {
     : "For vinyl rips: finds the clicks and crackle and rebuilds each from the sound around it. Drum hits and other real sharp sounds are left alone." +
       (at >= 1 ? " The song is already split: removing it from the recording splits it again; removing it from the instruments keeps your repairs." : " Best done now, before splitting.");
   $("#btnVinyl").textContent = vy ? "Remove again" : (at >= 1 ? "Remove and split again" : "Remove vinyl crackle");
-  $("#btnVinylStems").hidden = at < 1 || ov.stems.length === 0;
+  $("#btnVinylStems").hidden = true;      // one way to do it: clean the recording (best before splitting)
   const split = $("#btnSplit"), sel = $("#sepMode"), modelOk = m.installed || demo;
   const auto = $("#btnSplitAuto");
   auto.hidden = !(at < 1 && (modelOk || m.installing));

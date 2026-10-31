@@ -5076,9 +5076,6 @@ class Project:
             ("hits", "Rebuild drum hits and note starts from a blend of their cleanest copies",
              "Drums: used instead of ordinary repairs on the same hits, so nothing is filled in twice.",
              len(hits)),
-            ("pattern", "Learn the drum and bass patterns and restore hits and notes the vocals took",
-             "Only where the pattern is near-certain one belongs, the original recording has that sound there, and the "
-             "track is missing it.", len([x for x in self.instruments if x in self.PERCUSSIVE or x == "bass"])),
             ("notes", "Rebuild damaged bass notes as the notes they are",
              "Notes under the singing that came out clearly weaker are made again from clean copies of the same note "
              "elsewhere in the song (or a nearby note retuned a little).",
@@ -5087,10 +5084,11 @@ class Project:
              "Where an instrument repeats a 1-4 bar loop, copies under the singing are replaced by a merge of the clean "
              "copies. Best for electronic and loop-based music; off by default.",
              len([x for x in self.instruments if x not in NOT_REPAIRED])),
-            ("smartclean", "Smart cleanup: learn what belongs on each track and turn down the rest",
+            ("smartclean", "Clean up leftovers: learn what belongs on each track and turn down the rest",
              "Drums: anything beyond each sound's normal hit and decay. Pitched parts: what isn't at the notes being "
              "played. Loops: what the clean copies don't have. Every track: steady hiss and vinyl noise. Gentle "
-             "(at most 12 dB), mainly under the singing.", len([x for x in self.instruments if x not in NOT_REPAIRED])),
+             "(at most 12 dB), mainly under the singing. Includes the leftover-singing and \"s\" sound cleanup.",
+             len([x for x in self.instruments if x not in NOT_REPAIRED])),
             ("repairs", "Apply the repairs with a close match",
              "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
              len([x for x in pend(("repair",)) if x.get("recommended")])),
@@ -5101,7 +5099,6 @@ class Project:
             ("deep", "Second vocal-removal pass on the instruments",
              "Runs the vocal model again on each instrument (not the drums). Off by default: slow, and the notches below "
              "usually do enough.", len([k for k in self.instruments if k not in NOT_REPAIRED and k not in self.PERCUSSIVE])),
-            ("leftovers", "Remove leftover singing and \"s\" sounds", "From the instruments.", len(pend(("bleed", "ess")))),
             ("clicks", "Fix clicks and dropouts", "A few milliseconds each.", len(pend(("glitch",)))),
             ("improve", "Improve weak sections", "Every section and instrument scoring under 75 tries the alternatives (each other "
                                                 "model's split, a half-and-half blend with it, other source parts) and keeps "
@@ -5317,7 +5314,7 @@ class Project:
                         accept.add(i)
             if "smartclean" in steps:
                 for i, x in S.items():
-                    if x.get("smart") and x["status"] == "pending" and not inside_kept(x):
+                    if x["status"] == "pending" and not inside_kept(x) and (x.get("smart") or x["type"] in ("bleed", "ess")):
                         accept.add(i)
             if "clicks" in steps:
                 for i, x in S.items():
