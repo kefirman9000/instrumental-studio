@@ -298,8 +298,52 @@ def _start_job(fn, *args):
     threading.Thread(target=run, daemon=True).start()
 
 
-def _job_song(path, mode=None):
-    """Step 1 only: bring the song into a project so it can be played. Splitting comes later."""
+def _project_with_hash(digest):
+    """The folder of a song already in Songs made from the very same file (same contents), newest first."""
+    best = None
+    for d in os.listdir(PROJECTS) if os.path.isdir(PROJECTS) else []:
+        pj = os.path.join(PROJECTS, d, "project.json")
+        try:
+            with open(pj, "r", encoding="utf-8", errors="replace") as f:
+                head = f.read(65536)
+            mt = os.path.getmtime(pj)
+        except OSError:
+            continue
+        if f'"source_hash": "{digest}"' in head and (best is None or mt > best[0]):
+            best = (mt, os.path.join(PROJECTS, d))
+    return best[1] if best else None
+
+
+def _drop_upload(path):
+    """Uploaded copies are only a hand-over: once used, they're removed (with their batch folder if empty)."""
+    try:
+        if os.path.realpath(path).startswith(os.path.realpath(UPLOADS) + os.sep):
+            os.remove(path)
+            folder = os.path.dirname(path)
+            if not os.listdir(folder):
+                os.rmdir(folder)
+    except OSError:
+        pass
+
+
+def _job_song(path, mode=None, fresh=False):
+    """Step 1 only: bring the song into a project so it can be played. Splitting comes later.
+    The same file opened again opens the song you already have (with all its work), instead of a copy."""
+    _progress(0.02, "Checking your songs")
+    digest = _file_hash(path)
+    have = None if fresh else _project_with_hash(digest)
+    if have:
+        try:
+            S.project = _Project().load(have)
+            S.rev += 1
+            _drop_upload(path)
+            S.job["result"] = {"title": "Already in your songs", "report": [
+                f"\"{os.path.basename(path)}\" is the same file as \"{S.project.meta.get('name')}\" in Songs, so that song "
+                f"is open now, with everything you did to it.",
+                "To start over from scratch instead, use Start fresh in its Songs entry, or Split again."]}
+            return
+        except Exception as e:
+            log(f"couldn't open the existing song, making a new one: {e}")
     root = _slug(path)
     p = _Project()(root)
     p.meta["name"] = os.path.splitext(os.path.basename(path))[0]
@@ -308,9 +352,10 @@ def _job_song(path, mode=None):
     os.makedirs(root, exist_ok=True)
     keep = os.path.join(root, "source" + os.path.splitext(path)[1].lower())
     shutil.copyfile(path, keep)
-    p.meta["source_hash"] = _file_hash(keep)
+    p.meta["source_hash"] = digest
     p.set_original(original, sr, source=keep, progress=lambda f, m: _progress(0.2 + 0.8 * f, m))
     S.project = p
+    _drop_upload(path)
 
 
 def _split_estimates():
@@ -489,6 +534,8 @@ def _job_import_ref(todo, kind, apply, build=False):
             all_ids += ids
         except ValueError as e:
             report.append(f"{name}: {e}")
+    for src, *_ in todo:
+        _drop_upload(src)
     _progress(0.92, "Checking the other fixes against your clean tracks")
     p.check_ids(all_ids)
     others = [i for i, x in p.suggestions.items() if x["stem"] in stems and i not in all_ids
@@ -1051,7 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "path": dest, "folder": folder})
             d = self._json()
             if path == "/api/open_song":
-                _start_job(_job_song, d["path"])
+                _start_job(_job_song, d["path"], None, bool(d.get("fresh")))
                 return self._send(200, {"ok": True})
             if path == "/api/split":
                 p = self._proj()
@@ -1162,6 +1209,29 @@ class Handler(BaseHTTPRequestHandler):
                 S.rev += 1
                 S.audio_cache.clear()
                 return self._send(200, {"ok": True})
+            if path == "/api/dedupe_songs":
+                # songs made from the very same file: keep the one you worked on last, remove the other copies
+                groups = {}
+                for dname in os.listdir(PROJECTS) if os.path.isdir(PROJECTS) else []:
+                    pj = os.path.join(PROJECTS, dname, "project.json")
+                    try:
+                        with open(pj, "r", encoding="utf-8", errors="replace") as f:
+                            m_ = re.search(r'"source_hash": "([0-9a-f]+)"', f.read(65536))
+                        if m_:
+                            groups.setdefault(m_.group(1), []).append((os.path.getmtime(pj), dname))
+                    except OSError:
+                        continue
+                cur = os.path.realpath(S.project.root) if S.project else None
+                removed = []
+                for items in groups.values():
+                    items.sort(reverse=True)
+                    keep_ = next((dn for _, dn in items if os.path.realpath(os.path.join(PROJECTS, dn)) == cur), items[0][1])
+                    for _, dn in items:
+                        if dn != keep_:
+                            shutil.rmtree(os.path.join(PROJECTS, dn), ignore_errors=True)
+                            _project_meta.pop(os.path.join(PROJECTS, dn), None)
+                            removed.append(dn)
+                return self._send(200, {"ok": True, "removed": removed, "projects": list_projects()})
             if path == "/api/delete_project":
                 pid = os.path.basename(str(d.get("id") or ""))
                 if pid in ("", ".", ".."):

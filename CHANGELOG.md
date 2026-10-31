@@ -1,5 +1,11 @@
 # What's new
 
+## 1.30.2
+
+- **No more duplicate songs.** Opening or dropping a file that's already in Songs (same contents, whatever its name) opens that song with all your work, instead of making another copy.
+- **Remove duplicate songs** (Troubleshooting and reset): cleans up copies made before this update, keeping the one you worked on last.
+- Uploaded files are removed once they've been brought into the song (they were piling up in the uploads folder).
+
 ## 1.30.1
 
 - **Drag and drop clean stems, loops and samples.** With a split song open, drop files anywhere on the window: the clean stems window opens with them listed and works out what each one is. Drop more onto that window to add them. Hold Shift while dropping to open a new song instead.
