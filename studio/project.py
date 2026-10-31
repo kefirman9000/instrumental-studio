@@ -1005,7 +1005,7 @@ class Project:
         cache = self.__dict__.setdefault("_refs", {})
         if k not in cache:
             try:
-                cache[k] = np.load(self._ref_path(k), mmap_mode="r")
+                cache[k] = np.load(self._ref_path(k))          # read whole: a mapped file can't be replaced on Windows
             except (OSError, ValueError):
                 return None
         return cache[k]
@@ -1209,8 +1209,19 @@ class Project:
             mq = vq if vq.sum() > sr else np.ones(n, bool)
             g_all = float(np.clip(np.sqrt(float((raw[:, mq] ** 2).mean()) / (float((ref[:, mq] ** 2).mean()) + 1e-12)), 0.1, 10))
             os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
-            np.save(self._ref_path(k), (ref * g_all).astype(np.float16))
-            self.__dict__.setdefault("_refs", {}).pop(k, None)
+            self.__dict__.setdefault("_refs", {}).pop(k, None)     # let go of the old copy before replacing it
+            import gc
+            gc.collect()
+            tmp = self._ref_path(k) + ".new.npy"
+            np.save(tmp, (ref * g_all).astype(np.float16))
+            for _ in range(5):
+                try:
+                    os.replace(tmp, self._ref_path(k))
+                    break
+                except OSError:
+                    time.sleep(0.3)
+            else:
+                raise RuntimeError("Couldn't save the clean track (the old copy is in use). Restart the app and add it again.")
             self.display.get("raw", {}).pop(f"ref:{k}", None)
             for rid in [i for i, x in self.suggestions.items() if i.startswith(f"ref_{k}_")]:
                 self.suggestions.pop(rid, None)
