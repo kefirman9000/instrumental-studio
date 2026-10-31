@@ -4305,16 +4305,52 @@ class Project:
         return path
 
     # ------------------------------------------------------------------ samples: hits, notes and loops
+    _last_merge = (1, 1)          # (copies used, copies offered) by the last _merge_clips call, for labels
+
     @staticmethod
-    def _merge_clips(clips):
-        """Blend equal-length clips into one: per-frequency median of their levels (so noise in any one
-        drops out), with the timing and attack of the first (cleanest) one."""
+    def _merge_clips(clips, keep_attack=0.02):
+        """The best version of a sound from several copies (the first is the cleanest by the caller's ranking):
+          - every copy is scored by how far it strays from what the copies agree on (singing, noise or a
+            different strike show up as straying); copies clearly worse than the best are left out,
+          - if only the cleanest is left, it's used on its own, untouched,
+          - otherwise the good ones are merged, the better ones counting more, and the attack (first 20 ms)
+            stays the cleanest copy's, so hits keep their snap; only the body and decay are merged."""
+        n = clips[0].shape[1]
+        clips = [np.asarray(c[:, :n], np.float32) for c in clips if c.shape[1] >= n]
+        if len(clips) < 2:
+            Project._last_merge = (1, 1)
+            return clips[0].copy()
+        mono = [stft(c.mean(0)) for c in clips]
+        L = np.log(np.stack([np.abs(x) for x in mono]) + 1e-6)
+        cons = np.median(L, axis=0)
+        w_ = np.exp(cons - cons.max())                    # judge where there's sound, not in the silence
+        dev = np.array([float((np.abs(l - cons) * w_).sum() / (w_.sum() + 1e-9)) for l in L])
+        best = float(dev[0]) if dev[0] <= dev.min() * 1.15 else float(dev.min())
+        good = [i for i in range(len(clips)) if dev[i] <= max(best * 1.3, 1e-6)]
+        if 0 not in good:
+            good = [0] + good
+        if len(good) == 1:
+            Project._last_merge = (1, len(clips))
+            return clips[0].copy()
+        wts = np.array([1.0 / (dev[i] + 1e-3) for i in good])
+        wts /= wts.sum()
         out = np.zeros_like(clips[0])
         for ch in range(clips[0].shape[0]):
-            X = [stft(c[ch]) for c in clips]
-            mag = np.median(np.stack([np.abs(x) for x in X]), axis=0) if len(X) > 2 else np.mean([np.abs(x) for x in X], axis=0)
-            out[ch] = istft(mag * np.exp(1j * np.angle(X[0])), clips[0].shape[1])
+            X = [stft(clips[i][ch]) for i in good]
+            logm = sum(w * np.log(np.abs(x) + 1e-9) for w, x in zip(wts, X))     # weighted, in level terms
+            out[ch] = istft(np.exp(logm) * np.exp(1j * np.angle(X[0])), n)
+        a = int(keep_attack * 44100)                      # the cleanest copy's attack, then crossfade
+        if a and n > 3 * a:
+            f = np.ones(n, np.float32)
+            f[:a] = 0
+            f[a:2 * a] = np.linspace(0, 1, a)
+            out = clips[0] * (1 - f) + out * f
+        Project._last_merge = (len(good), len(clips))
         return out
+
+    def _merge_label(self):
+        used, total = Project._last_merge
+        return "cleanest copy (the others were worse)" if used == 1 else f"merged from {used} good copies"
 
     def _sample_ready(self, y):
         y = np.asarray(y, np.float32).copy()
@@ -4475,7 +4511,8 @@ class Project:
                         if q0 >= 0 and q0 + best.shape[1] <= x.shape[1]:
                             clips.append(x[:, q0:q0 + best.shape[1]])
                     if len(clips) >= 2:
-                        put(f"Hits - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
+                        y_ = self._merge_clips(clips)
+                        put(f"Hits - {k}", f"{label} - {self._merge_label()}", y_)
 
         # 2b. pitched instruments: whole notes (to where they really end) and the short phrases they repeat
         try:
@@ -4513,7 +4550,8 @@ class Project:
                         clips = [x[:, a0:b0]] + [x[:, max(0, int(pos[i]) - pre):max(0, int(pos[i]) - pre) + L]
                                                  for i in idx if i != best and int(pos[i]) - pre + L <= x.shape[1]][:4]
                         if len(clips) >= 2:
-                            put(f"Notes - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
+                            y_ = self._merge_clips(clips)
+                            put(f"Notes - {k}", f"{label} - {self._merge_label()}", y_)
                 # phrases: the same few notes in the same rhythm, repeated (shorter than a bar is fine)
                 bt = np.asarray(self.beat_times, float)
                 seq = []
@@ -4561,7 +4599,8 @@ class Project:
                             xi = np.linspace(0, c.shape[1] - 1, p1 - p0)
                             clips.append(np.stack([np.interp(xi, np.arange(c.shape[1]), c[ch]) for ch in range(c.shape[0])]).astype(np.float32))
                         if len(clips) >= 2:
-                            put(f"Phrases - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
+                            y_ = self._merge_clips(clips)
+                            put(f"Phrases - {k}", f"{label} - {self._merge_label()}", y_)
         except Exception as e:
             log(f"samples: notes and phrases skipped: {e}")
 
@@ -4588,8 +4627,8 @@ class Project:
                     if raw:
                         put(f"Repeating samples - {src}", f"{label} - cleanest", loop_ready(self._loop_audio(y, g, False)), shape=False)
                     if merged and len(g["members"]) >= 2:
-                        put(f"Repeating samples - {src}", f"{label} - merged from {min(5, len(g['members']))}",
-                            loop_ready(self._loop_audio(y, g, True)), shape=False)
+                        y_ = loop_ready(self._loop_audio(y, g, True))
+                        put(f"Repeating samples - {src}", f"{label} - {self._merge_label()}", y_, shape=False)
         except Exception as e:
             log(f"samples: repeating samples skipped: {e}")
         return written
