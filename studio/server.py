@@ -340,7 +340,7 @@ def _job_song(path, mode=None, fresh=False):
             S.job["result"] = {"title": "Already in your songs", "report": [
                 f"\"{os.path.basename(path)}\" is the same file as \"{S.project.meta.get('name')}\" in Songs, so that song "
                 f"is open now, with everything you did to it.",
-                "To start over from scratch instead, use Start fresh in its Songs entry, or Split again."]}
+                "To start over from scratch, use Split again (step 2)."]}
             return
         except Exception as e:
             log(f"couldn't open the existing song, making a new one: {e}")
