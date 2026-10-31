@@ -1,5 +1,11 @@
 # What's new
 
+## 1.24.0
+
+- **Samples are whole loops now, not tiny bits.** Export samples finds what repeats at the length it really repeats at: 1, 2 or 4 bars, always starting on the bar, from the whole instrumental and from each instrument. Rhythm and harmony both have to match (so a chord change makes it a 2- or 4-bar loop), and a loop made of two identical halves is reported at the shorter length. Each comes as the cleanest copy and as a merge of the cleanest copies, named with its length, how often it repeats, the tempo, and where it first plays.
+- Pitched parts are no longer exported as split-second "repeated note" clips; drum one-shots stay (only the prominent ones).
+- **Blend for repeated bars.** Damaged repeats of a bar can now be rebuilt from a merge of the cleanest repeats (per-frequency median, so a trace of singing or a click that's in only one copy drops out): a Blend button on each repeated bar, **Blend all** in its header, and Build the best instrumental uses the blend whenever there are 3 or more clean repeats.
+
 ## 1.23.4
 
 - **Use my graphics card works when Windows sees an NVIDIA card but NVIDIA's own check tool doesn't answer.** The app relied only on that tool (nvidia-smi) to spot an NVIDIA card; now it also asks Windows which cards are installed. If there's an NVIDIA one, it installs the graphics-card version of PyTorch and then tests the card with a real calculation, so it only says it's done when splitting really can use the card.

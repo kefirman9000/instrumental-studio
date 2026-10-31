@@ -88,6 +88,14 @@ def main():
     step("quality scores", p.quality)
     step("leftover map", lambda: p.leftover_map(lazy=False))
     step("drum pattern", p.make_pattern_hits)
+    def blend_bars():
+        gs = p.best_bars()
+        if not gs:
+            return "no repeated bars"
+        g = gs[0]
+        return p.make_bars(g["stem"], g["best"], g["damaged"], g["members"], blend=True)
+    step("blend repeated bars", blend_bars)
+    step("find repeating samples", lambda: [len(p.find_loops(p.render_stem(k), drums=k in p.PERCUSSIVE)) for k in p.instruments])
     step("undo", p.undo)
     step("save and load", lambda: (p.save(), Project.load(p.root)))
     out = os.path.join(root, "export")

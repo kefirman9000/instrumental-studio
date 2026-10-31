@@ -1915,6 +1915,134 @@ class Project:
                 ids.append(sid)
             return ids
 
+    # ------------------------------------------------------------------ repeating samples of any length
+    LOOP_SIM = 0.88            # how alike two copies must be to count as the same sample
+    LOOP_LENGTHS = (1, 2, 4)          # a sample is at least a whole bar (single hits are exported separately)
+
+    def _beat_chroma(self, y):
+        """Pitch-class content (n_beats, 12) of a signal, per beat, 80 Hz to 5 kHz."""
+        x = np.asarray(y, np.float32)
+        x = x.mean(0) if x.ndim == 2 else x
+        f = np.fft.rfftfreq(N_FFT, 1 / self.sr)
+        ok = (f >= 80) & (f <= 5000)
+        pc = np.round(12 * np.log2(np.where(ok, f, 440) / 440.0)).astype(int) % 12
+        M = np.zeros((12, len(f)), np.float32)
+        M[pc[ok], np.flatnonzero(ok)] = 1
+        bt = np.asarray(self.beats, int)
+        win = np.hanning(N_FFT).astype(np.float32)
+        out = np.zeros((max(0, len(bt) - 1), 12), np.float32)
+        for j in range(len(bt) - 1):
+            a, b = bt[j] * HOP, bt[j + 1] * HOP
+            fr = np.arange(a, max(a + 1, b - N_FFT), N_FFT // 2)[:8]
+            seg = [x[t:t + N_FFT] for t in fr if t + N_FFT <= len(x)]
+            if not seg:
+                continue
+            S = np.abs(np.fft.rfft(np.stack(seg) * win, axis=1)).mean(0)
+            c = M @ S
+            out[j] = c / (np.linalg.norm(c) + 1e-9)
+        return out
+
+    def _quarter_beat_feats(self, y):
+        """Log band levels per quarter beat (n_beats*4, bands) of a (2, n) or mono signal."""
+        x = np.asarray(y, np.float32)
+        x = x.mean(0) if x.ndim == 2 else x
+        E = np.log(VF.band_energy(x, self.B) + 1e-9)          # (bands, frames at HOP)
+        bt = np.asarray(self.beats, float)
+        if len(bt) < 2:
+            return np.zeros((0, E.shape[0]), np.float32)
+        q = np.concatenate([np.linspace(bt[j], bt[j + 1], 5)[:-1] for j in range(len(bt) - 1)] + [bt[-1:]])
+        idx = np.clip(np.round(q).astype(int), 0, E.shape[1] - 1)
+        out = np.stack([E[:, idx[i]:max(idx[i] + 1, idx[i + 1])].mean(1) for i in range(len(idx) - 1)])
+        return out.astype(np.float32)
+
+    def find_loops(self, y, min_count=3, limit=6, drums=False):
+        """Repeating samples in `y` (an instrument or the whole instrumental), at the length they really repeat
+        at: 1, 2 or 4 bars, always starting on the bar. A 2-bar loop whose two halves
+        are the same is reported as a 1-bar loop, so the length is the true one, never a single hit.
+        Returns [{"beats": (b0, b1) of the cleanest copy, "len_bars", "members": [(b0, b1)...] cleanest first,
+        "count"}]."""
+        if not len(self.windows):
+            return []
+        Q = self._quarter_beat_feats(y)
+        Cb = None if drums else self._beat_chroma(y)
+        full = max(L for _, L in self.windows)
+        va = np.asarray(self.VA, float) if len(self.VA) else np.zeros(len(self.beats))
+        lev = Q.mean(1)
+        floor = np.percentile(lev, 60) - np.log(10 ** 1.5)   # 15 dB under the usual level counts as not playing
+
+        def feat(b0, b1):
+            X = Q[b0 * 4:b1 * 4]
+            X = X - X.mean(0, keepdims=True)
+            v = X.ravel()
+            v = v / (np.linalg.norm(v) + 1e-9)
+            if Cb is None:
+                return v
+            c = Cb[b0:b1].ravel()
+            c = c - c.mean()
+            c = c / (np.linalg.norm(c) + 1e-9)
+            return np.concatenate([v, c]) / np.sqrt(2)          # rhythm and harmony count the same
+
+        bar_starts = [s for s, L in self.windows if L == full]
+        out, covered = [], set()
+        for m in self.LOOP_LENGTHS:
+            nb = int(round(m * full))
+            if nb < 2:
+                continue
+            starts = []
+            for s in bar_starts:
+                starts.append(s)
+            units = [(s, s + nb) for s in starts if s + nb < len(self.beats) and s + nb <= len(Q) // 4]
+            units = [u for u in units if lev[u[0] * 4:u[1] * 4].mean() > floor]
+            if len(units) < min_count:
+                continue
+            V = np.stack([feat(*u) for u in units])
+            S = V @ V.T
+            clean = np.array([va[u[0]:u[1]].mean() if u[1] <= len(va) else 1.0 for u in units])
+            used = np.zeros(len(units), bool)
+            for i in np.argsort(clean):
+                if used[i]:
+                    continue
+                cand = [j for j in np.argsort(-S[i]) if S[i, j] >= self.LOOP_SIM and not used[j]]
+                members = []
+                for j in sorted(cand, key=lambda j: clean[j]):
+                    if all(units[j][1] <= units[k][0] or units[j][0] >= units[k][1] for k in members):
+                        members.append(j)
+                need = 2 if m >= 4 else min_count
+                if len(members) < need:
+                    continue
+                b0, b1 = units[members[0]]
+                # the true length: if both halves of the cleanest copy are the same, a shorter loop covers it
+                h = (b1 - b0) // 2
+                if m > 1 and h >= 2 and float(feat(b0, b0 + h) @ feat(b0 + h, b1)) >= self.LOOP_SIM:
+                    used[members] = True
+                    continue
+                if sum(1 for j in members if units[j][0] in covered) > len(members) // 2:
+                    used[members] = True                    # already exported as part of a shorter loop's run
+                    continue
+                used[members] = True
+                for j in members:
+                    covered.update(range(units[j][0], units[j][1]))
+                out.append({"beats": (b0, b1), "len_bars": m, "count": len(members),
+                            "members": [units[j] for j in members]})
+        out.sort(key=lambda g: -(g["count"] * g["len_bars"]))
+        return out[:limit]
+
+    def _loop_audio(self, y, g, merged, n_merge=5):
+        """The cleanest copy of a loop, or a merge of its cleanest copies (each stretched to the same length)."""
+        a, b = int(self.beats[g["beats"][0]] * HOP), int(self.beats[g["beats"][1]] * HOP)
+        best = y[:, a:b]
+        if not merged or len(g["members"]) < 2:
+            return best
+        clips = [best]
+        for b0, b1 in g["members"][1:n_merge]:
+            av, bv = int(self.beats[b0] * HOP), int(self.beats[b1] * HOP)
+            c = y[:, av:bv]
+            if c.shape[1] < 64:
+                continue
+            xi = np.linspace(0, c.shape[1] - 1, best.shape[1])
+            clips.append(np.stack([np.interp(xi, np.arange(c.shape[1]), c[ch]) for ch in range(c.shape[0])]).astype(np.float32))
+        return self._merge_clips(clips) if len(clips) >= 2 else best
+
     # ------------------------------------------------------------------ best bars (riffs and patterns that repeat)
     def _bar_cover(self, k, wi):
         F, C, R = self.stem_feats[k]
@@ -1959,14 +2087,26 @@ class Project:
                                 "status": existing["status"] if existing else None})
         return out
 
-    def make_bars(self, k, best_w, damaged):
-        """Offer to replace the damaged repeats of a bar with its cleanest repeat (beat-aligned, level-matched)."""
+    def make_bars(self, k, best_w, damaged, members=None, blend=False):
+        """Offer to replace the damaged repeats of a bar with its cleanest repeat (beat-aligned, level-matched).
+        blend=True: with a merge of the cleanest repeats instead (per-frequency median, so what's in only one
+        copy, like a trace of singing, drops out)."""
         with self.lock:
             raw = self.stems[k]
             n = raw.shape[1]
             src_audio = self.render_stem(k)
             F, C, R = self.stem_feats[k]
             sb, Lb = self.windows[best_w]
+            clean_m = [v for v in (members or []) if v not in damaged and self.windows[v][1] == Lb]
+            n_blend = 0
+            if blend and len(clean_m) >= 2:
+                ba, bb = self._window_samples(sb, Lb)
+                g = {"beats": (sb, sb + Lb), "members": [(self.windows[v][0], self.windows[v][0] + Lb)
+                                                         for v in [best_w] + [v for v in clean_m if v != best_w]]}
+                ref = self._loop_audio(src_audio, g, True, self.BLEND_HITS)
+                src_audio = src_audio.copy()
+                src_audio[:, ba:ba + ref.shape[1]] = ref
+                n_blend = min(self.BLEND_HITS, len(g["members"]))
             starts = [self._window_samples(*self.windows[v]) for v in damaged]
             a = max(0, min(x[0] for x in starts) - XFADE)
             b = min(n, max(x[1] for x in starts) + XFADE)
@@ -1990,11 +2130,12 @@ class Project:
             self.suggestions[sid] = {
                 "id": sid, "type": "bars", "stem": k, "status": "pending",
                 "start": starts[0][0] / self.sr, "end": starts[-1][1] / self.sr, "section": self._section_of(starts[0][0] / self.sr),
-                "conf": 1.0, "severity": 0.0, "strength": 1.0, "bars": [int(v) for v in damaged],
+                "conf": 1.0, "severity": 0.0, "strength": 1.0, "bars": [int(v) for v in damaged], "blend": bool(n_blend),
+                "members": [int(v) for v in (members or [])],
                 "donors": [{"beat": int(sb), "start": t_best, "end": self.beat_times[sb + Lb], "section": self._section_of(t_best),
                             "match": 1.0, "vocal_overlap": 0.0}],
-                "note": f"Replaces {len(damaged)} damaged repeat{'s' if len(damaged) != 1 else ''} of this {k} bar with its "
-                        f"cleanest repeat, at {t_best:.1f}s"}
+                "note": f"Replaces {len(damaged)} damaged repeat{'s' if len(damaged) != 1 else ''} of this {k} bar with "
+                        + (f"a merge of its {n_blend} cleanest repeats" if n_blend else f"its cleanest repeat, at {t_best:.1f}s")}
             self.patches[sid] = (a, (acc - raw[:, a:b] * W[None, :]).astype(np.float16))
             self.take_w[sid] = (a, W.astype(np.float16))
             return sid
@@ -2078,8 +2219,8 @@ class Project:
                     ids += self.make_hits(h["stem"], h["sound"], blend=blend)
         if kind in ("all", "bars"):
             for g in self.best_bars():
-                if not g["status"]:
-                    ids.append(self.make_bars(g["stem"], g["best"], g["damaged"]))
+                if not g["status"] or (blend and g["status"] != "rejected"):
+                    ids.append(self.make_bars(g["stem"], g["best"], g["damaged"], g["members"], blend=blend))
         self.check_ids(ids)
         good = [i for i in ids if not self.flagged(i)]          # ones that don't fit wait in Review
         if accept and good:
@@ -3160,6 +3301,8 @@ class Project:
                 log(f"samples: hits skipped for {k}: {e}")
                 continue
             x = self.stems[k]
+            if not perc:
+                continue          # pitched parts are exported as repeating samples of a half bar or more (below)
             cand = [snd for snd in sd["sounds"] if snd["count"] >= self.SAMPLE_MIN_COUNT]
             if not cand:
                 continue
@@ -3191,32 +3334,23 @@ class Project:
                     if len(clips) >= 2:
                         put(f"Hits - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
 
-        # 3. riffs that really repeat
-        per = {}
-        for g in sorted(self.best_bars(), key=lambda g: -g["count"]):
-            if g["count"] < 4 or per.get(g["stem"], 0) >= 4:
-                continue
-            per[g["stem"]] = per.get(g["stem"], 0) + 1
-            k, members = g["stem"], g.get("members") or [g["best"]]
-            s0, L = self.windows[members[0]]
-            a, b = self._window_samples(s0, L)
-            best = self.stems[k][:, a:b]
-            secn = self.sections[self._section_of(a / self.sr)]["name"] if self.sections else ""
-            label = f"riff {per[k]} - repeats {g['count']}x{tempo} ({secn}, {ts(g['best_time'])})"
-            if raw:
-                put(f"Riffs - {k}", f"{label} - cleanest", best)
-            if merged and len(members) >= 2:
-                clips = [best]
-                for v in members[1:self.BLEND_HITS]:
-                    sv, Lv = self.windows[v]
-                    av, bv = self._window_samples(sv, Lv)
-                    c = self.stems[k][:, av:bv]
-                    if c.shape[1] < 64:
-                        continue
-                    xi = np.linspace(0, c.shape[1] - 1, best.shape[1])   # same length as the cleanest bar
-                    clips.append(np.stack([np.interp(xi, np.arange(c.shape[1]), c[ch]) for ch in range(c.shape[0])]).astype(np.float32))
-                if len(clips) >= 2:
-                    put(f"Riffs - {k}", f"{label} - merged from {len(clips)}", self._merge_clips(clips))
+        # 3. repeating samples at their true length (1 to 4 bars), from the whole instrumental and
+        #    from each instrument: the cleanest copy and a merge of the cleanest copies
+        try:
+            srcs = [("full instrumental", self.mix("repaired"))] + [(k, self.render_stem(k)) for k in self.instruments]
+            for src, y in srcs:
+                for li, g in enumerate(self.find_loops(y, drums=src in self.PERCUSSIVE)):
+                    t = self.beat_times[g["beats"][0]]
+                    secn = self.sections[self._section_of(t)]["name"] if self.sections else ""
+                    ln = {0.5: "half bar", 1: "1 bar"}.get(g["len_bars"], f"{g['len_bars']} bars")
+                    label = f"{chr(65 + li)} - {ln} - repeats {g['count']}x{tempo} ({secn}, {ts(t)})"
+                    if raw:
+                        put(f"Repeating samples - {src}", f"{label} - cleanest", loop_ready(self._loop_audio(y, g, False)), shape=False)
+                    if merged and g["count"] >= 2:
+                        put(f"Repeating samples - {src}", f"{label} - merged from {min(5, g['count'])}",
+                            loop_ready(self._loop_audio(y, g, True)), shape=False)
+        except Exception as e:
+            log(f"samples: repeating samples skipped: {e}")
         return written
 
     # ------------------------------------------------------------------ build the best instrumental
@@ -3336,7 +3470,8 @@ class Project:
                 for g in self.best_bars():
                     if not g["status"]:
                         try:
-                            self.make_bars(g["stem"], g["best"], g["damaged"])
+                            self.make_bars(g["stem"], g["best"], g["damaged"], g["members"],
+                                           blend=len(g["members"]) - len(g["damaged"]) >= 3)
                         except Exception as e:
                             log(f"build: repeated bars skipped: {e}")
             progress(0.25, "Rebuilding hits and note starts")

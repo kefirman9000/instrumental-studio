@@ -1157,7 +1157,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/hits":
                     ids = p.make_hits(d["stem"], int(d["sound"]), blend=bool(d.get("blend", False)))
                 elif path == "/api/bars":
-                    ids = [p.make_bars(d["stem"], int(d["best"]), [int(v) for v in d["damaged"]])]
+                    ids = [p.make_bars(d["stem"], int(d["best"]), [int(v) for v in d["damaged"]],
+                                       [int(v) for v in d.get("members") or []], blend=bool(d.get("blend", False)))]
                 else:
                     ids = p.clean_up(float(d["start"]), float(d["end"]))
                 p.check_ids(ids)

@@ -105,8 +105,8 @@ Export can add a **tempo map and section markers** (a MIDI tempo map that follow
 
 **Export** (or **Export samples** in the Repairability tab) can also save the song's reusable pieces, with context:
 - **Loops:** the cleanest 4-bar and 2-bar phrase of each kind of section (Verse, Chorus...), starting on the bar, from the finished instrumental and from each instrument, named with the section and tempo.
-- **Hits and notes:** only sounds that are a real part of the song (played often, among the loudest on their track), as the cleanest copy and a merge of the cleanest copies.
-- **Riffs:** patterns that repeat at least 4 times.
+- **Repeating samples:** anything that repeats, at the length it really repeats at (1, 2 or 4 bars, starting on the bar), from the whole instrumental and from each instrument. Rhythm and harmony both have to match, and a 2-bar loop whose halves are the same counts as a 1-bar loop. Each comes as the cleanest copy and a merge of the cleanest copies.
+- **Drum one-shots:** only drum sounds that are a real part of the song (played often, among the loudest on the track).
 
 ### Your own clean tracks and samples
 
