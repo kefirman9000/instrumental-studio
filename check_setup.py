@@ -48,7 +48,10 @@ def ask(q, default=True):
 
 
 def has(mod):
-    importlib.invalidate_caches()
+    try:
+        importlib.invalidate_caches()
+    except Exception:
+        pass
     try:
         return importlib.util.find_spec(mod) is not None
     except (ImportError, ValueError):

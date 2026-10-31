@@ -1,5 +1,12 @@
 # What's new
 
+## 1.30.4
+
+- **Fix: splitting the drums (kick, snare, toms, cymbals) crashed** when the graphics card couldn't run it. Helpers now only use the card when it really works, and anything that fails on the card runs again on the processor.
+- **Fix: adding a clean track a second time failed** ("Invalid argument" when saving): the old copy was still held open. It's let go first, and the new one is written safely.
+- **Fix: Use my graphics card on RTX 50 cards.** A PyTorch that sees the card but can't run on it was taken as working, so the right version was never installed. It now counts as broken and gets replaced (and newer drivers' "CUDA UMD Version" is read correctly). Click **Use my graphics card** once more.
+- Fix: a Python 3.13 pre-release bug could stop the model check (and skip bringing back details); it's now harmless.
+
 ## 1.30.3
 
 - Wording fix in the message shown when a song you open is already in Songs.
