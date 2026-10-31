@@ -1,5 +1,9 @@
 # What's new
 
+## 1.30.3
+
+- Wording fix in the message shown when a song you open is already in Songs.
+
 ## 1.30.2
 
 - **No more duplicate songs.** Opening or dropping a file that's already in Songs (same contents, whatever its name) opens that song with all your work, instead of making another copy.
