@@ -1,5 +1,10 @@
 # What's new
 
+## 1.35.1
+
+- **Fix: songs (and their samples folder) could be named "source".** Choosing the app's own copy of a song (the *source* file inside a project folder) now names it after the song; Extract samples also renames such songs.
+- **Samples only use the original recording where there's truly no singing** (the vocal track, backing vocals and reverb tails 45 dB down); otherwise they come from the cleaned instrumental.
+
 ## 1.35.0
 
 **Smart cleanup** (a new Build step, on by default): the app learns what belongs on each track from the rest of the song and turns down the rest, gently (at most 12 dB, never a hard mute), mainly under the singing.

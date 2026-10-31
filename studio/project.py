@@ -4322,6 +4322,22 @@ class Project:
         pk = float(np.abs(y).max())
         return y * (0.89 / pk) if pk > 1e-6 else y          # -1 dB peak
 
+    def _truly_instrumental(self, a, b):
+        """No singing at all in [a, b): the vocal track (and backing vocals, reverb tails) 45 dB under its usual
+        level, so the original recording there is a clean instrumental."""
+        v = np.asarray(self.stems["vocals"][:, a:b], np.float32)
+        if "backing_vocals" in self.stems:
+            v = v + np.asarray(self.stems["backing_vocals"][:, a:b], np.float32)
+        if v.shape[1] < 64:
+            return False
+        ref = self.__dict__.get("_voc_loud")
+        if ref is None:
+            x = np.asarray(self.stems["vocals"], np.float32).mean(0)
+            blk = x[:len(x) // 4096 * 4096].reshape(-1, 4096)
+            ref = self.__dict__["_voc_loud"] = float(np.percentile((blk ** 2).mean(1), 95)) + 1e-12
+        blk = v.mean(0)[:v.shape[1] // 2048 * 2048].reshape(-1, 2048)
+        return bool(len(blk)) and float((blk ** 2).mean(1).max()) < ref * 10 ** (-45 / 10)
+
     SAMPLE_MIN_COUNT = 6       # a hit or note must repeat this often to count as a real part of the song
     SAMPLE_PER_STEM = 6        # at most this many hit/note samples per instrument (the most prominent ones)
 
@@ -4401,7 +4417,7 @@ class Project:
                     for kind, a, b, t in self._phrase_loops(bars):
                         base = f"{kind} - {bars} bars{tempo} (from {ts(t)})"
                         # nobody sings here: the original recording is the cleanest version there is
-                        src_ = self.original if float(vc_all[a:b].max()) < 0.05 else full
+                        src_ = self.original if self._truly_instrumental(a, b) else full
                         put("Loops - full instrumental", base, loop_ready(src_[:, a:b] * g), shape=False)
                         for k, y in tracks.items():
                             seg = y[:, a:b]
@@ -4557,8 +4573,8 @@ class Project:
                     if not clean:
                         continue                      # every copy has singing over it: not a clean sample
                     groups.append({**g, "members": clean, "beats": clean[0]})
-                if src == "full instrumental":
-                    y = self.original               # the copies chosen have no singing: use the real recording
+                if src == "full instrumental" and groups and all(self._truly_instrumental(*[int(self.beats[q] * HOP) for q in g["beats"]]) for g in groups):
+                    y = self.original               # the copies chosen have no singing at all: use the real recording
                 for li, g in enumerate(groups):
                     t = self.beat_times[g["beats"][0]]
                     secn = self.sections[self._section_of(t)]["name"] if self.sections else ""

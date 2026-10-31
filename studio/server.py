@@ -344,9 +344,18 @@ def _job_song(path, mode=None, fresh=False):
             return
         except Exception as e:
             log(f"couldn't open the existing song, making a new one: {e}")
-    root = _slug(path)
+    nice_name = os.path.splitext(os.path.basename(path))[0]
+    if nice_name.lower() == "source":
+        # the app's own copy of a song ("source.mp3" inside a project folder): name it after that song instead
+        try:
+            with open(os.path.join(os.path.dirname(path), "project.json"), "r", encoding="utf-8", errors="replace") as f:
+                m_ = re.search(r'"name": "([^"]+)"', f.read(65536))
+            nice_name = m_.group(1) if m_ else os.path.basename(os.path.dirname(path)) or nice_name
+        except OSError:
+            nice_name = os.path.basename(os.path.dirname(path)) or nice_name
+    root = _slug(nice_name)
     p = _Project()(root)
-    p.meta["name"] = os.path.splitext(os.path.basename(path))[0]
+    p.meta["name"] = nice_name
     _progress(0.05, "Loading song")
     original, sr = load_audio(path)
     os.makedirs(root, exist_ok=True)
@@ -652,7 +661,11 @@ def _job_extract(path, project_id, kind, mode):
     if p.stage != "detected":
         p.detect(lambda f, m: _progress(None if f is None else 0.86 + 0.08 * f, f"Finding the hits and loops: {m}"))
     _progress(0.95, "Saving the samples")
-    name = re.sub(r"[^\w\- ()]", "", p.meta.get("name", "song")) or "song"
+    nm = p.meta.get("name", "song")
+    if str(nm).lower() == "source":
+        nm = os.path.basename(p.root.rstrip("/\\")) or "song"
+        p.meta["name"] = nm
+    name = re.sub(r"[^\w\- ()]", "", nm) or "song"
     folder = os.path.join(EXPORTS, name, f"{name} - samples")
     what = (["samples_raw"] if kind in ("single", "both") else []) + (["samples_merged"] if kind in ("merged", "both") else [])
     files = p.export_samples(folder, raw="samples_raw" in what, merged="samples_merged" in what)
