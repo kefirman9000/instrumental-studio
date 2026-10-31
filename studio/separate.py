@@ -48,12 +48,25 @@ def models_dir():
     return os.path.join(HOME, "models")
 
 
-def _run_extra(args, progress, frac0, frac1, label):
+def _child_env():
+    """Helpers see the graphics card only when it really works; otherwise (a PyTorch build that can't run on
+    it) they're told there's none, so they use the processor instead of failing."""
+    env = dict(os.environ)
+    try:
+        if device_info()[0] != "cuda":
+            env["CUDA_VISIBLE_DEVICES"] = ""
+    except Exception:
+        pass
+    return env
+
+
+def _run_extra(args, progress, frac0, frac1, label, _retry=True):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cmd = [sys.executable, "-m", "studio.extra_worker"] + args
     log("Running: " + " ".join(cmd))
     progress(frac0, label + " (the model downloads the first time)")
-    p = proc.popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    env = _child_env()
+    p = proc.popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
     tail = []
     for chunk in proc.lines(p, what=label):
         for line in re.split(r"[\r\n]", chunk):
@@ -65,6 +78,11 @@ def _run_extra(args, progress, frac0, frac1, label):
                 progress(frac0 + (frac1 - frac0) * int(m.group(1)) / 100.0, label)
     p.wait()
     if p.returncode != 0:
+        if _retry and "CUDA" in "\n".join(tail) and env.get("CUDA_VISIBLE_DEVICES") != "":
+            log(f"{label}: the graphics card failed, running it again on the processor")
+            global _DEVICE
+            _DEVICE = ("cpu", "CPU (the graphics card didn't run this)")
+            return _run_extra(args, progress, frac0, frac1, label, _retry=False)
         raise RuntimeError(label + " failed:\n" + "\n".join(tail[-12:]))
 
 
@@ -141,7 +159,7 @@ def _run_model(wav_path, model, outdir, progress, frac0, frac1):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     log("Running: " + " ".join(cmd))
     progress(frac0, f"Loading {model} (downloads once, about 80-300 MB)")
-    p = proc.popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    p = proc.popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=_child_env())
     tail, passes, done_passes, last = [], 1, 0, 0.0
     for chunk in proc.lines(p, what=f"Splitting with {model}"):
         for line in re.split(r"[\r\n]", chunk):   # tqdm redraws with carriage returns

@@ -34,7 +34,10 @@ def _has(module, fresh=False):
     hit = _spec_cache.get(module)
     if hit and not fresh and now - hit[0] < SPEC_TTL:
         return hit[1]
-    importlib.invalidate_caches()
+    try:
+        importlib.invalidate_caches()      # (Python 3.13 pre-releases can raise here; harmless to skip)
+    except Exception:
+        pass
     try:
         found = importlib.util.find_spec(module) is not None
     except (ImportError, ValueError):
@@ -107,7 +110,7 @@ def nvidia_cuda():
     except Exception as e:
         SMI_PROBLEM[0] = f"{exe}: {e.__class__.__name__}: {e}"
         return None
-    m = re.search(r"CUDA Version\s*:?\s*(\d+)\.(\d+)", out)
+    m = re.search(r"CUDA (?:UMD |Driver )?Version\s*:?\s*(\d+)\.(\d+)", out)
     if not m:
         SMI_PROBLEM[0] = f"{exe} answered without a CUDA version: {out.strip()[:300]!r}"
         return None
@@ -218,7 +221,9 @@ def _pip(args, progress, lo, hi, label):
 def torch_device():
     """'cuda', 'mps', 'cpu', or None when PyTorch isn't installed (checked in a subprocess)."""
     try:
-        r = proc.run([sys.executable, "-c", "import torch;print('cuda' if torch.cuda.is_available() else 'mps' if "
+        r = proc.run([sys.executable, "-c", "import torch\nc=torch.cuda.is_available()\n"
+                      "try:\n if c: (torch.ones(8,device='cuda')*2).sum().item()\nexcept Exception: c='broken'\n"
+                      "print('cuda' if c is True else 'cuda-broken' if c == 'broken' else 'mps' if "
                       "getattr(torch.backends,'mps',None) and torch.backends.mps.is_available() else 'cpu')"],
                      capture_output=True, text=True, timeout=120)
         return r.stdout.strip().splitlines()[-1] if r.returncode == 0 and r.stdout.strip() else None
@@ -310,7 +315,10 @@ def install(progress=lambda f, m: None, gpu=False):
                                + err[-500:] + "\nUpdate the NVIDIA driver from nvidia.com (newer cards need a recent "
                                "one), restart the computer, then use Use my graphics card again.")
         raise RuntimeError("Installed, but it doesn't load:\n" + err[-600:])
-    importlib.invalidate_caches()
+    try:
+        importlib.invalidate_caches()
+    except Exception:
+        pass
     dev = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else "cpu"
     forget_checks()
     if p["gpu"] and dev == "cpu" and sys.platform != "darwin":
