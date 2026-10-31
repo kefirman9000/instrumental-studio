@@ -1,5 +1,11 @@
 # What's new
 
+## 1.34.0
+
+- **Bass notes rebuilt as notes.** Bass (and other pitched) notes that the singing damaged are made again from clean copies of the *same note* elsewhere in the song, or a nearby note retuned a little when that note is never heard clean. Part of Build the best instrumental (on by default), and each section's notes are one item in Review.
+- **Loop-based songs: play each loop again from its clean copies.** Where an instrument repeats a 1-4 bar loop, the copies under the singing are replaced by a merge of its clean copies, instead of being patched. A Build step for electronic and loop-based music (tick it under *Change what it does*).
+- **Start over** (next to Undo): back to the song as it was split, with every fix undecided again and levels, kept parts, mutes, cuts, clean tracks and grid edits cleared. Undo brings it all back.
+
 ## 1.33.0
 
 **Drums**
