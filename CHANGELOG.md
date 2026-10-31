@@ -1,5 +1,9 @@
 # What's new
 
+## 1.30.6
+
+- **Fix: the split type list could be empty** (and other parts of the start screen not fill in). Since 1.27.2, the first request when the app opened left a few bytes unread, which garbled the next one.
+
 ## 1.30.5
 
 - **Fix: helpers still tried the graphics card when it can't run** (so the drum split could still fail). On Windows, the way 1.30.4 hid the card from them didn't take effect; now they're told to use the processor directly.
