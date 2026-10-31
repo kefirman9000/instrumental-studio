@@ -455,7 +455,7 @@ def _pre_build(p, steps, f0, f1):
             log(f"build: second pass skipped: {e}")
 
 
-def _job_import_ref(todo, kind, apply):
+def _job_import_ref(todo, kind, apply, build=False):
     p = S.project
     report, all_ids, stems = [], [], set()
     for i, (src, stem, name, use) in enumerate(todo):
@@ -505,6 +505,15 @@ def _job_import_ref(todo, kind, apply):
         report.append(f"{len(misfit)} other fix{'es' if len(misfit) != 1 else ''} on those instruments add sound your "
                       f"clean track doesn't have; they're under Doesn't fit.")
     p.save()
+    if build and p.stage == "detected":
+        # straight on to the build, which uses your clean tracks first and checks every fix against them
+        _progress(0.0, "Building the best instrumental with your clean tracks")
+        steps = [x["key"] for x in p.build_plan() if x["on"]]
+        _pre_build(p, steps, 0.0, 0.3)
+        res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.3 + 0.67 * f, m))
+        p.save()
+        S.job["result"] = {"title": "Your instrumental is built", "report": report + res["report"]}
+        return
     S.job["result"] = {"title": "Your files are in",
                        "new_ids": all_ids, "report": report}
 
@@ -1131,7 +1140,7 @@ class Handler(BaseHTTPRequestHandler):
                                  "all" if it.get("use") == "all" else "vocals"))
                 if not todo:
                     return self._send(400, {"error": "Choose a file."})
-                _start_job(_job_import_ref, todo, kind, bool(d.get("apply", True)))
+                _start_job(_job_import_ref, todo, kind, bool(d.get("apply", True)), bool(d.get("build", False)))
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
                 folder = d["folder"]

@@ -357,3 +357,5 @@ label.check input { margin-top: 3px; }
 .lanes.panning, .lanes.panning canvas { cursor: grabbing; }
 .auto-details { margin: 8px 0 4px; }
 .auto-details > summary { cursor: pointer; color: var(--dim, #999); margin-bottom: 8px; }
+.auto-stems { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 6px; background: rgba(127,127,127,.08); }
+.auto-stems span { flex: 1 1 260px; }

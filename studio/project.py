@@ -3753,8 +3753,9 @@ class Project:
              "Careful: only where the instruments are far under the voice and the voice is nearly all of the original.",
              len(self._safe_runs(False))),
             ("acappella_hard", "Be aggressive there",
-             "Also silences shorter and less certain voice-only moments (a single beat, instruments only 8 dB under). "
-             "Off by default: can cut a soft instrument that plays under the voice.", len(self._safe_runs(True))),
+             "Also silences shorter and less certain voice-only moments (a single beat, instruments only 8 dB under), "
+             "which clears leftover background vocals. Untick it if a soft instrument under the voice gets cut.",
+             len(self._safe_runs(True))),
             ("notch", "Notch the singer's notes where leftover singing remains",
              "After everything else: narrow cuts on exactly the notes being sung (and their reverb), only in the centre of "
              "the mix and only in the stretches where an instrument still moves like the singer.", 1),
@@ -3765,7 +3766,7 @@ class Project:
                                           "switch would be heard.", 1),
         ]
         return [{"key": k, "title": t, "detail": d, "count": int(c),
-                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k not in ("deep", "acappella_hard")}
+                 "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k != "deep"}
                 for k, t, d, c in steps]
 
     def build_best(self, steps=None, progress=lambda f, m: None):
