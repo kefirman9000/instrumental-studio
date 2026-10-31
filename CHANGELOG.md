@@ -1,5 +1,12 @@
 # What's new
 
+## 1.37.3
+
+- **No more hard cuts to silence from the build.** Parts the app mutes are now turned down 15 dB with smooth fades instead of cut off, and only stretches of 2 seconds or more (short cuts did more harm than good). Mutes you make yourself still mute fully.
+- *Turn down the parts where only the singer sings* stays careful; *Be aggressive there* is off by default again (it was cutting too much).
+- **Clean instrumental** no longer mutes anything: it rebuilds and cleans, but leaves the muting steps out. Tick them in Build if a song needs them.
+- Run the build again on songs built before this to get the gentler version.
+
 ## 1.37.2
 
 - **Fix: Clean instrumental (and Build) could lose instruments.** Rebuilding notes and cleaning "what isn't at the note being played" assumed one note at a time, which is only true of the bass. On tracks that hold several instruments (the "other" track of a 4-track split, guitar, piano) it turned the other instruments down. Both now only work on the bass. Run the build again on songs you built since 1.34.
