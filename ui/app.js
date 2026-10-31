@@ -577,7 +577,7 @@ async function openGrid(k) {
     $("#gridPattern").hidden = !["drums", "kick", "snare", "toms", "cymbals", "bass"].includes(k);
     if (!g.rows.length) { toast("No repeated hits or notes found on this track to put on a grid."); return; }
     $("#dlgGrid").showModal();
-    renderGrid();
+    renderDrumGrid();
   } catch (e) { fail(e); }
 }
 function gridRange() {
@@ -604,7 +604,7 @@ function gridGeom() {
   return { cv, g, a, b, bt, ba, bb, labelW, rowH, w, h, xOf: beat => labelW + (beat - ba) / (bb - ba) * (w - labelW) };
 }
 function gridEdits() { return (st.ov.mixer.drum_edits || {})[st.grid.k] || { add: [], off: [], rebuild: [] }; }
-function renderGrid() {
+function renderDrumGrid() {
   if (!st.grid) return;
   const G = gridGeom(), { cv, g, a, b, bt, ba, bb, labelW, rowH, xOf } = G;
   cv.style.height = G.h + "px";
@@ -664,7 +664,7 @@ function renderGrid() {
   $("#gridWhere").textContent = `bars ${st.grid.b0 + 1}-${Math.min(bars, st.grid.b0 + st.grid.nb)} of ${bars}`;
 }
 async function gridPost(path, body) {
-  try { const r = await api.post(path, body); await applyEdit(r); renderGrid(); return r; } catch (e) { fail(e); }
+  try { const r = await api.post(path, body); await applyEdit(r); renderDrumGrid(); return r; } catch (e) { fail(e); }
 }
 $("#gridCanvas").oncontextmenu = e => e.preventDefault();
 $("#gridCanvas").onmousedown = e => {
@@ -687,7 +687,7 @@ $("#gridCanvas").onmousedown = e => {
     const t = hit ? hit[0] : added.t, v0 = hit ? (((e2.vel || []).find(q => Math.abs(q.t - t) < 0.012) || {}).v ?? 1) : (added.v ?? 1);
     st.gridDrag = { t, v0, v: v0, y0: e.clientY, moved: false };
     const move = ev => { const d = st.gridDrag; if (!d) return; const dy = d.y0 - ev.clientY;
-      if (Math.abs(dy) > 4) d.moved = true; d.v = clamp(d.v0 * Math.pow(2, dy / 60), 0.05, 2.5); renderGrid(); };
+      if (Math.abs(dy) > 4) d.moved = true; d.v = clamp(d.v0 * Math.pow(2, dy / 60), 0.05, 2.5); renderDrumGrid(); };
     const up = () => {
       window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
       const d = st.gridDrag; st.gridDrag = null; if (!d) return;
@@ -763,10 +763,10 @@ $("#gridMidiFile").onchange = async e => {
     if (r) toast(`Played ${r.used} note${r.used === 1 ? "" : "s"} from ${f.name} with this track's clean sounds.`, { ms: 7000 });
   } catch (err) { fail(err); }
 };
-$("#gridPrev").onclick = () => { st.grid.b0 = Math.max(0, st.grid.b0 - st.grid.nb); renderGrid(); };
-$("#gridNext").onclick = () => { st.grid.b0 = Math.min(Math.max(0, st.grid.g.bars.length - 1), st.grid.b0 + st.grid.nb); renderGrid(); };
-$("#gridBars").onchange = () => { if (st.grid) { st.grid.nb = +$("#gridBars").value; renderGrid(); } };
-$("#gridSnap").onchange = () => renderGrid();
+$("#gridPrev").onclick = () => { st.grid.b0 = Math.max(0, st.grid.b0 - st.grid.nb); renderDrumGrid(); };
+$("#gridNext").onclick = () => { st.grid.b0 = Math.min(Math.max(0, st.grid.g.bars.length - 1), st.grid.b0 + st.grid.nb); renderDrumGrid(); };
+$("#gridBars").onchange = () => { if (st.grid) { st.grid.nb = +$("#gridBars").value; renderDrumGrid(); } };
+$("#gridSnap").onchange = () => renderDrumGrid();
 $("#gridPlay").onclick = () => { const [a] = gridRange(); seek(a); player.play().catch(() => {}); };
 $("#gridRebuild").onclick = () => { const [a, b] = gridRange(); gridPost("/api/drums/edit", { stem: st.grid.k, change: { rebuild: { start: a, end: b } } }); };
 $("#gridUnrebuild").onclick = () => { const [a, b] = gridRange(); gridPost("/api/drums/edit", { stem: st.grid.k, change: { unrebuild: { start: a, end: b } } }); };
@@ -780,7 +780,7 @@ $("#gridPattern").onclick = async () => {
   if (st.grid && $("#dlgGrid").open && !player.paused) {
     const [a, b] = gridRange();
     if ($("#gridLoop").checked && player.currentTime >= b) seek(a);
-    renderGrid();
+    renderDrumGrid();
   }
   requestAnimationFrame(gridLoop);
 })();
@@ -1394,7 +1394,7 @@ function renderSteps() {
 
   const fromFile = !demo && ov.meta.separation !== "Imported stems" && !!ov.meta.source;
   $("#vinylBox").hidden = !fromFile;
-  $("#refBox").hidden = at < 1 || !ov.stems.length;
+  $("#refBox").hidden = true;          // the toolbar's "+ Clean stems / samples" does this (it crowded step 4)
   $("#btnRefOpen2").hidden = !ov.stems.length;
   const vy = ov.meta.vinyl;
   $("#btnVinylUndo").hidden = !vy;
