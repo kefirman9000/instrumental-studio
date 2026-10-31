@@ -92,17 +92,36 @@ def _nvidia_smi():
     return next((p for p in cands if os.path.exists(p)), None)
 
 
+SMI_PROBLEM = [""]       # why nvidia-smi gave no answer, for the log
+
+
 def nvidia_cuda():
     """CUDA version supported by the NVIDIA driver, e.g. (12, 8), or None."""
     exe = _nvidia_smi()
     if not exe:
+        SMI_PROBLEM[0] = "nvidia-smi not found"
         return None
     try:
-        out = proc.run([exe], capture_output=True, text=True, timeout=15).stdout
-    except Exception:
+        r = proc.run([exe], capture_output=True, text=True, timeout=20)
+        out = (r.stdout or "") + (r.stderr or "")
+    except Exception as e:
+        SMI_PROBLEM[0] = f"{exe}: {e.__class__.__name__}: {e}"
         return None
-    m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", out)
-    return (int(m.group(1)), int(m.group(2))) if m else None
+    m = re.search(r"CUDA Version\s*:?\s*(\d+)\.(\d+)", out)
+    if not m:
+        SMI_PROBLEM[0] = f"{exe} answered without a CUDA version: {out.strip()[:300]!r}"
+        return None
+    SMI_PROBLEM[0] = ""
+    return (int(m.group(1)), int(m.group(2)))
+
+
+def nvidia_card():
+    """Name of an NVIDIA card in this computer (from Windows / the system), even if nvidia-smi doesn't answer."""
+    return next((n for n in gpu_names() if "nvidia" in n.lower()), None)
+
+
+def has_nvidia():
+    return bool(nvidia_cuda() or nvidia_card())
 
 
 def plan():
@@ -118,12 +137,19 @@ def _plan():
     if sys.platform == "darwin":
         return {"gpu": "Apple GPU" if _apple_silicon() else None, "index": None}
     cuda = nvidia_cuda()
+    card = nvidia_card()
     if cuda:
-        for need, tag in (((13, 0), "cu130"), ((12, 8), "cu128"), ((12, 6), "cu126")):
+        # cu126 first: it runs on every driver that supports CUDA 12.6+ and, unlike the newer builds, still
+        # supports older cards (GTX 900 and 10 series)
+        for need, tag in (((12, 0), "cu126"),):     # CUDA 12 minor-version compatibility
             if cuda >= need:
-                return {"gpu": f"NVIDIA GPU (CUDA {cuda[0]}.{cuda[1]})", "index": TORCH_INDEX + tag}
+                return {"gpu": card or f"NVIDIA GPU (CUDA {cuda[0]}.{cuda[1]})", "index": TORCH_INDEX + tag}
         return {"gpu": None, "index": TORCH_INDEX + "cpu",
                 "note": "Your NVIDIA driver is too old for GPU separation; update it and reinstall to use the GPU."}
+    if card and not sys.platform == "darwin":
+        # Windows sees an NVIDIA card but nvidia-smi didn't answer: install the graphics-card build anyway;
+        # the check after installing tells whether the driver really works
+        return {"gpu": card, "index": TORCH_INDEX + "cu126"}
     if sys.platform.startswith("linux"):
         return {"gpu": None, "index": TORCH_INDEX + "cpu"}
     return {"gpu": None, "index": None}
@@ -197,6 +223,9 @@ def gpu_ready():
         return (_apple_silicon(), "Apple Silicon Macs use their GPU automatically." if _apple_silicon()
                 else "This Mac has no supported GPU; splitting runs on the processor.")
     cuda = nvidia_cuda()
+    card = nvidia_card()
+    if not cuda and card:
+        return True, f"{card} found."
     if not cuda:
         names = gpu_names()
         found = ", ".join(names) if names else "no graphics card details"
@@ -210,8 +239,8 @@ def gpu_ready():
                        f"leave Roformer off.")
     if not _plan()["gpu"]:
         return False, (f"Your NVIDIA driver supports CUDA {cuda[0]}.{cuda[1]}, which is too old for current PyTorch "
-                       f"(needs 12.6 or newer). Update the driver from nvidia.com, then try again.")
-    return True, f"NVIDIA card found (driver supports CUDA {cuda[0]}.{cuda[1]})."
+                       f"(needs 12.0 or newer). Update the driver from nvidia.com, then try again.")
+    return True, f"{card or 'NVIDIA card'} found (driver supports CUDA {cuda[0]}.{cuda[1]})."
 
 
 def install(progress=lambda f, m: None, gpu=False):
@@ -235,9 +264,16 @@ def install(progress=lambda f, m: None, gpu=False):
     progress(0.98, "Checking the installation")
     r = proc.run([sys.executable, "-c",
                         "import torch, demucs.pretrained, demucs.apply;"
-                        "print('cuda' if torch.cuda.is_available() else 'mps' if getattr(torch.backends,'mps',None) "
+                        "c=torch.cuda.is_available()\n"
+                        "if c: (torch.ones(8, device='cuda') * 2).sum().item()\n"
+                        "print('cuda' if c else 'mps' if getattr(torch.backends,'mps',None) "
                         "and torch.backends.mps.is_available() else 'cpu')"],
                        capture_output=True, text=True)
+    if r.returncode != 0 and p["gpu"] and "torch" in (r.stderr or ""):
+        # the card is there but this build can't run on it: say so plainly
+        raise RuntimeError("PyTorch installed, but it couldn't run on your graphics card:\n" + r.stderr[-500:] +
+                           "\nUpdate the NVIDIA driver from nvidia.com, restart the computer, then use Use my graphics "
+                           "card again.")
     if r.returncode != 0:
         raise RuntimeError("Installed, but it doesn't load:\n" + r.stderr[-600:])
     importlib.invalidate_caches()

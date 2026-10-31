@@ -167,7 +167,7 @@ def check_model():
     if INST.installed(fresh=True):
         say(OK, "Separation model (Demucs + PyTorch)")
         try:
-            cuda = INST.nvidia_cuda()
+            cuda = INST.has_nvidia()
             r = subprocess.run([sys.executable, "-c", "import torch;print(torch.cuda.is_available())"],
                                capture_output=True, text=True, timeout=90)
             on_gpu = r.stdout.strip().endswith("True")
