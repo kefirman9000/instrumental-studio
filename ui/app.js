@@ -1989,7 +1989,10 @@ function renderRefRows() {
   $("#btnRefPick").textContent = refFiles.length ? "Choose other files…" : (track ? "Choose files…" : "Choose the file…");
   $("#refApplyRow").hidden = false;
 }
-$("#btnRefOpen").onclick = () => { refFiles = []; renderRefRows(); $("#dlgRef").showModal(); };
+$("#btnRefOpen").onclick = () => { refFiles = []; $("#refBuild").checked = false; renderRefRows(); $("#dlgRef").showModal(); };
+$("#btnAutoStems").onclick = () => {        // from the build window: add stems, then build with them
+  $("#dlgAuto").close(); refFiles = []; $("#refBuild").checked = true; renderRefRows(); $("#dlgRef").showModal();
+};
 $("#refKind").onchange = () => { if ($("#refKind").value === "sample") refFiles = refFiles.slice(0, 1); renderRefRows(); };
 $("#btnRefPick").onclick = () => { $("#refFile").multiple = $("#refKind").value !== "sample"; $("#refFile").click(); };
 $("#refFile").onchange = (e) => {
@@ -2008,7 +2011,7 @@ $("#btnRefGo").onclick = async () => {
       const up = await upload(files[i].file, batch);
       tracks.push({ path: up.path, stem: files[i].stem, use: files[i].use, name: files[i].file.name });
     }
-    await api.post("/api/import_ref", { kind, tracks, apply });
+    await api.post("/api/import_ref", { kind, tracks, apply: apply || $("#refBuild").checked, build: $("#refBuild").checked });
     watchJob();
   } catch (err) { hideBusy(); fail(err); }
 };
