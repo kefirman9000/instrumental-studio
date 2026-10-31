@@ -607,9 +607,13 @@ class Project:
         t = np.arange(a, b, dtype=np.float64) / self.sr
         m = np.zeros(b - a, np.float32)
         for r in rs:
-            up = np.clip((t - r["start"] + ramp / 2) / ramp, 0, 1)
-            dn = np.clip((r["end"] + ramp / 2 - t) / ramp, 0, 1)
-            m = np.maximum(m, np.minimum(up, dn).astype(np.float32))
+            auto = r.get("auto") or r.get("acappella")
+            rp = float(r.get("fade", 0.15 if auto else ramp))                 # the app's mutes fade in and out
+            amt = float(r.get("amount", 0.82 if auto else 1.0))               # ...and only turn down (-15 dB)
+            up = np.clip((t - r["start"] + rp / 2) / rp, 0, 1)
+            dn = np.clip((r["end"] + rp / 2 - t) / rp, 0, 1)
+            w = np.sin(0.5 * np.pi * np.minimum(up, dn)) ** 2
+            m = np.maximum(m, (amt * w).astype(np.float32))
         return m
 
     def vocal_only_runs(self, aggressive=False):
@@ -643,7 +647,7 @@ class Project:
         share = Ev / Eo
         va = np.asarray(self.VA[:len(Ei)], float) if len(self.VA) else np.ones(len(Ei))
         va = np.pad(va, (0, len(Ei) - len(va)))
-        lim, lim_v, min_share, min_beats = (-8, -4, 0.5, 1) if aggressive else (-20, -12, 0.7, 2)
+        lim, lim_v, min_share, min_beats = (-8, -4, 0.5, 2) if aggressive else (-20, -12, 0.7, 4)
         ok = loud & (va > 0.3) & (share > min_share) & ((ratio < lim) | ((ratio < lim_v) & voice_like))
         # the singer pausing inside an a cappella part (instruments silent there too) joins the stretch
         ref_lvl = float(np.median(Eo[Eo > 1e-10])) if np.any(Eo > 1e-10) else 1.0
@@ -668,6 +672,7 @@ class Project:
                     continue
             merged.append(list(r))
         runs = [(float(bt_s[j]), float(bt_s[min(e + 1, len(bt_s) - 1)])) for j, e in merged if e - j + 1 >= min_beats]
+        runs = [(a_, b_) for a_, b_ in runs if b_ - a_ >= 2.0]                 # short cuts do more harm than good
         cache[key] = runs
         return runs
 
@@ -5024,7 +5029,8 @@ class Project:
 
     # A simple build is the default: the best split, the original wherever nobody sings, your clean tracks,
     # careful repairs and cleanup. These guess more (and can guess wrong), so they're extras you tick yourself.
-    EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone")
+    EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
+                   "acappella_hard")
 
     def _safe_runs(self, aggressive):
         try:
@@ -5101,12 +5107,13 @@ class Project:
                                                 "model's split, a half-and-half blend with it, other source parts) and keeps "
                                                 "whichever is clearly cleaner and still fits the original.", 1),
             ("mutes", "Mute bars where an instrument is only leftover singing or noise", "Worked out after the fixes.", 1),
-            ("acappella", "Silence the parts where only the singer sings",
-             "Careful: only where the instruments are far under the voice and the voice is nearly all of the original.",
+            ("acappella", "Turn down the parts where only the singer sings",
+             "Careful: only where the instruments are far under the voice and the voice is nearly all of the original, "
+             "for 2 seconds or more; turned down 15 dB with smooth fades, not cut.",
              len(self._safe_runs(False))),
             ("acappella_hard", "Be aggressive there",
-             "Also silences shorter and less certain voice-only moments (a single beat, instruments only 8 dB under), "
-             "which clears leftover background vocals. Untick it if a soft instrument under the voice gets cut.",
+             "Also turns down shorter and less certain voice-only moments (instruments only 8 dB under the voice). "
+             "Off by default: it can cut a soft instrument playing under the voice.",
              len(self._safe_runs(True))),
             ("notch", "Notch the singer's notes where leftover singing remains",
              "After everything else: narrow cuts on exactly the notes being sung (and their reverb), only in the centre of "

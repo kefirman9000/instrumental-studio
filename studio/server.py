@@ -701,7 +701,8 @@ def _job_clean(rebuild_drums=True):
             except Exception as e:
                 log(f"clean instrumental: drum rebuild skipped for {k}: {e}")
     plan = {x["key"]: x for x in p.build_plan()}
-    steps = [k for k, x in plan.items() if x["count"] and k not in ("deep", "recover")]
+    # everything that rebuilds or cleans, but not the steps that cut things out (mutes, aggressive a cappella)
+    steps = [k for k, x in plan.items() if x["count"] and k not in ("deep", "recover", "mutes", "acappella_hard")]
     _pre_build(p, steps, 0.2, 0.3)
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.3 + 0.67 * f, m))
     _progress(0.98, "Saving")
