@@ -1,5 +1,9 @@
 # What's new
 
+## 1.37.2
+
+- **Fix: Clean instrumental (and Build) could lose instruments.** Rebuilding notes and cleaning "what isn't at the note being played" assumed one note at a time, which is only true of the bass. On tracks that hold several instruments (the "other" track of a 4-track split, guitar, piano) it turned the other instruments down. Both now only work on the bass. Run the build again on songs you built since 1.34.
+
 ## 1.37.1
 
 - **Split again with different settings.** After a song is split, the split type list stays in step 2 (showing what it was split with), so *Split again* can use another model or other split options.
