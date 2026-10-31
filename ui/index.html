@@ -410,6 +410,7 @@
         <option value="sample">One hit or note (matched to the sound it is in the song)</option></select></label>
     <div id="refRows"></div>
     <label class="ref-row" id="refApplyRow"><input type="checkbox" id="refApply" checked> Apply right away (Undo takes it back; unticked, it waits in Review)</label>
+    <label class="ref-row"><input type="checkbox" id="refBuild"> Then build the best instrumental with them</label>
     <input type="file" id="refFile" accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aiff" multiple hidden>
     <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button type="button" id="btnRefPick">Choose files…</button><button type="button" class="primary" id="btnRefGo" hidden>Add</button></div>
   </form>
@@ -418,6 +419,7 @@
   <form method="dialog">
     <h2>Build the best instrumental</h2>
     <p>Goes through every option and settles it: the original recording wherever nobody sings (whole parts and the gaps between vocal lines), your clean tracks, the cleanest takes and rebuilt parts everywhere else. Where options overlap or contradict, one is chosen; anything that doesn't line up with the original is left out, and no part may end up sounding worse than before. Building again starts fresh (your own decisions stay). It all becomes one step: Undo takes it back.</p>
+    <p class="auto-stems"><span>Have clean stems or samples from this song? Add them first: the build uses them before anything else and checks every other fix against them.</span> <button type="button" class="small" id="btnAutoStems">Add clean stems first…</button></p>
     <details class="auto-details"><summary>Change what it does</summary><div id="autoSteps"></div></details>
     <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button value="ok" class="primary">Build</button></div>
   </form>

@@ -1,5 +1,10 @@
 # What's new
 
+## 1.28.1
+
+- **Clean stems as part of the build.** The Build window has **Add clean stems first…**: choose your stems or samples, and the app adds them and goes straight on to building with them (they're used before anything else, and every other fix is checked against them). The clean stems window also has *Then build the best instrumental with them*.
+- **Aggressive a cappella silencing is now on by default**, to clear leftover background vocals in the parts where only the singer sings. Untick *Be aggressive there* if a soft instrument under the voice gets cut.
+
 ## 1.28.0
 
 - **Build the best instrumental, reworked to give a finished result.**
