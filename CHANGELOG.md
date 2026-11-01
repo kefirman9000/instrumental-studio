@@ -1,5 +1,14 @@
 # What's new
 
+## 1.42.0
+
+- **New split type: "Keeps every detail: takes out only the singing (fast)".** Instead of cutting the song into instruments and adding them back, the instrumental is the original with only the singing taken out, so no instrument detail is lost.
+  - It's quick: one fast split, then a stronger vocal model runs **only on the parts with singing**. Parts without singing come straight from the original, untouched.
+  - The stronger model is Roformer if you've installed it (cleanest), otherwise just the vocal half of the best Demucs model (a quarter of its usual work).
+  - **The original's stereo sides are kept.** Singing is taken out of the centre, and out of the sides only where they're clearly singing too (wide backing vocals), so the instruments keep their width and space.
+  - The drums, bass and other tracks still work for editing, and they add up exactly to that instrumental.
+  - Pick it in the split list, or with **Split again** on a song you already split.
+
 ## 1.41.0
 
 - **Clearer names.** *Build the best instrumental* is now **Repair the instrumental** (fixes the split). *Clean instrumental* is now **Rebuild with samples** (plays the song again from its own best material).

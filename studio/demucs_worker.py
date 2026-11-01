@@ -31,7 +31,17 @@ def run(model_name, inp, outdir, device=None):
     from demucs.apply import apply_model, BagOfModels
     from demucs.pretrained import get_model
 
+    only = None
+    if ":" in model_name:                 # e.g. htdemucs_ft:vocals - just the one specialist model of the bag
+        model_name, only = model_name.split(":", 1)
     model = get_model(model_name)
+    if only and isinstance(model, BagOfModels) and only in model.sources:
+        idx = model.sources.index(only)
+        w = model.weights or [[1.0] * len(model.sources) for _ in model.models]
+        best = max(range(len(model.models)), key=lambda i: w[i][idx])
+        sub = model.models[best]
+        sub.samplerate, sub.audio_channels = model.samplerate, model.audio_channels
+        model = sub
     model.eval()
     passes = len(model.models) if isinstance(model, BagOfModels) else 1
     print(f"PASSES {passes}", flush=True)
