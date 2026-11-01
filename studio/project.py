@@ -678,7 +678,7 @@ class Project:
 
     def _vocal_curve(self, a, b):
         """How much singing there is at each sample, 0..1, from the per-beat vocal measure."""
-        if not len(self.VA):
+        if not len(self.VA) or self.meta.get("no_vocals"):
             return np.zeros(b - a, np.float32)
         mids = np.array([(self.beat_times[j] + self.beat_times[j + 1]) / 2 for j in range(len(self.VA))])
         v = np.clip(np.asarray(self.VA) / 0.25, 0, 1)
@@ -3583,7 +3583,7 @@ class Project:
         return float(np.clip(np.sqrt(o / (m + EPS)), 0.5, 4.0)) if m > 0 else 1.0
 
     def export(self, folder, fmt="wav", what=("mix", "stems", "raw", "vocals", "report"), bits=24, match_level=False,
-               declick=False, lufs=None):
+               declick=False, lufs=None, min_count=8):
         """Write the chosen files. Every audio file gets the SAME gain, so the exported instruments still
         add up to the exported mix and keep the balance you heard (they used to be turned down one by one
         when they came near clipping). match_level: bring everything to the original song's level."""
@@ -3656,7 +3656,8 @@ class Project:
                 written.append(p)
         if "samples_raw" in what or "samples_merged" in what:
             written += self.export_samples(os.path.join(folder, f"{name} - samples"), raw="samples_raw" in what,
-                                           merged="samples_merged" in what, fmt=fmt if fmt in ("wav", "flac") else "wav")
+                                           merged="samples_merged" in what, fmt=fmt if fmt in ("wav", "flac") else "wav",
+                                           min_count=min_count)
         if "report" in what:
             p = os.path.join(folder, f"{name} - repair report.json")
             with open(p, "w") as f:
@@ -4413,7 +4414,7 @@ class Project:
                 out.append((kind, best[1], best[2], best[3]))
         return out
 
-    def export_samples(self, folder, raw=True, merged=True, fmt="wav"):
+    def export_samples(self, folder, raw=True, merged=True, fmt="wav", min_count=8):
         """Write the song's reusable pieces, with context:
         - Loops: for every kind of section, its cleanest 4-bar and 2-bar phrase, starting on the bar, from the
           finished (repaired) instrumental and from each instrument, named with the section and tempo.
@@ -4482,7 +4483,7 @@ class Project:
             x = self.stems[k]
             if not perc:
                 continue          # pitched parts are exported as repeating samples of a half bar or more (below)
-            cand = [snd for snd in sd["sounds"] if snd["count"] >= self.SAMPLE_MIN_COUNT]
+            cand = [snd for snd in sd["sounds"] if snd["count"] >= min_count]          # only sounds used often
             if not cand:
                 continue
             lvl = {snd["id"]: float(np.median(sd["lv"][snd["members"]])) for snd in cand}
@@ -4536,6 +4537,8 @@ class Project:
                     return p0 + int(0.05 * self.sr) + int(quiet[0]) if len(quiet) else lim
                 clean_i = lambda i: float(vc_all[int(pos[i]):note_end(i)].max(initial=0)) < 0.05
                 for r in dm["rows"]:                       # whole notes
+                    if r["count"] < min_count:
+                        continue                           # a note played only a few times isn't worth a sample
                     idx = [int(i) for i in dm["_clusters"][r["id"]] if clean_i(int(i))]
                     if len(idx) < 2:
                         continue
@@ -4574,7 +4577,7 @@ class Project:
                 used, n_ph = set(), 0
                 for (L, key), starts_ in sorted(found.items(), key=lambda kv: -(len(kv[1]) * kv[0][0])):
                     starts_ = [a_ for a_ in starts_ if not any(a_ + d in used for d in range(L))]
-                    if len(starts_) < 3 or n_ph >= 4:
+                    if len(starts_) < max(3, min_count // 2) or n_ph >= 4:
                         continue
                     clean_s = [a_ for a_ in starts_ if clean_i(seq[a_][0]) and clean_i(seq[a_ + L - 1][0])]
                     if not clean_s:
@@ -4612,7 +4615,7 @@ class Project:
             sung = lambda b0, b1: float(vc_all[int(self.beats[b0] * HOP):int(self.beats[b1] * HOP)].max(initial=0)) > 0.05
             for src, y in srcs:
                 groups = []
-                for g in self.find_loops(y, drums=src in self.PERCUSSIVE):
+                for g in self.find_loops(y, drums=src in self.PERCUSSIVE, min_count=max(3, min_count // 2)):
                     clean = [m for m in g["members"] if not sung(*m)]
                     if not clean:
                         continue                      # every copy has singing over it: not a clean sample
@@ -4657,7 +4660,7 @@ class Project:
         cache[k] = prof
         return prof
 
-    def smart_clean(self, sung_only=True):
+    def smart_clean(self, sung_only=True, noise=False):
         """Learn what belongs on each track and turn down the rest, section by section:
           - drums: each sound's normal attack and decay, learned from its clean hits; anything louder than that
             between and after hits (clicks, crackle, smeared consonants, separation chirps) comes down,
@@ -4725,8 +4728,8 @@ class Project:
                         out[c] = istft(X * G, cur.shape[1])
                     stages.append((kind, out - cur))
                     cur = out
-                # 1. steady noise, everywhere (spectral subtraction, gentle)
-                if prof is not None:
+                # 1. steady noise (spectral subtraction): only when asked (vinyl, Enhance); it can sound underwater
+                if noise and prof is not None:
                     def g_noise(X):
                         m = np.abs(X)
                         return np.clip((m - 1.5 * prof[:, None]) / (m + 1e-9), 0.3, 1).astype(np.float32)
@@ -5124,10 +5127,9 @@ class Project:
              "Where an instrument repeats a 1-4 bar loop, copies under the singing are replaced by a merge of the clean "
              "copies. Best for electronic and loop-based music; off by default.",
              len([x for x in self.instruments if x not in NOT_REPAIRED])),
-            ("smartclean", "Clean up leftovers: learn what belongs on each track and turn down the rest",
+            ("smartclean", "Clean up: learn what belongs on each track and turn down the rest",
              "Drums: anything beyond each sound's normal hit and decay. Pitched parts: what isn't at the notes being "
-             "played. Loops: what the clean copies don't have. Every track: steady hiss and vinyl noise. Gentle "
-             "(at most 12 dB), mainly under the singing. Includes the leftover-singing and \"s\" sound cleanup.",
+             "played. Loops: what the clean copies don't have. Gentle (at most 6 dB), under the singing.",
              len([x for x in self.instruments if x not in NOT_REPAIRED])),
             ("repairs", "Apply the repairs with a close match",
              "Only where nothing above already covers that instrument, and never ones that don't fit the original.",
@@ -5169,7 +5171,7 @@ class Project:
                  "extra": k in self.EXTRA_STEPS}
                 for k, t, d, c in steps]
 
-    def build_best(self, steps=None, progress=lambda f, m: None):
+    def build_best(self, steps=None, progress=lambda f, m: None, fresh=True):
         """Stoppable: if Stop is pressed mid-way, everything is put back as it was before the build."""
         with self.lock:
             snap = self._snapshot(list(self.suggestions))
@@ -5178,7 +5180,7 @@ class Project:
             meta_q = self.meta.get("verified")
             h0 = len(self.history)
             try:
-                return self._build_best(steps, progress)
+                return self._build_best(steps, progress, fresh)
             except BaseException as e:
                 if type(e).__name__ != "Stopped":
                     raise
@@ -5197,7 +5199,7 @@ class Project:
                 self._render_cache.clear()
                 raise
 
-    def _build_best(self, steps=None, progress=lambda f, m: None):
+    def _build_best(self, steps=None, progress=lambda f, m: None, fresh=True):
         """Work through every kind of fix in order, choose one where they overlap, check everything against
         the original, and apply the result as ONE undo step. Returns a report.
 
@@ -5225,25 +5227,27 @@ class Project:
             report = []
             ov = lambda a, b: a["start"] < b["end"] - 0.01 and b["start"] < a["end"] - 0.01
 
-            # -- start fresh: take back what the last build chose and set (your own decisions stay as they are),
-            #    so building again never stacks on top of the last build
-            for x in self.suggestions.values():
-                if x.pop("by_build", False):
-                    x["status"] = x.pop("by_build_was", "pending")
-                    x.pop("skip_reason", None)
             m = self.mixer
-            m["keep"] = [r for r in m.get("keep", []) if not r.get("auto")]
-            m["mute_ranges"] = [r for r in m.get("mute_ranges", []) if not (r.get("auto") or r.get("acappella"))]
-            m["eq_ranges"] = [r for r in m.get("eq_ranges", []) if not r.get("auto")]
-            for k_, cv in (m.pop("build_tone", None) or {}).items():
-                cur = m.get("tone_eq", {}).get(k_)
-                if cur is not None and len(cur) == len(cv):
-                    left = [round(float(a_) - float(b_), 2) for a_, b_ in zip(cur, cv)]
-                    if any(abs(v) >= 0.05 for v in left):
-                        m["tone_eq"][k_] = left
-                    else:
-                        m["tone_eq"].pop(k_, None)
-            m["seams"] = []
+            if fresh:
+                # -- start fresh: take back what the last build chose and set (your own decisions stay as they are),
+                #    so building again never stacks on top of the last build
+                for x in self.suggestions.values():
+                    if x.pop("by_build", False):
+                        x["status"] = x.pop("by_build_was", "pending")
+                        x.pop("skip_reason", None)
+                m = self.mixer
+                m["keep"] = [r for r in m.get("keep", []) if not r.get("auto")]
+                m["mute_ranges"] = [r for r in m.get("mute_ranges", []) if not (r.get("auto") or r.get("acappella"))]
+                m["eq_ranges"] = [r for r in m.get("eq_ranges", []) if not r.get("auto")]
+                for k_, cv in (m.pop("build_tone", None) or {}).items():
+                    cur = m.get("tone_eq", {}).get(k_)
+                    if cur is not None and len(cur) == len(cv):
+                        left = [round(float(a_) - float(b_), 2) for a_, b_ in zip(cur, cv)]
+                        if any(abs(v) >= 0.05 for v in left):
+                            m["tone_eq"][k_] = left
+                        else:
+                            m["tone_eq"].pop(k_, None)
+                m["seams"] = []
             self._render_cache.clear()
             q_start = None
             if "check" in steps:
@@ -5386,7 +5390,7 @@ class Project:
                         accept.add(i)
             if "smartclean" in steps:
                 for i, x in S.items():
-                    if x["status"] == "pending" and not inside_kept(x) and (x.get("smart") or x["type"] in ("bleed", "ess")):
+                    if x["status"] == "pending" and not inside_kept(x) and x.get("smart"):
                         accept.add(i)
             if "clicks" in steps:
                 for i, x in S.items():
@@ -5512,31 +5516,33 @@ class Project:
                 except Exception as e:
                     log(f"build: score check skipped: {e}")
 
-            # -- settle everything else: options the build didn't use are put aside (with the reason), so Review
-            #    holds the finished result, not a pile of alternatives that contradict it
-            fix_types = set(self.CHECK_TYPES) | {"bleed", "ess", "glitch"}
-            on_by_stem = {}
-            for j, y in S.items():
-                if y["status"] in ("accepted", "auto") and y["type"] in fix_types:
-                    on_by_stem.setdefault(y["stem"], []).append(y)
             settled = 0
-            for i, x in S.items():
-                if x["status"] != "pending" or x["type"] not in fix_types:
-                    continue
-                if self.flagged(i):
-                    why = "Doesn't line up with the original"
-                elif inside_kept(x) or any(r["start"] <= x["start"] + 0.05 and r["end"] >= x["end"] - 0.05 for r in keep):
-                    why = "The original recording is used here"
-                elif any(ov(y, x) for y in on_by_stem.get(x["stem"], ())):
-                    why = "Another fix was used here"
-                else:
-                    why = "Not a close enough match to use"
-                mark(i, "rejected", why)
-                settled += 1
+            if fresh:
+                # -- settle everything else: options the build didn't use are put aside (with the reason), so Review
+                #    holds the finished result, not a pile of alternatives that contradict it
+                fix_types = set(self.CHECK_TYPES) | {"bleed", "ess", "glitch"}
+                on_by_stem = {}
+                for j, y in S.items():
+                    if y["status"] in ("accepted", "auto") and y["type"] in fix_types:
+                        on_by_stem.setdefault(y["stem"], []).append(y)
+                settled = 0
+                for i, x in S.items():
+                    if x["status"] != "pending" or x["type"] not in fix_types:
+                        continue
+                    if self.flagged(i):
+                        why = "Doesn't line up with the original"
+                    elif inside_kept(x) or any(r["start"] <= x["start"] + 0.05 and r["end"] >= x["end"] - 0.05 for r in keep):
+                        why = "The original recording is used here"
+                    elif any(ov(y, x) for y in on_by_stem.get(x["stem"], ())):
+                        why = "Another fix was used here"
+                    else:
+                        why = "Not a close enough match to use"
+                    mark(i, "rejected", why)
+                    settled += 1
 
             # -- one undo step, refreshed displays
             new = [i for i in self.suggestions if i not in before]
-            self.history.append({"label": "Build the best instrumental",
+            self.history.append({"label": "Repair the instrumental" if fresh else f"Step: {', '.join(sorted(steps))}",
                                  "items": snap + [{"id": i, "sug": None, "stem": S[i]["stem"], "patch": None} for i in new],
                                  "mixer": mixer0})
             self.history = self.history[-200:]
@@ -5797,6 +5803,30 @@ class Project:
             return ids
 
     # ------------------------------------------------------------------ how clean each section is
+    def enhance(self, noise=False, progress=lambda f, m: None):
+        """No vocals (a vinyl rip, an instrumental): improve the song rather than repair it. Drums: odd hits put
+        right by their place in the bar and the clicks between hits turned down; pitched parts and loops cleaned
+        against their clean copies; optionally the steady hiss and vinyl noise. Everywhere, gently. One Undo."""
+        with self.lock:
+            self.meta["no_vocals"] = True
+            report = []
+            for k in [x for x in self.instruments if x in self.PERCUSSIVE]:
+                progress(0.2, f"Putting the {k} right")
+                try:
+                    n_ = self.drum_repair_odd(k)
+                    if n_:
+                        report.append(f"Put right {n_} odd {k} hit{'s' if n_ != 1 else ''} (by their place in the bar)")
+                except Exception as e:
+                    log(f"enhance: drums skipped for {k}: {e}")
+            progress(0.5, "Learning what belongs on each track")
+            ids = self.smart_clean(sung_only=False, noise=noise)
+            if ids:
+                self.set_status(ids, "accepted", "Enhance")
+                report.append(f"Cleaned {len(ids)} part{'s' if len(ids) != 1 else ''} of the tracks"
+                              + (" (including steady hiss and vinyl noise)" if noise else ""))
+            self._render_cache.clear()
+            return report or ["Nothing needed enhancing."]
+
     def check_not_worse(self, progress=lambda f, m: None):
         """Afterwards: any section that now scores lower than the split did as it came has its fixes taken out
         (the ones the build chose; yours stay). Returns the names of the parts put back."""
@@ -5975,7 +6005,7 @@ class Project:
                      "detail": "Step 3 finds the spots the singing damaged; then Build the best instrumental fixes them.",
                      "button": "Find damage", "action": {"kind": "detect"}}]
         if not built:
-            out.append({"id": "build", "title": "Build the best instrumental",
+            out.append({"id": "build", "title": "Repair the instrumental",
                         "detail": "Works through every kind of fix, picks one where they overlap, checks each against the "
                                   "original and applies it all as one step you can undo.",
                         "button": "Build it", "action": {"kind": "auto"}})
