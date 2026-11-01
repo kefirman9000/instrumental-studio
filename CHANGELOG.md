@@ -1,5 +1,9 @@
 # What's new
 
+## 1.39.1
+
+- **Faster builds.** "Making sure every part sounds better than before" (which takes a build's fixes back out of any part it made worse) now scores sections only; the bar-by-bar scores are worked out once, at the end, and the original song's measurements are reused instead of redone every time. Same check, a fraction of the time.
+
 ## 1.39.0
 
 - **Smarter merging of hits, notes, loops and samples.** Every copy is scored by how far it strays from what the copies agree on (singing, noise or a different strike all show up). Copies clearly worse than the best are left out; when the cleanest copy is clearly the best, it's used on its own, untouched. Otherwise only the good copies are merged, the better ones counting more, and the **attack stays the cleanest copy's**, so drums keep their snap (only the body and decay are merged).
