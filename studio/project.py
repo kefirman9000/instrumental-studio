@@ -108,7 +108,7 @@ class Project:
         self.meta["stems"] = self.instruments + ["vocals"]
         self.meta["stage"] = "split"
         self._render_cache = {}
-        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples", "_ref_dis", "_bar_chords", "_noise_prof"):
+        for cache in ("_sounds_cache", "_dscale", "_guard", "_tail", "_eq_gain_cache", "_vo_cache", "_refs", "_drum_map", "_drum_samples", "_ref_dis", "_bar_chords", "_noise_prof", "_q_ref"):
             self.__dict__.pop(cache, None)
         os.makedirs(os.path.join(self.root, "stems"), exist_ok=True)
         for k, v in self.stems.items():
@@ -5215,7 +5215,7 @@ class Project:
             self._render_cache.clear()
             q_start = None
             try:
-                q_start = self.quality()["now"]
+                q_start = self.quality(bars=False)["now"]
             except Exception as e:
                 log(f"build: starting score skipped: {e}")
 
@@ -5464,7 +5464,7 @@ class Project:
                 progress(0.92, "Making sure every part sounds better than before")
                 try:
                     self._render_cache.clear()
-                    q_now = self.quality()["now"]
+                    q_now = self.quality(bars=False)["now"]
                     for si_, sc_ in q_now.items():
                         if si_ in q_start and sc_ < q_start[si_] - 2:
                             sec = self.sections[int(si_)]
@@ -5764,14 +5764,17 @@ class Project:
             return ids
 
     # ------------------------------------------------------------------ how clean each section is
-    def quality(self):
+    def quality(self, bars=True):
         """0-100 clean score per section (and per instrument in it), for the raw split and as it is now.
-        Measures sound the original doesn't have (artifacts, wrong parts) and leftover singing."""
+        Measures sound the original doesn't have (artifacts, wrong parts) and leftover singing.
+        bars=False: sections only (quick; what the build's before/after check needs)."""
         with self.lock:
             if self.stage != "detected" or self.original is None:
                 raise RuntimeError("Score sections after step 3, Find damage.")
-            Eo = VF.band_energy(self.original.mean(0), self.B)
-            Ev = VF.band_energy(self.stems["vocals"].mean(0), self.B)
+            if "_q_ref" not in self.__dict__:                 # the original and the vocals never change
+                self.__dict__["_q_ref"] = (VF.band_energy(self.original.mean(0), self.B),
+                                           VF.band_energy(self.stems["vocals"].mean(0), self.B))
+            Eo, Ev = self.__dict__["_q_ref"]
             nf = Eo.shape[1]
             vf = self._vocal_frames(nf)
             vb = (np.asarray(self.centers) >= 250) & (np.asarray(self.centers) <= 5000)
@@ -5799,18 +5802,21 @@ class Project:
                         acc += w * q
                     if tot:
                         secs[str(si)] = int(round(acc / tot))
+                score.E = E
                 return secs, cells
 
             if "quality_before" not in self.meta:
                 self.meta["quality_before"] = score("raw")[0]
             now, cells = score("repaired")
+            E_now = score.E
+            if not bars:
+                return {"before": self.meta["quality_before"], "now": now, "cells": cells}
             # bar by bar, for the bars with singing: the weakest ones, so one bad bar isn't averaged away
             weak, bar_scores = [], {}
             for k in self.instruments:
                 if k in NOT_REPAIRED:
                     continue
-                y = self.shaped_stem(k) * self._gain_curve(k, 0, self.stems[k].shape[1])
-                Ek = VF.band_energy(np.asarray(y, np.float32).mean(0)[:n], self.B)[:, :nf]
+                Ek = E_now[k]                                  # already measured above
                 for wi, (s0, L) in enumerate(self.windows):
                     if not L or float(np.mean(self.VA[s0:s0 + L])) < 0.2:
                         continue
