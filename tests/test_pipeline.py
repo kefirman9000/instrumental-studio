@@ -51,6 +51,11 @@ def main():
         for line in rep["report"]:
             print("       - " + line)
     step("render repaired mix after build", lambda: p.mix("repaired"))
+    fin = step("finishing touches", lambda: p.finish())
+    print("       - " + " | ".join(fin or []))
+    step("render finished mix (part)", lambda: p.mix("repaired", (44100, 3 * 44100)))
+    chk = step("check nothing was lost", p.detail_check)
+    print("       - " + " | ".join((chk or [[]])[0]))
     tgt = p._recover_target()
     if tgt:
         step("recover details from the vocal track", lambda: p.add_recovered(clean[tgt][:, :p.original.shape[1]] * 0.3))

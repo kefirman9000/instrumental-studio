@@ -1,5 +1,14 @@
 # What's new
 
+## 1.43.0
+
+- **⭐ Make enhanced instrumental**, above the tracks: one click, the whole way. It splits with "Keeps every detail" if the song isn't split yet, repairs it, adds the finishing touches below, then checks that nothing was lost. Undo takes it back; Export to save it.
+- **Finishing touches** (in the Repair window, also part of the one click):
+  - **Air:** the sung parts lose some top end along with the voice. They get back up to half of what they lost compared with the parts nobody sings (at most +3 dB above 6 kHz).
+  - **Level:** choruses sound smaller once the voice is gone. The sung parts come up by part of what they lost against the original (at most +3 dB, never down, never into clipping). It changes over seconds, so nothing pumps.
+- **Check nothing was lost** (Repair window): where nobody sings, the instrumental should match the original. It shows how close it is, and flags any lost top end or stereo width, with what to try.
+- **"Keeps every detail" split: second opinion on trouble spots.** Where the quick split heard much more singing than the stronger model took out, a second model checks just those seconds, and the singing either one hears there comes out. Without Roformer this costs nothing extra.
+
 ## 1.42.0
 
 - **New split type: "Keeps every detail: takes out only the singing (fast)".** Instead of cutting the song into instruments and adding them back, the instrumental is the original with only the singing taken out, so no instrument detail is lost.

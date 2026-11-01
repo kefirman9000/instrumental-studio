@@ -245,6 +245,47 @@ def _singing_regions(vocals, sr, pad=1.0, floor_db=-35.0, min_len=0.4):
     return out
 
 
+def _trouble_spots(first, refined, sr, win=0.5, margin_db=6.0, floor_db=-30.0):
+    """Moments where the quick split's vocals are much louder (in the voice's range) than the stronger model's:
+    singing the stronger model may have missed. Merged (start, end) ranges with a little room."""
+    from scipy import signal as sig
+    sos = sig.butter(2, (250.0, 5000.0), "bandpass", fs=sr, output="sos")
+    hop = int(win * sr)
+    m = min(first.shape[1], refined.shape[1]) // hop
+    if m == 0:
+        return []
+    e = lambda x: (sig.sosfilt(sos, x.mean(0)[:m * hop]) ** 2).reshape(m, hop).mean(1) + 1e-12
+    ef, er = e(first), e(refined)
+    loud = ef > ef.max() * 10 ** (floor_db / 10)
+    bad = loud & (10 * np.log10(ef / er) > margin_db)
+    out = []
+    for i in np.flatnonzero(bad):
+        a, b = max(0, (i - 1) * hop), min(first.shape[1], (i + 2) * hop)
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], b)
+        else:
+            out.append((a, b))
+    return out
+
+
+def _louder_where(v1, v2, spots, sr):
+    """In the spots, per frequency and moment, whichever vocal estimate is louder (so missed singing comes out)."""
+    from .audio import stft, istft
+    out = v1.copy()
+    fade = int(0.05 * sr)
+    for a, b in spots:
+        for c in range(2):
+            A, B = stft(v1[c, a:b]), stft(v2[c, a:b])
+            seg = istft(np.where(np.abs(B) > np.abs(A), B, A), b - a).astype(np.float32)
+            ramp = np.ones(b - a, np.float32)
+            f_ = min(fade, (b - a) // 2)
+            if f_:
+                ramp[:f_] = np.linspace(0, 1, f_)
+                ramp[-f_:] = np.linspace(1, 0, f_)
+            out[c, a:b] = v1[c, a:b] * (1 - ramp) + seg * ramp
+    return out
+
+
 def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
     """The instrumental is the original minus the singing: a stronger vocal model (Roformer when installed,
     otherwise the vocal part of htdemucs_ft) runs only on the sung parts; elsewhere the original is used as it
@@ -258,36 +299,52 @@ def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
     audio = audio[:, :n].astype(np.float32)
     first = out["vocals"][:, :n]
     regions = _singing_regions(first, sr)
-    vocals = np.zeros((2, n), np.float32)
-    if regions:
+    roformer = extra_installed("roformer")
+
+    def run(model, regs, f0, f1, label, tag):
+        """A vocal model on just these parts of the song, put back in place (with short fades)."""
+        vocals = np.zeros((2, n), np.float32)
+        if not regs:
+            return vocals
         gap = int(0.5 * sr)
-        clip = np.concatenate([np.concatenate([audio[:, a:b], np.zeros((2, gap), np.float32)], 1) for a, b in regions], 1)
+        clip = np.concatenate([np.concatenate([audio[:, a:b], np.zeros((2, gap), np.float32)], 1) for a, b in regs], 1)
         os.makedirs(workdir, exist_ok=True)
-        wav = os.path.join(workdir, "sung_parts.wav")
+        wav = os.path.join(workdir, f"{tag}.wav")
         wavfile.write(wav, sr, clip.T)
-        sung = sum(b - a for a, b in regions) / sr
-        log(f"keep detail: {len(regions)} sung parts, {sung:.0f} s of {n / sr:.0f} s")
-        if extra_installed("roformer"):
-            d = os.path.join(workdir, "detail_roformer")
-            _run_extra(["roformer", BS_ROFORMER, wav, d, models_dir()], progress, frac0, frac1,
-                       "Taking out only the singing (Roformer, sung parts only)")
-            f = os.path.join(d, "vocals.wav")
+        if model == "roformer":
+            d = os.path.join(workdir, f"{tag}_roformer")
+            _run_extra(["roformer", BS_ROFORMER, wav, d, models_dir()], progress, f0, f1, label)
         else:
-            d = _run_model(wav, "htdemucs_ft:vocals", os.path.join(workdir, "detail_ft"), progress, frac0, frac1)
-            f = os.path.join(d, "vocals.wav")
-        v = load_audio(f, sr)[0]
+            d = _run_model(wav, model, os.path.join(workdir, f"{tag}_demucs"), progress, f0, f1)
+        v = load_audio(os.path.join(d, "vocals.wav"), sr)[0]
         v = np.pad(v, ((0, 0), (0, max(0, clip.shape[1] - v.shape[1]))))
-        fade = int(0.05 * sr)
-        at = 0
-        for a, b in regions:
-            seg = v[:, at:at + (b - a)].copy()
+        fade, at = int(0.05 * sr), 0
+        for a, b in regs:
             ramp = np.ones(b - a, np.float32)
             f_ = min(fade, (b - a) // 2)
             if f_:
                 ramp[:f_] = np.linspace(0, 1, f_)
                 ramp[-f_:] = np.linspace(1, 0, f_)
-            vocals[:, a:b] += seg * ramp
+            vocals[:, a:b] += v[:, at:at + (b - a)] * ramp
             at += (b - a) + gap
+        return vocals
+
+    mid_f = frac0 + (frac1 - frac0) * 0.75
+    if regions:
+        log(f"keep detail: {len(regions)} sung parts, {sum(b - a for a, b in regions) / sr:.0f} s of {n / sr:.0f} s")
+    main = "roformer" if roformer else "htdemucs_ft:vocals"
+    vocals = run(main, regions, frac0, mid_f, "Taking out only the singing (" + ("Roformer" if roformer else "best Demucs vocal model")
+                 + ", sung parts only)", "sung_parts")
+    # trouble spots: where the quick split heard much more singing than the stronger model took out, a second
+    # opinion runs on just those seconds, and whichever hears more singing there wins (per frequency)
+    spots = _trouble_spots(first, vocals, sr)
+    if spots:
+        log(f"keep detail: second opinion on {len(spots)} spots, {sum(b - a for a, b in spots) / sr:.1f} s")
+        if roformer:
+            other = run("htdemucs_ft:vocals", spots, mid_f, frac1, "Second opinion on the trouble spots", "spots")
+        else:
+            other = first                     # the quick split's own vocals are the second opinion: no extra run
+        vocals = _louder_where(vocals, other, spots, sr)
     # singing out of the centre; out of the sides only where the side is mostly singing
     mid = 0.5 * (vocals[0] + vocals[1])
     side_v = 0.5 * (vocals[0] - vocals[1])

@@ -69,7 +69,8 @@
       <div class="spacer"></div>
       <label class="zoom">Zoom <input type="range" id="zoom" min="0" max="100" value="0"></label>
       <button class="ghost small" id="btnFit">Fit song</button>
-      <button class="small primary" id="btnClean" hidden title="One click: replays the song from its own best material, a cleaner copy that can sound a little more produced. Drums played again from merged clean hits, damaged notes rebuilt as notes, loops replayed from clean copies, smart cleanup, and the original wherever nobody sings. Undo takes it back.">✨ Rebuild with samples</button>
+      <button class="small primary" id="btnEnhanced" hidden title="One click, the whole way: splits with &quot;Keeps every detail&quot; if the song isn't split yet, repairs it, brings back the air and level the sung parts lost with the voice, then checks nothing was lost where nobody sings. Undo takes it back.">⭐ Make enhanced instrumental</button>
+      <button class="small" id="btnClean" hidden title="One click: replays the song from its own best material, a cleaner copy that can sound a little more produced. Drums played again from merged clean hits, damaged notes rebuilt as notes, loops replayed from clean copies, smart cleanup, and the original wherever nobody sings. Undo takes it back.">✨ Rebuild with samples</button>
       <button class="small" id="btnEnhance" hidden title="No vocals (a vinyl rip, an instrumental): improve the song instead of repairing it. Drums put right, clicks and artifacts turned down, optionally hiss and vinyl noise.">Enhance (no vocals)</button>
       <button class="small" id="btnRefOpen2" hidden title="Clean stems, loops or samples from this song to guide the repairs (or just drag the files onto the window)">+ Clean stems / samples</button>
     </div>
@@ -171,7 +172,7 @@
     </div>
     <div class="tab" id="tab-grid" hidden>
       <div class="row" style="margin-bottom:10px"><button class="small" id="btnQuality" hidden>Score how clean each section is</button></div>
-      <div class="row" style="margin-bottom:8px"><button class="small" id="btnCheckWorse" title="Scores every section and takes the build's fixes back out of any part that now sounds worse than the split as it came">Check no part got worse</button></div>
+      <div class="row" style="margin-bottom:8px"><button class="small" id="btnCheckWorse" title="Scores every section and takes the build's fixes back out of any part that now sounds worse than the split as it came">Check no part got worse</button> <button class="small" id="btnFinish" title="Brings back the air (top end) and level the sung parts lost when the voice was taken out. Gentle and slow, so nothing pumps. Undo takes it back.">Finishing touches</button> <button class="small" id="btnDetail" title="Where nobody sings the instrumental should match the original: shows how close it is and whether any top end or stereo width was lost">Check nothing was lost</button></div>
       <h3 class="panel-h">How clean each part is</h3>
       <p class="help">Each instrument in each section: green is clean, amber so-so, red needs work. Click a cell to see its fixes in Review.</p>
       <div id="gridWrap"></div>
