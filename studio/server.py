@@ -102,6 +102,8 @@ def _slug(name):
 
 
 def _progress(f, m):
+    if PR.CANCEL.is_set() and S.job.get("running"):
+        raise PR.Stopped("Stopped.")
     if f is None:
         S.job.update(message=m)
     else:
@@ -702,12 +704,23 @@ def _job_clean(rebuild_drums=True):
                 log(f"clean instrumental: drum rebuild skipped for {k}: {e}")
     plan = {x["key"]: x for x in p.build_plan()}
     # everything that rebuilds or cleans, but not the steps that cut things out (mutes, aggressive a cappella)
-    steps = [k for k, x in plan.items() if x["count"] and k not in ("deep", "recover", "mutes", "acappella_hard")]
+    # everything that rebuilds or cleans; not the steps that cut, dip or switch (they make the level jump around)
+    steps = [k for k, x in plan.items() if x["count"] and k not in ("deep", "recover", "mutes", "acappella_hard",
+                                                                    "acappella", "gaps", "check")]
     _pre_build(p, steps, 0.2, 0.3)
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.3 + 0.67 * f, m))
     _progress(0.98, "Saving")
     p.save()
     S.job["result"] = {"title": "Your clean instrumental is built", "report": report + res["report"]}
+
+
+def _job_check():
+    p = S.project
+    back = p.check_not_worse(lambda f, m: _progress(f, m))
+    p.save()
+    S.job["result"] = {"title": "Checked every part", "report": [
+        (f"Took the build's fixes back out of {', '.join(back)}: they made {'it' if len(back) == 1 else 'those parts'} "
+         f"score lower than the split as it came.") if back else "Every part scores at least as well as the split as it came."]}
 
 
 def _job_full(mode, opts):
@@ -1255,6 +1268,9 @@ class Handler(BaseHTTPRequestHandler):
                 if self._proj().stage not in ("split", "detected"):
                     return self._send(400, {"error": "Split the song first (step 2)."})
                 _start_job(_job_clean, bool(d.get("drums", True)))
+                return self._send(200, {"ok": True})
+            if path == "/api/check_not_worse":
+                _start_job(_job_check)
                 return self._send(200, {"ok": True})
             if path == "/api/auto/build":
                 steps = [x for x in (d.get("steps") or []) if x in self._proj().AUTO_STEPS]
