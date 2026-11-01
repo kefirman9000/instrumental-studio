@@ -23,6 +23,10 @@ MODELS = {
     # Roformer takes the vocals out first (cleanest vocal removal), then Demucs splits what's left
     "hybrid": ("4 tracks · Cleanest vocal removal (Roformer first, slow)", ["htdemucs_ft"],
                ["drums", "bass", "other", "vocals"]),
+    # a quick split, then only the singing is taken out of the ORIGINAL (re-checked by a stronger vocal model on
+    # the sung parts only); nothing is cut apart and stitched back, and the original's stereo sides stay
+    "detail": ("4 tracks · Keeps every detail: takes out only the singing (fast)", ["htdemucs"],
+               ["drums", "bass", "other", "vocals"]),
     "6stem_best": ("6 tracks · Best quality", ["htdemucs_6s", "htdemucs_ft"],
                    ["drums", "bass", "guitar", "piano", "other", "vocals"]),
     "6stem": ("6 tracks · Quick (piano track less clean)", ["htdemucs_6s"],
@@ -36,7 +40,7 @@ PASSES = {"htdemucs_ft": 4, "htdemucs": 1, "htdemucs_6s": 1}
 
 def passes(mode, options=None):
     """How much work a split is, in single-model passes (for time estimates)."""
-    n = sum(PASSES.get(m, 1) for m in MODELS[mode][1]) + (3 if mode in NEEDS_EXTRA else 0)
+    n = sum(PASSES.get(m, 1) for m in MODELS[mode][1]) + (3 if mode in NEEDS_EXTRA else 0) + (1 if mode == "detail" else 0)
     return n + (2 if (options or {}).get("backing") else 0) + (1 if (options or {}).get("drums") else 0)
 
 
@@ -214,6 +218,99 @@ def _agreement(arrs):
     return out
 
 
+def _singing_regions(vocals, sr, pad=1.0, floor_db=-35.0, min_len=0.4):
+    """Where the singing is, as merged (start, end) sample ranges with some room around each."""
+    mono = np.abs(vocals).mean(0)
+    hop = int(sr * 0.05)
+    n = len(mono) // hop
+    if n == 0:
+        return []
+    rms = np.sqrt((mono[:n * hop].reshape(n, hop) ** 2).mean(1))
+    thr = max(rms.max() * 10 ** (floor_db / 20), 1e-4)
+    on = rms > thr
+    k = int(pad * sr / hop)
+    if k:
+        on = np.convolve(on.astype(np.int32), np.ones(2 * k + 1, np.int32), "same") > 0
+    out, i = [], 0
+    while i < n:
+        if on[i]:
+            j = i
+            while j < n and on[j]:
+                j += 1
+            if (j - i) * hop >= min_len * sr:
+                out.append((i * hop, min(len(mono), j * hop)))
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
+    """The instrumental is the original minus the singing: a stronger vocal model (Roformer when installed,
+    otherwise the vocal part of htdemucs_ft) runs only on the sung parts; elsewhere the original is used as it
+    is. The singing only comes out of the centre, except where the sides are clearly singing too (wide backing
+    vocals), so the instruments' width and space stay. The instrument tracks are then rebuilt so they add up
+    to that instrumental exactly."""
+    from scipy.io import wavfile
+    from .audio import stft, istft
+    from .installer import extra_installed
+    n = min(audio.shape[1], out["vocals"].shape[1])
+    audio = audio[:, :n].astype(np.float32)
+    first = out["vocals"][:, :n]
+    regions = _singing_regions(first, sr)
+    vocals = np.zeros((2, n), np.float32)
+    if regions:
+        gap = int(0.5 * sr)
+        clip = np.concatenate([np.concatenate([audio[:, a:b], np.zeros((2, gap), np.float32)], 1) for a, b in regions], 1)
+        os.makedirs(workdir, exist_ok=True)
+        wav = os.path.join(workdir, "sung_parts.wav")
+        wavfile.write(wav, sr, clip.T)
+        sung = sum(b - a for a, b in regions) / sr
+        log(f"keep detail: {len(regions)} sung parts, {sung:.0f} s of {n / sr:.0f} s")
+        if extra_installed("roformer"):
+            d = os.path.join(workdir, "detail_roformer")
+            _run_extra(["roformer", BS_ROFORMER, wav, d, models_dir()], progress, frac0, frac1,
+                       "Taking out only the singing (Roformer, sung parts only)")
+            f = os.path.join(d, "vocals.wav")
+        else:
+            d = _run_model(wav, "htdemucs_ft:vocals", os.path.join(workdir, "detail_ft"), progress, frac0, frac1)
+            f = os.path.join(d, "vocals.wav")
+        v = load_audio(f, sr)[0]
+        v = np.pad(v, ((0, 0), (0, max(0, clip.shape[1] - v.shape[1]))))
+        fade = int(0.05 * sr)
+        at = 0
+        for a, b in regions:
+            seg = v[:, at:at + (b - a)].copy()
+            ramp = np.ones(b - a, np.float32)
+            f_ = min(fade, (b - a) // 2)
+            if f_:
+                ramp[:f_] = np.linspace(0, 1, f_)
+                ramp[-f_:] = np.linspace(1, 0, f_)
+            vocals[:, a:b] += seg * ramp
+            at += (b - a) + gap
+    # singing out of the centre; out of the sides only where the side is mostly singing
+    mid = 0.5 * (vocals[0] + vocals[1])
+    side_v = 0.5 * (vocals[0] - vocals[1])
+    side_m = 0.5 * (audio[0] - audio[1])
+    S_v, S_m = stft(side_v), stft(side_m)
+    r = np.abs(S_v) / (np.abs(S_m) + 1e-9)
+    side_v = istft(S_v * np.clip((r - 0.4) / 0.4, 0, 1), n).astype(np.float32)
+    del S_v, S_m, r
+    vocals = np.stack([mid + side_v, mid - side_v]).astype(np.float32)
+    inst = audio - vocals
+    keys = [k for k in out if k != "vocals"]
+    res = {k: np.zeros((2, n), np.float32) for k in keys}
+    for c in range(2):                    # share the instrumental out by how loud each instrument is where
+        I = stft(inst[c])
+        P = [np.abs(stft(out[k][c, :n])) ** 2 + 1e-12 for k in keys]
+        tot = sum(P)
+        for k, pk in zip(keys, P):
+            res[k][c] = istft(I * (pk / tot), n)
+        del I, P, tot
+    res["vocals"] = vocals
+    return res
+
+
 def separate(path, workdir, mode="4stem", progress=lambda f, m: None, options=None):
     """Return dict stem_name -> (2, n) float32 array, and the sample rate."""
     if not demucs_available():
@@ -233,7 +330,7 @@ def separate(path, workdir, mode="4stem", progress=lambda f, m: None, options=No
     wavfile.write(wav, sr, audio.T.astype(np.float32))
     options = options or {}
     from scipy.io import wavfile as _wf
-    steps = 1 + (mode in NEEDS_EXTRA) + bool(options.get("backing")) + bool(options.get("drums"))
+    steps = 1 + (mode in NEEDS_EXTRA) + (mode == "detail") + bool(options.get("backing")) + bool(options.get("drums"))
     span = 0.97 / steps
     at = 0.0
     roformer_vocals = None
@@ -278,6 +375,9 @@ def separate(path, workdir, mode="4stem", progress=lambda f, m: None, options=No
         n = min(min(a.shape[1] for a in out.values()), audio.shape[1])
         out = {k: v[:, :n] for k, v in out.items()}
         out["vocals"] = (audio[:, :n] - sum(v for k, v in out.items() if k != "vocals")).astype(np.float32)
+    if mode == "detail":
+        out = _keep_detail(audio, out, sr, workdir, progress, at, at + span)
+        at += span
     if roformer_vocals is not None:
         # Demucs ran on the Roformer instrumental: whatever it calls vocals is leftover singing
         n0 = min(roformer_vocals.shape[1], out["vocals"].shape[1])

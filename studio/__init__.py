@@ -1,2 +1,2 @@
 """Instrumental Studio — make instrumentals and repair what vocal removal damaged."""
-__version__ = "1.41.0"
+__version__ = "1.42.0"
