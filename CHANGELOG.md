@@ -1,5 +1,14 @@
 # What's new
 
+## 1.41.0
+
+- **Clearer names.** *Build the best instrumental* is now **Repair the instrumental** (fixes the split). *Clean instrumental* is now **Rebuild with samples** (plays the song again from its own best material).
+- **Step by step.** In the Repair window, **Step by step…** runs each step on its own, on top of the ones you kept, so you can hear what each one does and keep it or undo it.
+- **Less muddy / underwater.** The "s" sound removal and the leftover-singing filter are no longer part of the repair (they took out highs and mids), and the steady-noise subtraction (a classic cause of that underwater sound) only runs in Enhance when you ask for it. Repair again (Start over first) to hear the difference.
+- **Enhance (no vocals)**, above the tracks: for vinyl rips and instrumentals. Drums are put right and clicks and artifacts turned down, gently, across the whole song, with optional hiss and vinyl noise reduction.
+- **Samples: only the common ones.** Exported and extracted samples only include sounds used at least 8 times (choose 4 to 24).
+- *Check against the original* stays: it doesn't change the sound at all, it only stops fixes that would put the wrong part in.
+
 ## 1.40.0
 
 **Steadier sound** (the level was jumping up and down):

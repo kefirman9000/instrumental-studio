@@ -69,7 +69,8 @@
       <div class="spacer"></div>
       <label class="zoom">Zoom <input type="range" id="zoom" min="0" max="100" value="0"></label>
       <button class="ghost small" id="btnFit">Fit song</button>
-      <button class="small primary" id="btnClean" hidden title="One click: the cleanest copy of the song the app can make from its own best material. Drums played again from merged clean hits, damaged notes rebuilt as notes, loops replayed from clean copies, smart cleanup, and the original wherever nobody sings. Undo takes it back.">✨ Clean instrumental</button>
+      <button class="small primary" id="btnClean" hidden title="One click: replays the song from its own best material, a cleaner copy that can sound a little more produced. Drums played again from merged clean hits, damaged notes rebuilt as notes, loops replayed from clean copies, smart cleanup, and the original wherever nobody sings. Undo takes it back.">✨ Rebuild with samples</button>
+      <button class="small" id="btnEnhance" hidden title="No vocals (a vinyl rip, an instrumental): improve the song instead of repairing it. Drums put right, clicks and artifacts turned down, optionally hiss and vinyl noise.">Enhance (no vocals)</button>
       <button class="small" id="btnRefOpen2" hidden title="Clean stems, loops or samples from this song to guide the repairs (or just drag the files onto the window)">+ Clean stems / samples</button>
     </div>
     <div class="lanes" id="lanes">
@@ -149,8 +150,8 @@
     </nav>
     <div class="tab" id="tab-review">
       <div class="auto-card" id="autoCard" hidden>
-        <div><b>Build the best instrumental</b><span>Works through every kind of fix in the best order, picks one where they overlap, checks everything against the original, and applies it all as one step you can undo.</span></div>
-        <button class="primary small" data-auto>Build it</button>
+        <div><b>Repair the instrumental</b><span>Works through every kind of fix in the best order, picks one where they overlap, checks everything against the original, and applies it all as one step you can undo.</span></div>
+        <button class="primary small" data-auto>Repair it</button>
       </div>
       <details class="tips" id="tipsBox" open>
         <summary>What to do next <span class="tip-count" id="tipCount"></span><span class="warm-chip" id="warmChip" hidden><span class="spin small"></span>Working out more suggestions</span></summary>
@@ -176,7 +177,7 @@
       <div id="gridWrap"></div>
       <details class="adv-lists"><summary>Repeated parts, hits and bars (advanced)</summary>
       <div class="bulk-best" id="bulkBest">
-        <div class="row" style="margin-bottom:8px"><button class="primary small" data-auto title="Every kind of fix, conflicts worked out, checked against the original, one undo step">Build the best instrumental</button><span class="dim small">Recommended instead of Apply all: it picks one fix where they overlap.</span></div>
+        <div class="row" style="margin-bottom:8px"><button class="primary small" data-auto title="Every kind of fix, conflicts worked out, checked against the original, one undo step">Repair the instrumental</button><span class="dim small">Recommended instead of Apply all: it picks one fix where they overlap.</span></div>
         <b>All repeated parts</b>
         <span class="dim small">Rebuild everything listed below in one go: best versions, drum hits and repeated bars.</span>
         <div class="row"><button class="primary small" data-kind="all" data-accept="1">Apply all</button><button class="small" data-kind="all" data-accept="1" data-blend="1" title="Apply everything, rebuilding drum hits from a blend of their cleanest examples instead of the single cleanest one">Apply all, blend hits</button><button class="small" data-kind="hits" data-accept="1" data-blend="1" title="Rebuild every damaged drum hit from a blend of its cleanest examples (switches any done the single-hit way)">Blend all hits</button><button class="small" data-kind="all" data-accept="0">Add all to Review</button></div>
@@ -369,6 +370,7 @@
     <fieldset><legend>Samples</legend>
       <label title="Every repeated drum hit, note and loop, as its cleanest single copy from the split"><input type="checkbox" name="samples_raw"> Cleanest hits, notes and loops (as they are)</label>
       <label title="The cleanest few copies of each blended into one, so noise in any one copy drops out"><input type="checkbox" name="samples_merged"> Merged from their cleanest copies</label>
+      <label class="small">Only sounds used at least <select name="min_count"><option value="4">4</option><option value="8" selected>8</option><option value="12">12</option><option value="16">16</option><option value="24">24</option></select> times</label>
     </fieldset>
     <details class="adv-lists"><summary>More export options</summary>
     <fieldset><legend>Extras</legend>
@@ -480,6 +482,8 @@
         <option value="both">Both: the single cleanest copy and a merge of the cleanest copies</option>
         <option value="single">The single cleanest copy of each</option>
         <option value="merged">A merge of the cleanest copies (cleanest sound)</option></select></label>
+<label class="ref-row">Only sounds used at least
+      <select id="exMin"><option value="4">4 times</option><option value="8" selected>8 times</option><option value="12">12 times</option><option value="16">16 times</option><option value="24">24 times</option></select></label>
     <label class="ref-row" id="exModeRow">Split with
       <select id="exMode"></select></label>
     <div class="ex-drop" id="exDrop" tabindex="0">Drop a song here<span>or click to choose one (or pick one of your songs above and press Extract)</span></div>
@@ -489,12 +493,20 @@
 </dialog>
 <dialog id="dlgAuto">
   <form method="dialog">
-    <h2>Build the best instrumental</h2>
+    <h2>Repair the instrumental</h2>
     <p>Goes through every option and settles it: the original recording wherever nobody sings (whole parts and the gaps between vocal lines), your clean tracks, the cleanest takes and rebuilt parts everywhere else. Where options overlap or contradict, one is chosen; anything that doesn't line up with the original is left out, and no part may end up sounding worse than before. Building again starts fresh (your own decisions stay). It all becomes one step: Undo takes it back.</p>
     <p class="auto-stems"><span>Have clean stems or samples from this song? Add them first: the build uses them before anything else and checks every other fix against them.</span> <button type="button" class="small" id="btnAutoStems">Add clean stems first…</button></p>
     <div class="seg small auto-preset"><button type="button" id="autoSimple" class="on" title="The best split, the original wherever nobody sings, your clean tracks, careful repairs and cleanup. Fewest wrong guesses.">Simple (recommended)</button><button type="button" id="autoAll" title="Also swaps in repeated parts and bars, learns drum patterns, notches, tone matching and more. Can fix more, but guesses more too.">Everything</button></div>
     <details class="auto-details"><summary>Change what it does</summary><div id="autoSteps"></div></details>
-    <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button value="ok" class="primary">Build</button></div>
+    <div class="dlg-actions"><button value="cancel" class="ghost">Cancel</button><button type="button" id="btnStepByStep" title="Run the steps one at a time: hear what each one does, then keep it or undo it">Step by step…</button><button value="ok" class="primary">Repair</button></div>
+  </form>
+</dialog>
+<dialog id="dlgSteps">
+  <form method="dialog">
+    <h2>Step by step</h2>
+    <p class="help">Each step runs on its own, on top of the ones you kept. Play the song (hold B to hear the split as it came), then keep it or undo it.</p>
+    <div id="stepList"></div>
+    <div class="dlg-actions"><button value="close" class="primary">Done</button></div>
   </form>
 </dialog>
 <dialog id="dlgAutoDone">

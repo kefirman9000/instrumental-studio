@@ -383,3 +383,7 @@ label.check input { margin-top: 3px; }
 .adv-lists { margin-top: 14px; }
 .adv-lists > summary { cursor: pointer; color: var(--dim, #9aa3b2); margin-bottom: 8px; }
 .pop-more > summary { cursor: pointer; color: var(--dim, #9aa3b2); margin: 6px 0; font-size: 12px; }
+.step-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line, #2a2f3a); }
+.step-row b { display: block; }
+.step-row .dim.small { display: block; }
+#dlgSteps { width: min(760px, 94vw); }

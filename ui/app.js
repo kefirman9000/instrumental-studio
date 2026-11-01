@@ -187,15 +187,15 @@ async function runExtract(body) {
   catch (e) { hideBusy(); fail(e); }
 }
 $("#btnExGo").onclick = async () => {
-  const kind = $("#exKind").value, mode = $("#exMode").value, from = $("#exFrom").value;
-  if (from !== "file") return runExtract({ project: decodeURIComponent(from), kind, mode });
+  const kind = $("#exKind").value, mode = $("#exMode").value, from = $("#exFrom").value, min_count = +$("#exMin").value;
+  if (from !== "file") return runExtract({ project: decodeURIComponent(from), kind, mode, min_count });
   const nat = await nativeReady();
-  if (nat) { const p = await nat.choose_song(); if (p) runExtract({ path: p, kind, mode }); return; }
+  if (nat) { const p = await nat.choose_song(); if (p) runExtract({ path: p, kind, mode, min_count }); return; }
   $("#exFile").click();
 };
 async function extractFile(f) {
   try { showBusy(0.01, "Copying the song into the app"); const j = await upload(f, "song" + Date.now());
-    runExtract({ path: j.path, kind: $("#exKind").value, mode: $("#exMode").value }); } catch (err) { hideBusy(); fail(err); }
+    runExtract({ path: j.path, kind: $("#exKind").value, mode: $("#exMode").value, min_count: +$("#exMin").value }); } catch (err) { hideBusy(); fail(err); }
 }
 $("#exFile").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) extractFile(f); };
 $("#exDrop").onclick = () => $("#exFile").click();
@@ -307,6 +307,7 @@ async function watchJob() {
     if (!j.running && s.has_project) {
       hideBusy(); await openWorkspace();
       const res = j.result;
+      if (res && res.step) { stepDone(res); return; }
       if (res && res.report) { showAutoReport(res.report, res.title); return; }
       if (res && res.new_ids && res.new_ids.length) {      // another model was tried for one part
         st.filter = "takes"; st.scope = null; select(res.new_ids[0]);
@@ -1138,17 +1139,53 @@ function followWarm() {
   }, 2500);
 }
 $("#btnUndo").onclick = () => edit("/api/undo", {});
+$("#btnEnhance").onclick = async () => {
+  if (!st.ov) return;
+  const noise = confirm("Enhance: for songs with no vocals (vinyl rips, instrumentals). Drums are put right and clicks and artifacts turned down, gently, across the whole song.\n\nAlso reduce steady hiss and vinyl surface noise? (OK = yes, Cancel = no)");
+  try { stopPreview(); player.pause(); await api.post("/api/enhance", { noise }); showBusy(0.02, "Enhancing"); watchJob(); } catch (e) { fail(e); }
+};
+/* ---------- step by step: each repair step on its own, to hear what it does */
+$("#btnStepByStep").onclick = () => {
+  $("#dlgAuto").close();
+  const box = $("#stepList"); box.innerHTML = "";
+  for (const stp of (st.autoSteps || []).filter(x => x.count > 0 && !["check", "deep"].includes(x.key))) {
+    const row = document.createElement("div"); row.className = "step-row"; row.dataset.key = stp.key;
+    row.innerHTML = `<div><b></b><span class="dim small"></span></div><span class="st dim small"></span>
+      <button type="button" class="small try">Try it</button><button type="button" class="small ghost undo" hidden>Undo it</button>`;
+    row.querySelector("b").textContent = stp.title; row.querySelector("span.dim").textContent = stp.detail;
+    row.querySelector(".try").onclick = async () => {
+      try {
+        stopPreview(); player.pause();
+        await api.post("/api/auto/step", { step: stp.key });
+        st.stepRow = stp.key; showBusy(0.02, stp.title); watchJob();
+      } catch (e) { fail(e); }
+    };
+    row.querySelector(".undo").onclick = async () => {
+      try { await edit("/api/undo", {}); row.querySelector(".st").textContent = "Undone"; row.querySelector(".undo").hidden = true; row.querySelector(".try").hidden = false; }
+      catch (e) { fail(e); }
+    };
+    box.append(row);
+  }
+  $("#dlgSteps").showModal();
+};
+function stepDone(res) {
+  const row = $(`#stepList .step-row[data-key="${res.step}"]`); if (!row) return;
+  row.querySelector(".st").textContent = (res.report || []).slice(0, 2).join(" · ") || "Done";
+  row.querySelector(".try").hidden = true; row.querySelector(".undo").hidden = false;
+  if (!$("#dlgSteps").open) $("#dlgSteps").showModal();
+  toast("Play it to hear the difference (hold B for the split as it came). Keep going, or Undo it.", { ms: 6000 });
+}
 $("#btnCheckWorse").onclick = async () => {
   try { await api.post("/api/check_not_worse", {}); showBusy(0.05, "Checking every part"); watchJob(); } catch (e) { fail(e); }
 };
 $("#btnClean").onclick = async () => {
   if (!st.ov) return;
   const drums = st.ov.stems.some(k => ["drums", "kick", "snare", "toms", "cymbals"].includes(k));
-  if (!confirm("Make the cleanest instrumental the app can?\n\nIt rebuilds the song from its own best material:" +
+  if (!confirm("Rebuild with samples?\n\nThe song is played again from its own best material:" +
       (drums ? " the drums are played again from merged clean hits at every hit," : "") +
       " damaged bass notes are rebuilt as notes, loops replayed from clean copies and leftover noise cleaned." +
       "\n\nIt can sound a little more 'produced' than the original. Undo takes it back.")) return;
-  try { stopPreview(); player.pause(); await api.post("/api/clean_instrumental", { drums }); showBusy(0.02, "Making the clean instrumental"); watchJob(); }
+  try { stopPreview(); player.pause(); await api.post("/api/clean_instrumental", { drums }); showBusy(0.02, "Rebuilding with samples"); watchJob(); }
   catch (e) { fail(e); }
 };
 $("#btnStartOver").onclick = async () => {
@@ -1496,6 +1533,7 @@ function renderSteps() {
   $("#refBox").hidden = true;          // the toolbar's "+ Clean stems / samples" does this (it crowded step 4)
   $("#btnRefOpen2").hidden = !ov.stems.length;
   $("#btnClean").hidden = !ov.stems.length;
+  $("#btnEnhance").hidden = !ov.stems.length;
   const vy = ov.meta.vinyl;
   $("#btnVinylUndo").hidden = !vy;
   $("#importSub").textContent = vy ? `Vinyl crackle removed (${vy.strength}, ${Number(vy.clicks).toLocaleString()} clicks)`
@@ -2083,7 +2121,8 @@ $("#dlgExport").addEventListener("close", async () => {
   showBusy(0.3, "Writing files");
   try {
     const r = await api.post("/api/export", { what, format, reveal: true, match_level: f.elements.match_level.checked,
-                                               declick: f.elements.declick.checked, lufs: f.elements.lufs.checked });
+                                               declick: f.elements.declick.checked, lufs: f.elements.lufs.checked,
+                                               min_count: +f.elements.min_count.value });
     hideBusy(); toast(`Saved ${r.files.length} file(s) to ${r.folder}` + (r.lufs != null ? ` (instrumental at ${r.lufs} LUFS)` : ""), { ms: 9000, action: ["Show folder", () => api.post("/api/reveal", { path: r.folder })] });
   } catch (e) { hideBusy(); fail(e); }
 });
@@ -2425,7 +2464,7 @@ $("#dlgAuto").addEventListener("close", async () => {
   try {
     stopPreview(); player.pause();
     await api.post("/api/auto/build", { steps });
-    showBusy(0.02, "Building the best instrumental");
+    showBusy(0.02, "Repairing the instrumental");
     watchJob();
   } catch (e) { fail(e); }
 });

@@ -570,7 +570,7 @@ def _job_import_ref(todo, kind, apply, build=False):
         _pre_build(p, steps, 0.0, 0.3)
         res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.3 + 0.67 * f, m))
         p.save()
-        S.job["result"] = {"title": "Your instrumental is built", "report": report + res["report"]}
+        S.job["result"] = {"title": "Instrumental repaired", "report": report + res["report"]}
         return
     S.job["result"] = {"title": "Your files are in",
                        "new_ids": all_ids, "report": report}
@@ -594,7 +594,7 @@ def _job_build(steps):
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else (0.4 + 0.6 * f if pre else f), m))
     _progress(0.97, "Saving")
     p.save()
-    S.job["result"] = {"report": res["report"], "title": "Your instrumental is built"}
+    S.job["result"] = {"report": res["report"], "title": "Instrumental repaired"}
 
 
 def _file_hash(path):
@@ -641,10 +641,10 @@ def _auto_rest(p):
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.55 + 0.42 * f, m))
     _progress(0.98, "Saving")
     p.save()
-    S.job["result"] = {"report": res["report"], "title": "Your instrumental is built"}
+    S.job["result"] = {"report": res["report"], "title": "Instrumental repaired"}
 
 
-def _job_extract(path, project_id, kind, mode):
+def _job_extract(path, project_id, kind, mode, min_count=8):
     """From the start screen: a song in, its samples out. Opens the song (or the one already in Songs),
     splits it if it isn't yet, finds its repeated hits and loops, and saves them."""
     if project_id:
@@ -670,7 +670,7 @@ def _job_extract(path, project_id, kind, mode):
     name = re.sub(r"[^\w\- ()]", "", nm) or "song"
     folder = os.path.join(EXPORTS, name, f"{name} - samples")
     what = (["samples_raw"] if kind in ("single", "both") else []) + (["samples_merged"] if kind in ("merged", "both") else [])
-    files = p.export_samples(folder, raw="samples_raw" in what, merged="samples_merged" in what)
+    files = p.export_samples(folder, raw="samples_raw" in what, merged="samples_merged" in what, min_count=min_count)
     p.save()
     reveal(folder)
     S.job["result"] = {"title": "Samples saved", "report": [
@@ -711,7 +711,27 @@ def _job_clean(rebuild_drums=True):
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.3 + 0.67 * f, m))
     _progress(0.98, "Saving")
     p.save()
-    S.job["result"] = {"title": "Your clean instrumental is built", "report": report + res["report"]}
+    S.job["result"] = {"title": "Rebuilt with samples", "report": report + res["report"]}
+
+
+def _job_step(step):
+    """One step of the repair on its own, on top of what's there (its own Undo), to hear what it does."""
+    p = S.project
+    if p.stage != "detected":
+        p.detect(lambda f, m: _progress(None if f is None else 0.2 * f, f"Finding damage: {m}"))
+    _pre_build(p, [step], 0.2, 0.4)
+    res = p.build_best([step], lambda f, m: _progress(None if f is None else 0.4 + 0.58 * f, m), fresh=False)
+    p.save()
+    S.job["result"] = {"title": "Step done", "step": step, "report": res["report"] or ["This step found nothing to change."]}
+
+
+def _job_enhance(noise):
+    p = S.project
+    if p.stage != "detected":
+        p.detect(lambda f, m: _progress(None if f is None else 0.2 * f, f"Analysing: {m}"))
+    rep = p.enhance(noise, lambda f, m: _progress(f, m))
+    p.save()
+    S.job["result"] = {"title": "Enhanced", "report": rep}
 
 
 def _job_check():
@@ -1269,6 +1289,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "Split the song first (step 2)."})
                 _start_job(_job_clean, bool(d.get("drums", True)))
                 return self._send(200, {"ok": True})
+            if path == "/api/auto/step":
+                step = d.get("step")
+                if step not in self._proj().AUTO_STEPS:
+                    return self._send(400, {"error": "Unknown step."})
+                _start_job(_job_step, step)
+                return self._send(200, {"ok": True})
+            if path == "/api/enhance":
+                if not self._proj().instruments:
+                    return self._send(400, {"error": "Split the song first (step 2)."})
+                _start_job(_job_enhance, bool(d.get("noise")))
+                return self._send(200, {"ok": True})
             if path == "/api/check_not_worse":
                 _start_job(_job_check)
                 return self._send(200, {"ok": True})
@@ -1305,7 +1336,7 @@ class Handler(BaseHTTPRequestHandler):
                     src = os.path.realpath(str(d.get("path") or ""))
                     if not os.path.isfile(src):
                         return self._send(400, {"error": "Choose a song."})
-                _start_job(_job_extract, src, pid, kind, mode)
+                _start_job(_job_extract, src, pid, kind, mode, int(d.get("min_count") or 8))
                 return self._send(200, {"ok": True})
             if path == "/api/open_stems":
                 folder = d["folder"]
@@ -1556,6 +1587,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Unknown format.")
                 files = p.export(folder, fmt, tuple(d.get("what", ["mix", "stems", "vocals", "report"])),
                                  match_level=bool(d.get("match_level", False)) and not d.get("lufs"),
+                                 min_count=int(d.get("min_count") or 8),
                                  declick=bool(d.get("declick", False)), lufs=-14.0 if d.get("lufs") else None)
                 if d.get("reveal", True):
                     reveal(folder)
