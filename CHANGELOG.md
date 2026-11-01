@@ -1,5 +1,17 @@
 # What's new
 
+## 1.40.0
+
+**Steadier sound** (the level was jumping up and down):
+- *Use the original between the vocal lines* and *Turn down the parts where only the singer sings* are now **off by default** (tick them in Build if a song needs them). Switching to the original at every gap, and dipping voice-only parts, made the level go up and down.
+- Smart cleanup turns things down by at most 6 dB (was 12).
+- **Clean instrumental** no longer switches, dips or mutes anything.
+- Songs built before this keep the old result until you build again (or press **Start over**, then build).
+
+**"Make sure every part sounds better" is optional now:** off in Build by default (it's slow), and a **Check no part got worse** button in the Song map runs it afterwards.
+
+**Stop really stops.** A split, build or other job stops at its next step, and a stopped build puts the song back exactly as it was.
+
 ## 1.39.1
 
 - **Faster builds.** "Making sure every part sounds better than before" (which takes a build's fixes back out of any part it made worse) now scores sections only; the bar-by-bar scores are worked out once, at the end, and the original song's measurements are reused instead of redone every time. Same check, a fraction of the time.

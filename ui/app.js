@@ -1138,12 +1138,15 @@ function followWarm() {
   }, 2500);
 }
 $("#btnUndo").onclick = () => edit("/api/undo", {});
+$("#btnCheckWorse").onclick = async () => {
+  try { await api.post("/api/check_not_worse", {}); showBusy(0.05, "Checking every part"); watchJob(); } catch (e) { fail(e); }
+};
 $("#btnClean").onclick = async () => {
   if (!st.ov) return;
   const drums = st.ov.stems.some(k => ["drums", "kick", "snare", "toms", "cymbals"].includes(k));
   if (!confirm("Make the cleanest instrumental the app can?\n\nIt rebuilds the song from its own best material:" +
       (drums ? " the drums are played again from merged clean hits at every hit," : "") +
-      " damaged notes are rebuilt as notes, loops replayed from clean copies, leftover noise cleaned, and the original used wherever nobody sings." +
+      " damaged bass notes are rebuilt as notes, loops replayed from clean copies and leftover noise cleaned." +
       "\n\nIt can sound a little more 'produced' than the original. Undo takes it back.")) return;
   try { stopPreview(); player.pause(); await api.post("/api/clean_instrumental", { drums }); showBusy(0.02, "Making the clean instrumental"); watchJob(); }
   catch (e) { fail(e); }

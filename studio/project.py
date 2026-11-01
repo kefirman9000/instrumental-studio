@@ -4634,7 +4634,7 @@ class Project:
         return written
 
     # ------------------------------------------------------------------ smart cleanup: learn what belongs
-    CLEAN_FLOOR_DB = -12      # turn down what doesn't belong by at most this much (never a hard mute)
+    CLEAN_FLOOR_DB = -6       # turn down what doesn't belong by at most this much (more was heard as pumping)
 
     def _band_gain_apply(self, X, gb):
         """Per-band gains (bands, frames) -> per-bin gains on a complex STFT."""
@@ -5068,8 +5068,9 @@ class Project:
 
     # A simple build is the default: the best split, the original wherever nobody sings, your clean tracks,
     # careful repairs and cleanup. These guess more (and can guess wrong), so they're extras you tick yourself.
+    # off unless ticked: they guess more, or change the level from moment to moment (heard as pumping)
     EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
-                   "acappella_hard")
+                   "acappella_hard", "gaps", "acappella", "check")
 
     def _safe_runs(self, aggressive):
         try:
@@ -5159,6 +5160,9 @@ class Project:
              "(replaces the simpler fill-in and mud cut for that instrument).", 1),
             ("seams", "Smooth the seams", "Where the original recording takes over, crossfades are lengthened where the "
                                           "switch would be heard.", 1),
+            ("check", "Make sure every part sounds better than before (slow)",
+             "Scores every section before and after, and takes the build's fixes back out of any part it made worse. "
+             "Off by default; you can also run it afterwards from the Song map.", 1),
         ]
         return [{"key": k, "title": t, "detail": d, "count": int(c),
                  "on": bool(c) and (k != "bestof" or bool(self.alt_modes())) and k not in self.EXTRA_STEPS,
@@ -5166,6 +5170,34 @@ class Project:
                 for k, t, d, c in steps]
 
     def build_best(self, steps=None, progress=lambda f, m: None):
+        """Stoppable: if Stop is pressed mid-way, everything is put back as it was before the build."""
+        with self.lock:
+            snap = self._snapshot(list(self.suggestions))
+            before_ids = set(self.suggestions)
+            mixer0 = json.loads(json.dumps(self.mixer))
+            meta_q = self.meta.get("verified")
+            h0 = len(self.history)
+            try:
+                return self._build_best(steps, progress)
+            except BaseException as e:
+                if type(e).__name__ != "Stopped":
+                    raise
+                for i in [i for i in self.suggestions if i not in before_ids]:
+                    self.suggestions.pop(i, None); self.patches.pop(i, None); self.take_w.pop(i, None)
+                for it in snap:
+                    self.suggestions[it["id"]] = it["sug"]
+                    if it["patch"] is not None:
+                        self.patches[it["id"]] = it["patch"]
+                    if it.get("take_w") is not None:
+                        self.take_w[it["id"]] = it["take_w"]
+                self.mixer = mixer0
+                del self.history[h0:]
+                if meta_q is None:
+                    self.meta.pop("verified", None)
+                self._render_cache.clear()
+                raise
+
+    def _build_best(self, steps=None, progress=lambda f, m: None):
         """Work through every kind of fix in order, choose one where they overlap, check everything against
         the original, and apply the result as ONE undo step. Returns a report.
 
@@ -5214,10 +5246,11 @@ class Project:
             m["seams"] = []
             self._render_cache.clear()
             q_start = None
-            try:
-                q_start = self.quality(bars=False)["now"]
-            except Exception as e:
-                log(f"build: starting score skipped: {e}")
+            if "check" in steps:
+                try:
+                    q_start = self.quality(bars=False)["now"]
+                except Exception as e:
+                    log(f"build: starting score skipped: {e}")
 
             # -- make the candidates (all still waiting)
             progress(0.05, "Finding the cleanest versions of repeating parts")
@@ -5516,7 +5549,7 @@ class Project:
 
             head = []
             try:
-                qf = self.quality()
+                qf = self.quality(bars="check" in steps)
                 b_, n_ = qf.get("before", {}), qf.get("now", {})
                 if n_:
                     avg = lambda d: sum(d.values()) / max(1, len(d))
@@ -5764,6 +5797,30 @@ class Project:
             return ids
 
     # ------------------------------------------------------------------ how clean each section is
+    def check_not_worse(self, progress=lambda f, m: None):
+        """Afterwards: any section that now scores lower than the split did as it came has its fixes taken out
+        (the ones the build chose; yours stay). Returns the names of the parts put back."""
+        with self.lock:
+            before = self.meta.get("quality_before")
+            progress(0.2, "Scoring every section")
+            now = self.quality(bars=False)["now"]
+            if not before:
+                before = self.meta.get("quality_before") or {}
+            back_names, ids = [], []
+            for si_, sc_ in now.items():
+                if si_ in before and sc_ < before[si_] - 2:
+                    sec = self.sections[int(si_)]
+                    xs = [i for i, x in self.suggestions.items() if x.get("by_build") and x["status"] == "accepted"
+                          and x["type"] in self.CHECK_TYPES and x["start"] < sec["end"] and sec["start"] < x["end"]]
+                    if xs:
+                        ids += xs
+                        back_names.append(sec["name"])
+            if ids:
+                self.set_status(ids, "rejected", "Took fixes out of parts they made worse")
+                for i in ids:
+                    self.suggestions[i]["skip_reason"] = "Made this part sound worse"
+            return back_names
+
     def quality(self, bars=True):
         """0-100 clean score per section (and per instrument in it), for the raw split and as it is now.
         Measures sound the original doesn't have (artifacts, wrong parts) and leftover singing.
