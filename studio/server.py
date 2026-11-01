@@ -749,6 +749,42 @@ def _job_full(mode, opts):
     _auto_rest(S.project)
 
 
+def _job_enhanced():
+    """One click, the whole way: split with "Keeps every detail" if the song isn't split yet, find the damage,
+    repair with the usual steps, add the finishing touches (air and level in the sung parts), then check that
+    nothing was lost where nobody sings. Export afterwards."""
+    p = S.project
+    report = []
+    if not p.instruments:
+        _job_split("detail", {})
+        p = S.project
+        report.append("Split with \"Keeps every detail\" (only the singing taken out of the original)")
+    if p.stage != "detected":
+        lo, span = (0.86, 0.03) if report else (0.05, 0.2)
+        p.detect(lambda f, m: _progress(None if f is None else lo + span * f, f"Finding damage: {m}"))
+    steps = [x["key"] for x in p.build_plan() if x["on"]]
+    f0 = 0.89 if report else 0.25
+    _pre_build(p, steps, f0, f0 + (0.95 - f0) * 0.2)
+    res = p.build_best(steps, lambda f, m: _progress(None if f is None else f0 + (0.95 - f0) * (0.2 + 0.7 * f), m))
+    report += res["report"]
+    _progress(0.95, "Finishing touches")
+    report += p.finish()
+    _progress(0.98, "Checking nothing was lost")
+    lines, ok = p.detail_check()
+    report += lines
+    p.save()
+    S.job["result"] = {"title": "Enhanced instrumental ready" + ("" if ok else " (check the notes)"),
+                       "report": report + ["Play it, then Export to save it."]}
+
+
+def _job_finish():
+    p = S.project
+    rep = p.finish(lambda f, m: _progress(f, m))
+    lines, ok = p.detail_check()
+    p.save()
+    S.job["result"] = {"title": "Finishing touches", "report": rep + lines}
+
+
 # ------------------------------------------------------------------ vinyl crackle
 FRESH_MIXER = {"stem_gain": {}, "mute": {}, "solo": {}, "section_gain": {}, "keep": [], "vocal_lift": {},
                "mute_ranges": [], "sides": [], "mud_cut": {}, "tone_eq": {}, "seams": [], "eq_ranges": []}
@@ -1300,6 +1336,24 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "Split the song first (step 2)."})
                 _start_job(_job_enhance, bool(d.get("noise")))
                 return self._send(200, {"ok": True})
+            if path == "/api/enhanced":
+                p = self._proj()
+                if not p.instruments and p.meta.get("source") != "demo" and not SEP.demucs_available() \
+                        and not _reuse_stems(p.meta.get("source_hash"), "detail", exclude=p.root):
+                    return self._send(409, {"error": "need_model", "plan": _model_plan()})
+                _start_job(_job_enhanced)
+                return self._send(200, {"ok": True})
+            if path == "/api/finish":
+                if self._proj().stage not in ("split", "detected") or not self._proj().instruments:
+                    return self._send(400, {"error": "Split the song first (step 2)."})
+                _start_job(_job_finish)
+                return self._send(200, {"ok": True})
+            if path == "/api/detail_check":
+                p = self._proj()
+                if not p.instruments:
+                    return self._send(400, {"error": "Split the song first (step 2)."})
+                lines, ok = p.detail_check()
+                return self._send(200, {"lines": lines, "ok": ok})
             if path == "/api/check_not_worse":
                 _start_job(_job_check)
                 return self._send(200, {"ok": True})

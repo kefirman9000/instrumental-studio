@@ -1175,6 +1175,23 @@ function stepDone(res) {
   if (!$("#dlgSteps").open) $("#dlgSteps").showModal();
   toast("Play it to hear the difference (hold B for the split as it came). Keep going, or Undo it.", { ms: 6000 });
 }
+$("#btnEnhanced").onclick = async () => {
+  if (!st.ov) return;
+  const split = st.ov.stems.length > 0;
+  if (!confirm("Make the enhanced instrumental?\n\n" + (split ? "" : "The song is split with \"Keeps every detail\" (only the singing taken out of the original), then ")
+      + (split ? "The song is " : "") + "repaired, the air and level the sung parts lost with the voice are brought back, and it's checked that nothing was lost where nobody sings.\n\nUndo takes it back. Export to save it.")) return;
+  try {
+    stopPreview(); player.pause();
+    await api.post("/api/enhanced", {});
+    showBusy(0.02, "Making the enhanced instrumental"); watchJob();
+  } catch (e) { if (e.message === "need_model") installModelFromStep(); else fail(e); }
+};
+$("#btnFinish").onclick = async () => {
+  try { stopPreview(); player.pause(); await api.post("/api/finish", {}); showBusy(0.05, "Finishing touches"); watchJob(); } catch (e) { fail(e); }
+};
+$("#btnDetail").onclick = async () => {
+  try { const r = await api.post("/api/detail_check", {}, 120000); showAutoReport(r.lines, r.ok ? "Nothing lost" : "Something was lost"); } catch (e) { fail(e); }
+};
 $("#btnCheckWorse").onclick = async () => {
   try { await api.post("/api/check_not_worse", {}); showBusy(0.05, "Checking every part"); watchJob(); } catch (e) { fail(e); }
 };
@@ -1533,6 +1550,7 @@ function renderSteps() {
   $("#refBox").hidden = true;          // the toolbar's "+ Clean stems / samples" does this (it crowded step 4)
   $("#btnRefOpen2").hidden = !ov.stems.length;
   $("#btnClean").hidden = !ov.stems.length;
+  $("#btnEnhanced").hidden = false;
   $("#btnEnhance").hidden = !ov.stems.length;
   const vy = ov.meta.vinyl;
   $("#btnVinylUndo").hidden = !vy;

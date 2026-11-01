@@ -747,6 +747,8 @@ class Project:
                 mall = self.mute_mask(a, b, only_all=True)
                 if mall is not None:
                     out = out * (1 - mall)[None, :]
+                if m.get("finish"):
+                    out = self._apply_finish(out, a, b)
             return out
         return out[:, region[0]:region[1]] if region else out
 
@@ -5248,6 +5250,7 @@ class Project:
                         else:
                             m["tone_eq"].pop(k_, None)
                 m["seams"] = []
+                m.pop("finish", None)          # worked out on the last build's sound; Finish again afterwards
             self._render_cache.clear()
             q_start = None
             if "check" in steps:
@@ -5850,6 +5853,136 @@ class Project:
                 for i in ids:
                     self.suggestions[i]["skip_reason"] = "Made this part sound worse"
             return back_names
+
+    # ------------------------------------------------------------------ finishing touches
+    FIN_RATE = 10               # finish curves: values per second
+    AIR_BAND = (6000.0, 16000.0)
+
+    def _apply_finish(self, out, a, b):
+        """The finish set by finish(): the sung parts' missing air lifted back, and their level brought up where
+        taking the voice out left them smaller. Both are slow curves, so nothing pumps."""
+        f = self.mixer["finish"]
+        t = np.arange(a, b, dtype=np.float64) / self.sr
+        ft = np.arange(len(f.get("level") or f.get("air") or [0])) / self.FIN_RATE
+        if f.get("air") and max(f["air"]) > 0.05:
+            from scipy import signal as sig
+            db = np.interp(t, ft, f["air"]).astype(np.float32)
+            sos = sig.butter(2, self.AIR_BAND[0], "highpass", fs=self.sr, output="sos")
+            band = sig.sosfilt(sos, out, axis=1).astype(np.float32)    # a 6 kHz filter settles in well under 1 ms
+            out = out + band * (10 ** (db / 20) - 1)[None, :]
+        if f.get("level") and max(f["level"]) > 0.05:
+            db = np.interp(t, ft, f["level"]).astype(np.float32)
+            out = out * (10 ** (db / 20))[None, :]
+        return out.astype(np.float32)
+
+    def _frames(self, x, hop):
+        n = x.shape[-1] // hop
+        return (x[..., :n * hop].reshape(*x.shape[:-1], n, hop) ** 2).mean(-1) + 1e-12
+
+    def finish(self, progress=lambda f, m: None):
+        """The finishing touches for an enhanced instrumental: (1) air - the sung parts lose some top end with
+        the voice, so they get back up to half of what they lost compared with the parts nobody sings (at most
+        +3 dB); (2) level - choruses sound smaller once the voice is gone, so the sung parts come up by part of
+        what they lost against the original (at most +3 dB, never down, over a few seconds). One Undo."""
+        from scipy import signal as sig
+        from scipy.ndimage import uniform_filter1d
+        with self.lock:
+            old_fin = self.mixer.pop("finish", None)
+            self._render_cache.pop("mix", None)
+
+            def keep_old():
+                if old_fin:
+                    self.mixer["finish"] = old_fin
+            progress(0.2, "Listening to the instrumental")
+            y = self.mix("repaired")
+            n = y.shape[1]
+            orig = self.original[:, :n]
+            hop = self.sr // self.FIN_RATE
+            nf = n // hop
+            vc = self._vocal_curve(0, nf * hop)[::hop][:nf]
+            vc = uniform_filter1d(vc, 10)
+            sung, free = vc > 0.15, vc < 0.03
+            report = []
+            if sung.sum() < self.FIN_RATE * 2 or free.sum() < self.FIN_RATE * 2:
+                keep_old()
+                return ["Nothing to finish: the song needs parts with and without singing to compare."]
+            smooth = lambda v, sec: uniform_filter1d(v, max(1, int(sec * self.FIN_RATE)))
+            progress(0.45, "Bringing back the air")
+            hi_sos = sig.butter(4, self.AIR_BAND, "bandpass", fs=self.sr, output="sos")
+            md_sos = sig.butter(2, (500.0, 4000.0), "bandpass", fs=self.sr, output="sos")
+            ym = y.mean(0)
+            hi = self._frames(sig.sosfilt(hi_sos, ym), hop)[:nf]
+            md = self._frames(sig.sosfilt(md_sos, ym), hop)[:nf]
+            tilt = 10 * np.log10(smooth(hi, 4) / smooth(md, 4))
+            ref = float(np.median(tilt[free]))
+            air = np.clip(0.5 * (ref - tilt), 0, 3) * np.clip(vc / 0.3, 0, 1)
+            air = smooth(air, 2)
+            progress(0.7, "Evening out the level")
+            e_y = 10 * np.log10(smooth(self._frames(ym, hop)[:nf], 3))
+            e_o = 10 * np.log10(smooth(self._frames(orig.mean(0), hop)[:nf], 3))
+            d = e_o - e_y
+            base = float(np.median(d[free]))
+            lvl = np.clip(0.5 * (d - base), 0, 3) * np.clip(vc / 0.3, 0, 1)
+            lvl = smooth(lvl, 3)
+            # never into clipping: the lift is limited where the instrumental is already near the top
+            pk = np.abs(y[:, :nf * hop]).max(0).reshape(nf, hop).max(1)
+            room = 20 * np.log10(0.98 / np.maximum(pk, 1e-6))
+            lvl = np.minimum(lvl, np.maximum(room, 0))
+            fin = {"air": [round(float(v), 2) for v in air], "level": [round(float(v), 2) for v in lvl]}
+            if max(fin["air"] + fin["level"]) < 0.1:
+                keep_old()
+                return ["The sung parts already match the rest: nothing to finish."]
+            keep_old()
+            self._push("Finishing touches", [])
+            self.mixer["finish"] = fin
+            self._render_cache.pop("mix", None)
+            if air.max() >= 0.1:
+                report.append(f"Brought back the air in the sung parts (up to +{air.max():.1f} dB above 6 kHz)")
+            if lvl.max() >= 0.1:
+                report.append(f"Brought up the sung parts that sounded smaller without the voice (up to +{lvl.max():.1f} dB, gently)")
+            return report
+
+    def detail_check(self):
+        """Before/after check: where nobody sings, the instrumental should be almost the same as the original.
+        Measures how close it is, and any loss of top end or stereo width there. Returns (lines, ok)."""
+        with self.lock:
+            from scipy import signal as sig
+            y = self.mix("repaired")
+            n = y.shape[1]
+            orig = self.original[:, :n]
+            hop = self.sr // self.FIN_RATE
+            nf = n // hop
+            vc = self._vocal_curve(0, nf * hop)[::hop][:nf]
+            from scipy.ndimage import uniform_filter1d, minimum_filter1d
+            free = uniform_filter1d(vc, 10) < 0.03
+            mm = self.mute_mask(0, nf * hop, only_all=True)
+            if mm is not None:
+                free &= mm[::hop][:nf] < 0.05
+            free = minimum_filter1d(free.astype(np.int8), 5) > 0
+            if free.sum() < self.FIN_RATE * 3:
+                return ["Not enough of the song without singing to compare with the original."], True
+            idx = np.repeat(free, hop)
+            yy, oo = y[:, :nf * hop][:, idx], orig[:, :nf * hop][:, idx]
+            same = max(0.0, 1 - float(((yy - oo) ** 2).sum() / ((oo ** 2).sum() + 1e-9)))
+            sos = sig.butter(4, self.AIR_BAND, "bandpass", fs=self.sr, output="sos")
+            h = lambda x: float((sig.sosfilt(sos, x.mean(0)) ** 2).mean()) + 1e-12
+            air_db = 10 * np.log10(h(yy) / h(oo))
+            w = lambda x: float(((x[0] - x[1]) ** 2).mean()) + 1e-12
+            width_db = 10 * np.log10(w(yy) / w(oo)) if w(oo) > 1e-8 else 0.0
+            lines = [f"Where nobody sings, the instrumental is {same * 100:.0f}% the same as the original"
+                     f" (top end {air_db:+.1f} dB, stereo width {width_db:+.1f} dB)."]
+            ok = True
+            if air_db < -1.5:
+                ok = False
+                lines.append("It's lost some top end there: a step has dulled the sound. Try Start over and repair with fewer steps, or the \"Keeps every detail\" split.")
+            if width_db < -2:
+                ok = False
+                lines.append("It's narrower than the original there: keep the original's stereo sides, or try the \"Keeps every detail\" split.")
+            if same < 0.85 and ok:
+                lines.append("It differs from the original more than expected where nobody sings: check the parts the repair replaced.")
+            if ok and same >= 0.85:
+                lines.append("Nothing was lost there.")
+            return lines, ok
 
     def quality(self, bars=True):
         """0-100 clean score per section (and per instrument in it), for the raw split and as it is now.
