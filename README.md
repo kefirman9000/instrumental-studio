@@ -26,6 +26,17 @@ When you remove the vocals from a song, the instruments playing underneath the s
 
 You do this once. It takes about 10 minutes, most of it waiting for downloads.
 
+### The easy way: one file installs everything
+
+Download and unzip the app (step 1 below), then double-click the installer for your computer. It installs Python, ffmpeg and the app's parts if they're missing, then offers the separation model:
+
+- **Windows:** **Install everything (Windows).bat**. No admin rights needed.
+- **Mac:** **Install everything (Mac).command**. It asks for your Mac password once. The first time, macOS may block it: right-click it, choose **Open**, then **Open** again.
+- **Linux:** run `./install_everything.sh` in a terminal.
+
+It's safe to run again: anything already installed is skipped. When it shows everything OK, start the app (step 5). Prefer to do it by hand? Follow the steps below.
+
+### Step by step
 
 1. **Download the app.** Go to the [latest release](https://github.com/kefirman9000/instrumental-studio/releases/latest), download **InstrumentalStudio-x.x.x.zip**, and unzip it somewhere you'll find it again, such as your Documents folder.
 

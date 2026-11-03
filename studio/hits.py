@@ -74,9 +74,46 @@ def name_sound(shape, centers):
     return "tom / low drum"
 
 
-def find_sounds(x, sr, min_count=6, similarity=0.9):
+def _attack_rise(x, pos, sr):
+    """How much each hit jumps out of what came before it (dB): energy of the first 10 ms vs the 20 ms before."""
+    a, b = int(0.02 * sr), int(0.01 * sr)
+    out = np.zeros(len(pos), np.float32)
+    for i, p in enumerate(pos):
+        pre = x[max(0, p - a):p]
+        post = x[p:p + b]
+        if len(pre) < a // 2 or len(post) < b // 2:
+            continue
+        out[i] = 10 * np.log10((np.mean(post ** 2) + 1e-12) / (np.mean(pre ** 2) + 1e-12))
+    return out
+
+
+def _flatness(F):
+    """Spectral flatness of each hit's band shape: ~1 for white noise, low for a drum or note with a body."""
+    p = np.exp(F.astype(np.float64))
+    return np.exp(np.log(p + 1e-12).mean(1)) / (p.mean(1) + 1e-12)
+
+
+def on_grid(pos, sr, beat_times, tol=0.03):
+    """Which hits land within `tol` seconds of a 16th note of the beat grid."""
+    bt = np.asarray(beat_times, float)
+    if len(bt) < 2:
+        return np.ones(len(pos), bool)
+    sub = np.concatenate([np.linspace(bt[i], bt[i + 1], 5)[:-1] for i in range(len(bt) - 1)] + [bt[-1:]])
+    t = np.asarray(pos, float) / sr
+    j = np.clip(np.searchsorted(sub, t), 1, len(sub) - 1)
+    return np.minimum(np.abs(sub[j] - t), np.abs(sub[j - 1] - t)) <= tol
+
+
+MAX_FLATNESS = 0.6      # a "sound" this flat is noise (hiss, separation wash), not a drum or a note
+MIN_RISE_DB = 4.0       # a real hit jumps at least this much out of what came before it
+MIN_ON_GRID = 0.6       # at least this share of a sound's hits must land on the 16th-note grid
+
+
+def find_sounds(x, sr, min_count=6, similarity=0.9, beat_times=None):
     """Group a track's hits into repeated sounds. Returns (positions, list of clusters as index arrays,
-    features, levels, band centres)."""
+    features, levels, band centres). Groups that are noise (flat spectrum, no real attack) or that mostly
+    fall off the beat grid (when `beat_times` is given) are left out: they are separation leftovers, not
+    sounds the song plays."""
     B, centers = _bands(sr)
     pos = onsets(x, sr)
     if len(pos) < min_count:
@@ -95,7 +132,19 @@ def find_sounds(x, sr, min_count=6, similarity=0.9):
         if len(members) >= min_count:
             clusters.append(np.array(sorted(members)))
             unassigned -= set(members)
-    return pos, clusters, F, lv, centers
+    rise = _attack_rise(x, pos, sr)
+    flat = _flatness(F)
+    grid = on_grid(pos, sr, beat_times) if beat_times is not None else np.ones(len(pos), bool)
+    keep = []
+    for c in clusters:
+        if np.median(flat[c]) > MAX_FLATNESS and np.median(rise[c]) < 2 * MIN_RISE_DB:
+            continue                                   # noise bursts
+        if np.median(rise[c]) < MIN_RISE_DB:
+            continue                                   # no attack: a swell or wash, not a hit
+        if grid[c].mean() < MIN_ON_GRID:
+            continue                                   # mostly off the beat: not part of the groove
+        keep.append(c)
+    return pos, keep, F, lv, centers
 
 
 def align(best, target, max_shift):

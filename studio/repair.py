@@ -17,7 +17,12 @@ MARGIN = N_FFT        # extra context so STFT edges never reach the audible part
 
 
 # ----------------------------------------------------------------------------- matching
-def match_window(F, C, R, s, L, n_donors=3, exclude=None):
+MAX_BAND_DIST = 1.5     # mean squared log-level difference (about 5 dB rms) above which a donor isn't the same part
+MAX_CHORD_DIST = 0.25   # 1 - chord similarity above which a donor isn't playing the same notes
+MAX_VOCAL_OVERLAP = 0.3  # a donor that was itself sung over in the same places is damaged too: never borrowed from
+
+
+def match_window(F, C, R, s, L, n_donors=3, exclude=None, prefer=None):
     """Rank donor windows (start beats) for target window [s, s+L) of one stem.
 
     F, C, R: per-beat log band energy, chroma, vocal presence per band (beats x bands).
@@ -43,6 +48,13 @@ def match_window(F, C, R, s, L, n_donors=3, exclude=None):
     med_b = np.median(bd[valid]) + EPS
     med_c = np.median(cd[valid]) + EPS
     dist = 0.45 * bd / med_b + 0.45 * cd / med_c + 0.1 * lvl / (np.median(lvl[valid]) + EPS)
+    # absolute limits: the median-relative score above always finds *something*; these make sure it's the same part
+    valid &= (bd < MAX_BAND_DIST) & (cd < MAX_CHORD_DIST) & (pen < MAX_VOCAL_OVERLAP)
+    if prefer is not None and len(prefer):
+        # the same bar of another copy of the same section (bar 3 of Chorus 2 for bar 3 of Chorus 1) comes first
+        pref = np.zeros(len(starts), bool)
+        pref[[p for p in prefer if 0 <= p < len(starts)]] = True
+        dist = dist - 0.3 * pref
     score = np.where(valid, dist + 1.5 * pen, np.inf)
     chosen = []
     for d in np.argsort(score):
@@ -56,6 +68,9 @@ def match_window(F, C, R, s, L, n_donors=3, exclude=None):
         return [], 0.0
     b = chosen[0]
     conf = float(np.clip(1.3 * (1 - b["dist"]), 0, 1) * np.clip(1 - b["overlap"], 0, 1))
+    # ...and capped by how close the match really is, so a song with no good donors doesn't get confident repairs
+    i0 = b["beat"]
+    conf = min(conf, float(np.clip(1 - bd[i0] / MAX_BAND_DIST, 0, 1) ** 0.5 * np.clip(1 - cd[i0] / MAX_CHORD_DIST, 0, 1) ** 0.5))
     return chosen, conf
 
 
@@ -157,7 +172,9 @@ def repair_window(stem, vocals, inst_sum, s0, s1, lags, conf, strength, bands, b
         D *= (Es > level_floor)
         D = np.clip(gaussian_filter(D, (1, 1)), 0, 1).astype(np.float32)
         T = (1 - D) * It + D * E
-        ph = np.angle((1 - D) * Xt[c] + D * donors[0][c])
+        # phase from one source per cell (the donor where it mostly takes over, else the stem): blending the phase
+        # of two different takes is what makes fills sound phasey
+        ph = np.where(D > 0.5, np.angle(donors[0][c]), np.angle(Xt[c]))
         Y = T * np.exp(1j * ph)
         out[c] = istft(Y, n)
         D_all += D / ch

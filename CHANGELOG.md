@@ -1,5 +1,19 @@
 # What's new
 
+## 1.44.0
+
+- **Cleaner builds: Build the best instrumental no longer makes things worse.** Tested against songs whose clean instrumental is known, the old default build lost a lot of quality compared with the plain split (on a real song: 23.5 dB down to 15.9 dB; the bass under the singing went from 46 dB to 16 dB). With 1.44 the same build stays at 22.6 dB and leaves the bass untouched.
+  - **Smart clean-up is now off by default** (tick it under extras if you want it): it was the main cause, turning down parts of the drums and bass that belonged there.
+  - **Repeated riffs are only copied from a bar that really plays the same part.** Before, "same chord" was enough, so a damaged bar could get a different riff pasted in. Now the same notes have to start in the same order, 16th note by 16th note, and the bars have to match closely in absolute terms, not just compared with the rest of the song. "Rebuild riffs and patterns that repeat" is on by default again.
+  - **Repairs only borrow from a close, clean match:** a part that was itself sung over is never used, a song with no good match gets no confident repair, and the same bar of another copy of the same section (bar 3 of Chorus 2 for bar 3 of Chorus 1) is tried first.
+  - Filled-in sound takes its phase from one recording at a time, not a blend of two, so repairs sound less phasey.
+  - The never-worse check is on by default.
+- **Samples, loops and repeated bars are built from the best part of each copy.** Instead of averaging the copies, every small slice of time and pitch comes from the copy that is cleanest there (one copy's highs, another's low mids), with smooth changes between them and each part keeping its own copy's phase. On a test sound with a different flaw in each copy: 52 dB clean, against 34 dB for the old merge.
+- **No more noise or off-beat "samples":** drum sounds that are only noise (flat sound, no real attack) or that mostly fall off the beat are left out, and repeating samples must stand well above the track's noise floor.
+- **Sections:** changes are looked for over 4, 8 and 16 bars (slow builds were missed), boundaries prefer 4- and 8-bar phrases, and where the singing starts counts less, so sections follow the music.
+- **Bars follow the downbeat** if it shifts partway through a song (a bar of 2, a dropped beat) instead of every later bar starting on the wrong beat.
+- **New: Install everything** (Windows, Mac, Linux): one file that installs Python, ffmpeg and the app's parts on a computer that has none of them, then offers the separation model.
+
 ## 1.43.0
 
 - **⭐ Make enhanced instrumental**, above the tracks: one click, the whole way. It splits with "Keeps every detail" if the song isn't split yet, repairs it, adds the finishing touches below, then checks that nothing was lost. Undo takes it back; Export to save it.

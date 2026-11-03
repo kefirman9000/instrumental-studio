@@ -165,12 +165,13 @@ class Project:
 
         progress(0.25, "Finding the beat")
         env = A.onset_envelope(Mb)
+        low_env = A.onset_envelope(Mb[centers < 150])
         period = A.estimate_period(env, fps, self.meta.get("bpm_override"))
         beats = A.track_beats(env, period)
-        low_env = A.onset_envelope(Mb[centers < 150])
         inst_chroma = Ch @ (np.sqrt(I2) * (1 - r_bins))
         bpb = st["beats_per_bar"]
-        phase = A.downbeat_phase(beats, low_env, inst_chroma, bpb)
+        downs = A.downbeats(beats, low_env, inst_chroma, bpb)
+        phase = downs[0] if downs else 0
         self.beats = beats
         self.beat_times = (beats * HOP / sr).tolist()
         self.meta["bpm"] = float(60 * fps / np.median(np.diff(beats)))
@@ -178,13 +179,18 @@ class Project:
         VA = np.array([va[beats[j]:max(beats[j + 1], beats[j] + 1)].mean() for j in range(nb)])
         self.VA = VA
         # bar windows
+        # bars follow the downbeats, which may change phase mid-song (a bar of 2, a dropped beat)
         windows = []
         if phase > 0:
             windows.append((0, phase))
-        s = phase
-        while s < nb:
-            windows.append((s, min(bpb, nb - s)))
-            s += bpb
+        marks = [d for d in downs if d < nb] + [nb]
+        for d0, d1 in zip(marks[:-1], marks[1:]):
+            s = d0
+            while s < d1:
+                windows.append((s, min(bpb, d1 - s)))
+                s += bpb
+        if not windows:
+            windows = [(0, nb)]
         self.windows = windows
 
         progress(0.4, "Detecting song sections")
@@ -321,7 +327,7 @@ class Project:
         # vocal coverage of this instrument's usual spectrum = risk even without a donor
         prof = np.exp(F).mean(0)
         risk = float((prof * R[s:s + L].mean(0)).sum() / (prof.sum() + EPS))
-        donors, conf = match_window(F, C, R, s, L, st["n_donors"])
+        donors, conf = match_window(F, C, R, s, L, st["n_donors"], prefer=self._same_bar_elsewhere(wi))
         sid = f"r_{k}_{wi}"
         base = {"id": sid, "type": "repair", "stem": k, "window": wi, "beat": s, "beats": L,
                 "start": s0 / self.sr, "end": s1 / self.sr, "section": self._section_of(s0 / self.sr),
@@ -349,6 +355,24 @@ class Project:
                                      "severity": b["score"], "removed_db": b["removed_db"],
                                      "note": "Leftover vocal detected in this instrument"}
             self.patches[bid] = (b["lo"], b["patch"].astype(np.float16))
+
+    def _same_bar_elsewhere(self, wi):
+        """Start beats of the same bar in the other copies of this window's section (same label, same bar offset)."""
+        try:
+            s0 = self.windows[wi][0]
+            si = self._section_of(self.beat_times[s0])
+            sec = self.sections[si]
+            off = wi - sec["start_bar"]
+            out = []
+            for sj, other in enumerate(self.sections):
+                if sj == si or other.get("label") != sec.get("label"):
+                    continue
+                w = other["start_bar"] + off
+                if other["start_bar"] <= w < other["end_bar"] and self.windows[w][1] == self.windows[wi][1]:
+                    out.append(self.windows[w][0])
+            return out
+        except Exception:
+            return []
 
     def _donor_info(self, donors, L):
         out = []
@@ -2673,6 +2697,38 @@ class Project:
         cd = float(1 - (C[s1:s1 + L1] * C[s2:s2 + L2]).sum(1).mean())
         return bd, cd
 
+    def _sub_chroma(self, k):
+        """Pitch content of an instrument every 16th note (n_beats*4, 12), using only what the vocals left alone.
+        Per-beat chroma can't tell an arpeggio from the same notes in another order; this can."""
+        cache = self.__dict__.setdefault("_subchroma", {})
+        if k not in cache:
+            S = np.abs(stft(self.stems[k].mean(0)))
+            V = np.abs(stft(self.stems["vocals"].mean(0)))[:, :S.shape[1]]
+            ok = (V ** 2 / (V ** 2 + S ** 2 + EPS)) < 0.3
+            P = A.chroma_matrix(self.sr) @ (S * ok)
+            # which notes START in each 16th (rising pitch energy), not which ones ring: ringing notes overlap,
+            # so an arpeggio and the same chord in another order would otherwise look the same
+            P = np.maximum(0, np.diff(np.log(P + 1e-3 * P.max() + EPS), axis=1, prepend=0)) * np.sqrt(P)
+            bt = np.asarray(self.beats, float)
+            q = np.concatenate([np.linspace(bt[j], bt[j + 1], 5)[:-1] for j in range(len(bt) - 1)] + [bt[-1:]])
+            idx = np.clip(np.round(q).astype(int), 0, P.shape[1] - 1)
+            out = np.stack([P[:, idx[i]:max(idx[i] + 1, idx[i + 1])].mean(1) for i in range(len(idx) - 1)])
+            out /= np.linalg.norm(out, axis=1, keepdims=True) + EPS
+            cache[k] = out.astype(np.float32)
+        return cache[k]
+
+    def _bar_notes_match(self, k, w1, w2):
+        """Same notes in the same order, 16th note by 16th note (where both bars have something playing)."""
+        Q = self._sub_chroma(k)
+        (s1, L1), (s2, L2) = self.windows[w1], self.windows[w2]
+        if L1 != L2:
+            return 0.0
+        a, b = Q[s1 * 4:(s1 + L1) * 4], Q[s2 * 4:(s2 + L2) * 4]
+        n = min(len(a), len(b))
+        if n == 0:
+            return 0.0
+        return float((a[:n] * b[:n]).sum(1).mean())
+
     def _dist_scale(self, k):
         cache = self.__dict__.setdefault("_dscale", {})
         if k not in cache:
@@ -2801,7 +2857,8 @@ class Project:
         cache = self.__dict__.setdefault("_sounds_cache", {})
         if k not in cache:
             x = self.stems[k].mean(0)
-            pos, clusters, F, lv, centers = HT.find_sounds(x, self.sr)
+            pos, clusters, F, lv, centers = HT.find_sounds(
+                x, self.sr, beat_times=self.beat_times if k in self.PERCUSSIVE else None)
             vc = self._vocal_curve(0, x.shape[0])
             cov = vc[np.clip(pos + int(0.02 * self.sr), 0, len(vc) - 1)] if len(pos) else np.zeros(0)
             sounds = []
@@ -3010,6 +3067,9 @@ class Project:
         va = np.asarray(self.VA, float) if len(self.VA) else np.zeros(len(self.beats))
         lev = Q.mean(1)
         floor = np.percentile(lev, 60) - np.log(10 ** 1.5)   # 15 dB under the usual level counts as not playing
+        # ...and a loop must stand clearly (10 dB) above the track's noise floor: otherwise two quiet stretches of
+        # hiss look alike once their level is taken out, and get exported as a "repeating sample"
+        floor = max(floor, np.percentile(lev, 10) + np.log(10.0))
 
         def feat(b0, b1):
             X = Q[b0 * 4:b1 * 4]
@@ -3096,6 +3156,12 @@ class Project:
         return float(max(3 * lost, (E * R[s0:s0 + L]).sum() / (E.sum() + EPS))), float(np.log(E.sum(1).mean() + EPS))
 
     SWAP_SIM = 0.93          # how alike two bars/parts must be before one may replace the other
+    # ...and in absolute terms: the score above is relative to the song's typical bar-to-bar difference, so in a
+    # song where nothing repeats exactly it still "found" repeats (tested against known clean stems: most bars it
+    # swapped in were different music). A whole bar is only replaced by one that is really the same part.
+    BAR_MAX_BAND = 1.0       # mean squared log-level difference between the bars (about 4 dB rms)
+    BAR_MAX_CHORD = 0.15     # 1 - chord similarity
+    BAR_MIN_NOTES = 0.85     # same notes in the same order, 16th note by 16th note (not just the same chord)
     CHORD_SIM = 0.88         # ...and the chords around them (all instruments) must match this closely
 
     def _bar_chords(self):
@@ -3138,7 +3204,9 @@ class Project:
                     if v == w or v in used:
                         continue
                     d = self._bar_dist(k, w, v)
-                    if d and 1.3 * (1 - (0.5 * d[0] / mb + 0.5 * d[1] / mc)) >= min_sim and self.chords_match(w, v):
+                    if d and d[0] < self.BAR_MAX_BAND and d[1] < self.BAR_MAX_CHORD \
+                            and 1.3 * (1 - (0.5 * d[0] / mb + 0.5 * d[1] / mc)) >= min_sim and self.chords_match(w, v) \
+                            and self._bar_notes_match(k, w, v) >= self.BAR_MIN_NOTES:
                         group.append(v)
                 damaged = [v for v in group if info[v][0] >= 0.1]
                 if len(group) >= 3 and damaged:
@@ -4312,12 +4380,17 @@ class Project:
 
     @staticmethod
     def _merge_clips(clips, keep_attack=0.02):
-        """The best version of a sound from several copies (the first is the cleanest by the caller's ranking):
+        """The best version of a sound from several copies (the first is the cleanest by the caller's ranking),
+        built from the best PART of each copy rather than an average of them:
           - every copy is scored by how far it strays from what the copies agree on (singing, noise or a
             different strike show up as straying); copies clearly worse than the best are left out,
           - if only the cleanest is left, it's used on its own, untouched,
-          - otherwise the good ones are merged, the better ones counting more, and the attack (first 20 ms)
-            stays the cleanest copy's, so hits keep their snap; only the body and decay are merged."""
+          - otherwise, for every small time/frequency tile, the copy that is closest to what the copies agree on
+            THERE is used (one copy's vocal-free highs, another's undamaged low mids...). Extra sound only one
+            copy has (a trace of singing, a click) counts double against it. The choice is smoothed so it never
+            flickers between copies, and each tile keeps its own copy's phase, so nothing is smeared.
+          - the attack (first 20 ms) stays the cleanest copy's, so hits keep their snap."""
+        from scipy.ndimage import gaussian_filter
         n = clips[0].shape[1]
         clips = [np.asarray(c[:, :n], np.float32) for c in clips if c.shape[1] >= n]
         if len(clips) < 2:
@@ -4335,13 +4408,21 @@ class Project:
         if len(good) == 1:
             Project._last_merge = (1, len(clips))
             return clips[0].copy()
-        wts = np.array([1.0 / (dev[i] + 1e-3) for i in good])
-        wts /= wts.sum()
+        # per-tile badness of each good copy: extra sound (bleed, noise) counts double, missing sound once
+        diff = L[good] - cons[None]
+        bad = np.where(diff > 0, 2.0 * diff, -diff)
+        bad = np.stack([gaussian_filter(b, (3, 2)) for b in bad])        # tiles ~ a few bins x a few frames
+        bad += 0.5 * dev[good][:, None, None]                              # better copies win ties
+        wt = np.exp(-(bad - bad.min(0, keepdims=True)) / 0.15)             # nearly hard choice of the best copy
+        wt = np.stack([gaussian_filter(w, (2, 2)) for w in wt])            # ...that changes smoothly
+        wt /= wt.sum(0, keepdims=True) + 1e-9
+        pick = wt.argmax(0)
         out = np.zeros_like(clips[0])
         for ch in range(clips[0].shape[0]):
-            X = [stft(clips[i][ch]) for i in good]
-            logm = sum(w * np.log(np.abs(x) + 1e-9) for w, x in zip(wts, X))     # weighted, in level terms
-            out[ch] = istft(np.exp(logm) * np.exp(1j * np.angle(X[0])), n)
+            X = np.stack([stft(clips[i][ch]) for i in good])
+            mag = np.exp((wt * np.log(np.abs(X) + 1e-9)).sum(0))
+            ph = np.take_along_axis(np.angle(X), pick[None], 0)[0]       # phase of the copy chosen there
+            out[ch] = istft(mag * np.exp(1j * ph), n)
         a = int(keep_attack * 44100)                      # the cleanest copy's attack, then crossfade
         if a and n > 3 * a:
             f = np.ones(n, np.float32)
@@ -4353,7 +4434,7 @@ class Project:
 
     def _merge_label(self):
         used, total = Project._last_merge
-        return "cleanest copy (the others were worse)" if used == 1 else f"merged from {used} good copies"
+        return "cleanest copy (the others were worse)" if used == 1 else f"best parts of {used} good copies"
 
     def _sample_ready(self, y):
         y = np.asarray(y, np.float32).copy()
@@ -5074,8 +5155,11 @@ class Project:
     # A simple build is the default: the best split, the original wherever nobody sings, your clean tracks,
     # careful repairs and cleanup. These guess more (and can guess wrong), so they're extras you tick yourself.
     # off unless ticked: they guess more, or change the level from moment to moment (heard as pumping)
-    EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
-                   "acappella_hard", "gaps", "acappella", "check")
+    # The default build is kept small: separation, the original where nobody sings, whole-part copies, close-match
+    # repairs, leftover singing and clicks, then the never-worse check. Each extra pass (smart clean-up, notches,
+    # tone matching, ...) adds a little processing of its own, and stacked they cost more clarity than they win.
+    EXTRA_STEPS = ("versions", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
+                   "acappella_hard", "gaps", "acappella", "smartclean")
 
     def _safe_runs(self, aggressive):
         try:

@@ -96,6 +96,48 @@ def track_beats(env, period, tightness=100.0):
     return beats
 
 
+def downbeats(beats, low_env, chroma, bpb=4, win=32, min_run=16, margin=1.25):
+    """Downbeat (bar start) beat indices that may change phase during the song. One phase is chosen for the
+    whole song as before, but where another phase is clearly stronger (by `margin`) for `min_run` beats or
+    more, e.g. after a bar of 2 or a dropped beat, the bars follow it, so one slip no longer pushes every
+    later bar (and every loop and repair window) off the downbeat."""
+    nb = len(beats) - 1
+    ch = chroma / (np.linalg.norm(chroma, axis=0, keepdims=True) + EPS)
+    nov = np.zeros(len(beats))
+    for j in range(1, len(beats) - 1):
+        a = ch[:, beats[j - 1]:beats[j]].mean(1)
+        b = ch[:, beats[j]:beats[j + 1]].mean(1)
+        nov[j] = 1 - float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + EPS))
+    lo = np.array([low_env[max(0, b - 2):b + 3].max() for b in beats])
+    sc = lo / (lo.mean() + EPS) + nov / (nov.mean() + EPS)
+    g = downbeat_phase(beats, low_env, chroma, bpb)
+    if nb < 2 * win:
+        return list(range(g, nb, bpb)) if g < nb else [0]
+    P = np.zeros((len(beats), bpb))
+    for j in range(len(beats)):
+        a, z = max(0, j - win // 2), min(len(beats), j + win // 2)
+        for p in range(bpb):
+            idx = [i for i in range(a, z) if i % bpb == p]
+            P[j, p] = sc[idx].mean() if idx else 0.0
+    best = P.argmax(1)
+    local = np.full(len(beats), g)
+    j = 0
+    while j < len(beats):                              # switch only for long, clearly stronger stretches
+        p = best[j]
+        e = j
+        while e < len(beats) and best[e] == p:
+            e += 1
+        if p != g and e - j >= min_run and np.mean(P[j:e, p]) > margin * np.mean(P[j:e, g]):
+            local[j:e] = p
+        j = e
+    out, last = [], -bpb
+    for j in range(nb):
+        if j % bpb == local[j] and j - last >= 2:
+            out.append(j)
+            last = j
+    return out or list(range(g if g < nb else 0, nb, bpb))
+
+
 def downbeat_phase(beats, low_env, chroma, bpb=4):
     """Pick which beat in each group of `bpb` is the downbeat: strongest low-end hits + chord changes."""
     best, best_s = 0, -1e9
@@ -130,18 +172,26 @@ def detect_sections(bar_feats, bar_vocal, bar_energy, min_bars=4):
     X = bar_feats - bar_feats.mean(0, keepdims=True)          # remove what every bar shares
     F = X / (np.linalg.norm(X, axis=1, keepdims=True) + EPS)
     S = F @ F.T
-    k = min_bars
-    g = np.outer(np.r_[-np.ones(k), np.ones(k)], np.r_[-np.ones(k), np.ones(k)])
-    g *= np.outer(np.hanning(2 * k + 2)[1:-1], np.hanning(2 * k + 2)[1:-1])
-    Sp = np.pad(S, k, mode="edge")
-    nov = np.array([(Sp[i:i + 2 * k, i:i + 2 * k] * g).sum() for i in range(n)])
-    nov = np.maximum(nov, 0)
-    # vocal on/off is a strong boundary cue
+    # novelty at several sizes: 4-bar changes and the slower 8/16-bar ones a single small kernel misses
+    nov = np.zeros(n)
+    for k in (min_bars, 2 * min_bars, 4 * min_bars):
+        if n < 2 * k + 2:
+            continue
+        g = np.outer(np.r_[-np.ones(k), np.ones(k)], np.r_[-np.ones(k), np.ones(k)])
+        g *= np.outer(np.hanning(2 * k + 2)[1:-1], np.hanning(2 * k + 2)[1:-1])
+        Sp = np.pad(S, k, mode="edge")
+        nk = np.maximum(np.array([(Sp[i:i + 2 * k, i:i + 2 * k] * g).sum() for i in range(n)]), 0)
+        nov += nk / (nk.max() + EPS)
+    nov = nov / (nov.max() + EPS)
+    # vocal on/off only nudges: separation decides where it is, and singing starts mid-phrase
     vb = (bar_vocal > 0.08).astype(float)
-    nov = nov / (np.abs(nov).max() + EPS) + 0.6 * np.abs(np.diff(np.r_[vb[0], vb]))
+    nov = nov + 0.2 * np.abs(np.diff(np.r_[vb[0], vb]))
+    # songs move in 4- and 8-bar phrases: prefer boundaries on them (counted from the first strong bar)
+    ph = np.array([1.0 if i % 4 == 0 else 0.75 if i % 2 == 0 else 0.5 for i in range(n)])
+    nov = nov * ph
     bounds = [0]
     for i in np.argsort(-nov):
-        if nov[i] < 0.35:
+        if nov[i] < 0.3:
             break
         if all(abs(i - b) >= min_bars for b in bounds) and n - i >= min_bars:
             bounds.append(int(i))
