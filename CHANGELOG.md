@@ -1,5 +1,12 @@
 # What's new
 
+## 1.46.0
+
+- **New build step: Rebuild the whole track from its clean repeats** (tick it in the build list). For songs built from repeating parts (house, dance, pop, loops), every damaged bar with singing is played again, instrument by instrument, from the copies of the same bar where nobody sings, so the singing has nothing left to pop out of.
+  - Each copy is lined up to the sample (copies a few milliseconds apart would cancel each other) and level-matched, and the bar is built from the best part of each copy.
+  - Every copy is checked against the real sound of the bar it replaces, on everything the singing didn't cover, before it's used. Only near-exact copies pass. Bars with no such copy, and bars that weren't damaged, are left exactly as they are.
+  - Tested on a real instrumental played as a loop, with singing over it and damaged the way a split damages it: the whole instrumental went from 24.7 dB to 28.5 dB (the normal build: 25.0 dB), the backing instruments under the singing from 8.4 dB to 12.9 dB and the drums from 17.7 dB to 19.2 dB, with the bass untouched. On songs without exact repeats it changes nothing.
+
 ## 1.45.0
 
 - **Drums keep their hi-hats and cymbals in "Keeps every detail".** Vocal models file some hi-hat, cymbal and snare sound as singing, so taking the singing out of the original left the drums dull in every sung part (measured on a real export: the cymbals 10 dB down as soon as the singing starts). Now wherever the drum track clearly owns a moment and frequency, the singing estimate is kept out of it. On a test with a vocal model that grabs hi-hats: 26.5 dB to 32.1 dB, cymbals back near their real level.
