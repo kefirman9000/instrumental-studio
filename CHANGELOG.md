@@ -1,5 +1,10 @@
 # What's new
 
+## 1.47.0
+
+- **Opening a song always shows that it's working.** From the start screen (Open a song, dropping a file, Recent songs, Import stems, the demo), a loading window comes up the moment you start, instead of a few seconds of nothing. Copying a big file into the app shows its progress, and a spinner and moving bar show the app is busy even between messages.
+- **New: Reset to original** (top right, next to Start over): takes the song back to exactly how it was when you opened it: no split, no fixes, no edits (and the untouched recording if you removed vinyl crackle). Start over still keeps the split and only clears your fixes. Your exported files are kept either way. A reset can't be undone, so it asks first.
+
 ## 1.46.0
 
 - **New build step: Rebuild the whole track from its clean repeats** (tick it in the build list). For songs built from repeating parts (house, dance, pop, loops), every damaged bar with singing is played again, instrument by instrument, from the copies of the same bar where nobody sings, so the singing has nothing left to pop out of.

@@ -879,6 +879,28 @@ def _job_vinyl_undo():
     S.job["result"] = {"report": lines, "title": "Crackle removal undone"}
 
 
+def _job_reset_original():
+    """Back to the song exactly as it was opened: the untouched recording (before any crackle removal), no split,
+    no fixes, no levels or edits. The split and everything made from it are removed (exports are kept)."""
+    p = S.project
+    raw = p.meta.get("source_raw")
+    src = p.meta.get("source")
+    _progress(0.05, "Reading the original recording")
+    if raw and os.path.isfile(raw):
+        x, sr = load_audio(raw)
+        src = raw
+    elif src and src != "demo" and os.path.isfile(str(src)):
+        x, sr = load_audio(src)
+    else:
+        x, sr = p.original, p.sr            # the demo, or a song whose file is gone: the recording the project holds
+    _progress(0.4, "Clearing the split and every change")
+    _use_recording(p, x, sr, src, raw or src, None)
+    p.save()
+    S.job["result"] = {"title": "Back to the original song",
+                       "report": ["The song is as it was when you opened it: no split, no fixes, no edits.",
+                                  "Your exported files are kept. Split it again (step 2) when you're ready."]}
+
+
 def _job_stems(folder, name, auto=False):
     root = _slug(name)
     p = _Project()(root)
@@ -1319,6 +1341,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/vinyl/undo":
                 self._proj()
                 _start_job(_job_vinyl_undo)
+                return self._send(200, {"ok": True})
+            if path == "/api/reset_original":
+                self._proj()
+                _start_job(_job_reset_original)
                 return self._send(200, {"ok": True})
             if path == "/api/auto/plan":
                 return self._send(200, {"steps": self._proj().build_plan()})

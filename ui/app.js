@@ -126,11 +126,13 @@ async function loadProject(id) {
 
 function showWelcome(on) {
   $("#welcome").hidden = !on;
-  $("#btnUndo").hidden = on; $("#btnExport").hidden = on;
+  $("#btnUndo").hidden = on; $("#btnExport").hidden = on; $("#btnResetOrig").hidden = on;
   if (on) refreshState();
 }
 
+const baseName = p => String(p || "").split(/[\\/]/).pop().replace(/\.[^.]+$/, "") || "the song";
 async function startSong(path) {
+  showLoading(0.02, `Opening ${baseName(path)}`);      // shown at once: reading a big file can take a few seconds
   try {
     await api.post("/api/open_song", { path });
     watchJob();
@@ -152,9 +154,23 @@ function needModel() {
     : "Splitting needs the separation model. Download it here; the light turns green when it's ready. Your song is saved in Songs.", { ms: 7000 });
 }
 
-async function upload(file, batch) {
-  const r = await fetch("/api/upload", { method: "POST", headers: { "X-Filename": encodeURIComponent(file.name), "X-Batch": batch, "X-Studio-Token": TOKEN }, body: file });
-  const j = await r.json(); if (!r.ok) throw new Error(j.error); return j;
+// onProgress(fraction 0..1) while the file is copied into the app (big files take a few seconds)
+function upload(file, batch, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", "/api/upload");
+    x.setRequestHeader("X-Filename", encodeURIComponent(file.name));
+    x.setRequestHeader("X-Batch", batch);
+    x.setRequestHeader("X-Studio-Token", TOKEN);
+    if (onProgress) x.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    x.onload = () => {
+      let j = {};
+      try { j = JSON.parse(x.responseText || "{}"); } catch { /* not JSON: reported below */ }
+      if (x.status >= 200 && x.status < 300) resolve(j); else reject(new Error(j.error || `Copying the file failed (${x.status}).`));
+    };
+    x.onerror = () => reject(new Error("Copying the file into the app failed."));
+    x.send(file);
+  });
 }
 
 $("#btnOpenSong").onclick = async () => {
@@ -163,8 +179,13 @@ $("#btnOpenSong").onclick = async () => {
   $("#fileSong").click();
 };
 async function openSongFile(f) {
-  showBusy(0.01, "Copying the song into the app");
-  try { const j = await upload(f, "song" + Date.now()); startSong(j.path); } catch (err) { hideBusy(); fail(err); }
+  const nm = f.name.replace(/\.[^.]+$/, "");
+  showLoading(0.01, `Opening ${nm}: copying it into the app`);
+  try {
+    const j = await upload(f, "song" + Date.now(),
+      x => showLoading(0.01 + 0.04 * x, `Opening ${nm}: copying it into the app (${Math.round(100 * x)}%)`));
+    startSong(j.path);
+  } catch (err) { hideBusy(); fail(err); }
 }
 $("#fileSong").onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
@@ -194,7 +215,8 @@ $("#btnExGo").onclick = async () => {
   $("#exFile").click();
 };
 async function extractFile(f) {
-  try { showBusy(0.01, "Copying the song into the app"); const j = await upload(f, "song" + Date.now());
+  try { showLoading(0.01, "Copying the song into the app"); const j = await upload(f, "song" + Date.now(),
+      x => showLoading(0.01 + 0.01 * x, `Copying the song into the app (${Math.round(100 * x)}%)`));
     runExtract({ path: j.path, kind: $("#exKind").value, mode: $("#exMode").value, min_count: +$("#exMin").value }); } catch (err) { hideBusy(); fail(err); }
 }
 $("#exFile").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) extractFile(f); };
@@ -220,7 +242,12 @@ async function openStemFiles(files) {
   const batch = "stems" + Date.now();
   try {
     let folder;
-    for (let i = 0; i < files.length; i++) { showBusy(i / files.length * 0.05, `Copying ${files[i].name}`); folder = (await upload(files[i], batch)).folder; }
+    for (let i = 0; i < files.length; i++) {
+      const at = i / files.length, nm = files[i].name;
+      showLoading(at * 0.05, `Copying ${nm} (${i + 1} of ${files.length})`);
+      folder = (await upload(files[i], batch, x => showLoading((at + x / files.length) * 0.05,
+        `Copying ${nm} (${i + 1} of ${files.length}, ${Math.round(100 * x)}%)`))).folder;
+    }
     const name = files[0].name.replace(/\.[^.]+$/, "").replace(/[ _-]*(vocals?|drums|bass|other|instrumental|no_vocals)$/i, "") || "Imported stems";
     startStems(folder, name);
   } catch (err) { hideBusy(); fail(err); }
@@ -268,9 +295,13 @@ window.addEventListener("drop", async e => {
 function S_busy() { return !$("#busy").hidden || !!st.state?.job?.running; }
 async function startStems(folder, name) {
   const auto = stemsAuto; stemsAuto = false;
+  showLoading(0.05, `Opening the stems${name ? ` of ${name}` : ""}`);
   try { await api.post("/api/open_stems", { folder, name, auto }); watchJob(); } catch (e) { hideBusy(); fail(e); }
 }
-$("#btnDemo").onclick = async () => { try { await api.post("/api/demo"); watchJob(); } catch (e) { fail(e); } };
+$("#btnDemo").onclick = async () => {
+  showLoading(0.02, "Opening the demo song");
+  try { await api.post("/api/demo"); watchJob(); } catch (e) { hideBusy(); fail(e); }
+};
 $("#btnSongs").onclick = () => { stopPreview(); $("#player").pause(); showWelcome(true); };
 $("#sepMode").onchange = e => { localStorage.setItem("sepMode", e.target.value); e.target.dataset.auto = ""; e.target.dataset.picked = "1"; renderSpeedTip(); };
 // Without a graphics card the best-quality model (4 passes) is slow, so start with Fast until the person picks
@@ -290,7 +321,8 @@ function showBusy(f, msg) {
   const secs = Math.round((Date.now() - busySince) / 1000);
   $("#busyTime").textContent = secs >= 5 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")} elapsed` : "";
   $("#btnBusyHelp").hidden = secs < 45;
-  $("#busy").hidden = false; $("#busyMsg").textContent = msg; $("#busyBar").style.width = pct(f); $("#busyPct").textContent = pct(f);
+  $("#busy").hidden = false; $("#busyMsg").textContent = msg; $("#busyBar").style.width = pct(f);
+  $("#busyPct").textContent = /\d+%\)$/.test(msg) ? "" : pct(f);      // a message with its own % (copying a file) says it
   $("#btnStop").hidden = false; }
 // a progress screen for opening songs (nothing to stop there)
 function showLoading(f, msg) { showBusy(f, msg); $("#btnStop").hidden = true; $("#btnBusyHelp").hidden = true; }
@@ -1209,6 +1241,18 @@ $("#btnStartOver").onclick = async () => {
   if (!st.ov || !confirm("Start over on this song? Every fix goes back to undecided, and levels, kept parts, mutes, cuts, clean tracks and grid edits are cleared. The split stays. Undo brings it all back.")) return;
   try { await api.post("/api/start_over", {}); await openWorkspace(); toast("Back to the start: the song as it was split. Undo brings your work back."); }
   catch (e) { fail(e); }
+};
+
+$("#btnResetOrig").onclick = async () => {
+  if (!st.ov) return;
+  if (!confirm(`Reset "${st.ov.meta.name}" to the original song?\n\nThe split, every fix and every edit are removed, `
+    + "so the song is exactly as you opened it. Your exported files are kept.\n\nThis can't be undone, and the song "
+    + "has to be split again afterwards.")) return;
+  try {
+    stopPreview(); player.pause();
+    showLoading(0.02, "Resetting to the original song");
+    await api.post("/api/reset_original", {}); watchJob();
+  } catch (e) { hideBusy(); fail(e); }
 };
 
 /* ---------- kept parts */
@@ -2489,7 +2533,10 @@ $("#dlgAuto").addEventListener("close", async () => {
 $("#btnAutoExport").onclick = () => { $("#dlgAutoDone").close(); $("#dlgExport").showModal(); };
 function showAutoReport(lines, title) {
   $("#autoDoneTitle").textContent = title || "Built";
-  $("#btnAutoExport").hidden = !/built|instrumental/i.test(title || "Built");
+  const isBuild = /built|instrumental/i.test(title || "Built");
+  $("#btnAutoExport").hidden = !isBuild;
+  $("#autoDoneHint").hidden = !isBuild;                 // the "Undo takes the build back" hint is about builds only
+  $("#btnAutoOk").textContent = isBuild ? "Listen first" : "OK";
   const ul = $("#autoReport"); ul.innerHTML = "";
   for (const l of (lines.length ? lines : ["Nothing needed changing."])) { const li = document.createElement("li"); li.textContent = l; ul.append(li); }
   $("#dlgAutoDone").showModal();

@@ -26,6 +26,7 @@
   <button class="update-pill" id="updPill" hidden></button>
   <button class="ghost" id="btnUndo" disabled title="Undo (Ctrl+Z)">Undo</button>
   <button class="ghost" id="btnStartOver" title="Back to the song as it was split: every fix undecided again; levels, kept parts, mutes, cuts, clean tracks and grid edits cleared. Undo brings it back.">Start over</button>
+  <button class="ghost" id="btnResetOrig" hidden title="Back to the original song, as you opened it: the split and every change are removed (your exported files are kept). This can't be undone.">Reset to original</button>
   <button class="primary" id="btnExport" disabled>Export</button>
 </header>
 
@@ -514,8 +515,8 @@
   <form method="dialog">
     <h2 id="autoDoneTitle">Built</h2>
     <ul id="autoReport"></ul>
-    <p class="dim small">Play it with Repaired selected. Undo (Ctrl+Z) takes the whole build back in one step.</p>
-    <div class="dlg-actions"><button value="ok" class="ghost">Listen first</button><button type="button" class="primary" id="btnAutoExport">Export…</button></div>
+    <p class="dim small" id="autoDoneHint">Play it with Repaired selected. Undo (Ctrl+Z) takes the whole build back in one step.</p>
+    <div class="dlg-actions"><button value="ok" class="ghost" id="btnAutoOk">Listen first</button><button type="button" class="primary" id="btnAutoExport">Export…</button></div>
   </form>
 </dialog>
 <dialog id="dlgReset">

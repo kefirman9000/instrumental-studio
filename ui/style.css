@@ -308,6 +308,15 @@ label.check input { margin-top: 3px; }
 .best-item .btns { display: flex; gap: 6px; }
 
 .busy-foot { display: flex; justify-content: space-between; }
+/* always moving while the app works, so a few seconds without a new message never look like a freeze */
+#busy .busy-msg { display: flex; align-items: center; gap: 10px; }
+#busy .busy-msg::before { content: ""; flex: none; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--repair); animation: spin .8s linear infinite; }
+#busy .bar { position: relative; }
+#busy .bar::after { content: ""; position: absolute; inset: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, #ffffff40, transparent); animation: busy-sweep 1.4s ease-in-out infinite; }
+@keyframes busy-sweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { #busy .busy-msg::before { animation-duration: 2.4s; } #busy .bar::after { animation: none; } }
 .busy-actions { display: flex; gap: 8px; margin-top: 12px; }
 .safe-banner { border: 1px solid var(--repair); border-radius: var(--radius-m); padding: 10px 12px; margin-top: 20px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .safe-banner span { color: var(--muted); line-height: 1.45; }
