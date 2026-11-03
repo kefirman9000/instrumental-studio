@@ -3290,7 +3290,9 @@ class Project:
 
     # ------------------------------------------------------------------ the whole track from its clean repeats
     REBUILD_COPIES = 5        # at most this many clean copies make up each rebuilt bar
-    REBUILD_FIT = 0.9         # a copy, lined up, must match the damaged bar this closely where the singing left it alone
+    REBUILD_FIT = 0.97        # a copy, lined up, must match the damaged bar this closely where the singing left it alone
+                              # (1 - 1/SNR: 0.97 = within 15 dB). Tested: true copies 0.998+, other bars 0.81-0.94
+    REBUILD_FIT_SPREAD = 0.02 # ...and be about as good as the best copy found: a merge is only as clean as its worst copy
     REBUILD_DAMAGE = 0.1      # only bars at least this damaged are rebuilt (the rest are better left as they are)
 
     def _fine_lag(self, k, t0, t1, src, lag, reach=1024):
@@ -3393,19 +3395,23 @@ class Project:
                     for w, (t0, t1) in zip(run, spans):
                         st_, Lt = self.windows[w]
                         lo, hi = max(a, t0 - XFADE // 2), min(b, t1 + XFADE // 2)
-                        clips = []
+                        clips, fits = [], []
                         for v in plans[w]:
                             sv = self.windows[v][0]
                             lag = refine_lag(self.stem_env[k], self.beats[st_], self.beats[st_ + Lt], self.beats[sv])
                             lag = self._fine_lag(k, t0, t1, src, lag)
-                            if self._copy_fit(k, t0, t1, segment(src, t0 + lag, t1 + lag)) < self.REBUILD_FIT:
+                            fit = self._copy_fit(k, t0, t1, segment(src, t0 + lag, t1 + lag))
+                            if fit < self.REBUILD_FIT:
                                 continue                       # not really the same part: never pasted in
                             rel = (1 - R[st_:st_ + Lt]) * (1 - R[sv:sv + Lt])
                             dlog = float((rel * (F[st_:st_ + Lt] - F[sv:sv + Lt])).sum() / (rel.sum() + EPS))
                             g = float(np.clip(np.exp(dlog / 2), 0.5, 2.0))
                             clips.append(segment(src, lo + lag, hi + lag) * g)
+                            fits.append(fit)
                         if not clips:
                             continue                           # this bar stays as it is
+                        order = np.argsort(fits)[::-1]
+                        clips = [clips[i] for i in order if fits[i] >= fits[order[0]] - self.REBUILD_FIT_SPREAD]
                         y = self._merge_clips(clips) if len(clips) >= 2 else clips[0]
                         ww = _window_weight(hi - lo, t0 - lo, t1 - lo)
                         acc[:, lo - a:hi - a] += y[:, :hi - lo] * ww[None, :]
