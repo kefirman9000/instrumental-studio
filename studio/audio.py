@@ -31,6 +31,33 @@ def have_ffmpeg():
     return shutil.which("ffmpeg") is not None
 
 
+def song_title(path):
+    """'Artist - Title' (or just the title) from a file's tags, via ffprobe; None if there are none."""
+    exe = shutil.which("ffprobe")
+    if not exe:
+        return None
+    try:
+        out = proc.run([exe, "-v", "error", "-show_entries", "format_tags=title,artist", "-of",
+                        "default=noprint_wrappers=1", path], capture_output=True, timeout=20)
+    except Exception:
+        return None
+    tags = {}
+    for line in out.stdout.decode("utf-8", errors="ignore").splitlines():
+        k, _, v = line.partition("=")
+        k = k.split(":")[-1].strip().lower()
+        if v.strip() and k in ("title", "artist") and k not in tags:
+            tags[k] = v.strip()
+    if not tags.get("title"):
+        return None
+    return f"{tags['artist']} - {tags['title']}" if tags.get("artist") else tags["title"]
+
+
+def is_placeholder_name(name):
+    """The app's own file name for a song's copy ("source", "source (2)"...), not a real song name."""
+    import re
+    return not name or bool(re.fullmatch(r"(source|song|input|instrumental)( \(\d+\))?", str(name).strip().lower()))
+
+
 def load_audio(path, sr=44100):
     """Load any audio file as float32 array shaped (channels, samples) at `sr`.
 

@@ -286,6 +286,29 @@ def _louder_where(v1, v2, spots, sr):
     return out
 
 
+DRUM_GUARD = (0.5, 0.9)   # drum share of a cell at which the vocal estimate starts / stops being kept out of it
+
+
+def _protect_drums(vocals, drums, n):
+    """Vocal models file some hi-hat, cymbal and snare sound as singing, and taking it out of the original
+    leaves the drums dull in every sung part (heard as "the drums don't show up"). Where the quick split's
+    drum track clearly dominates a moment and frequency, the vocal estimate is kept out of it."""
+    if drums is None:
+        return vocals
+    from .audio import stft, istft
+    out = np.zeros_like(vocals)
+    lo, hi = DRUM_GUARD
+    for c in range(vocals.shape[0]):
+        V = stft(vocals[c])
+        d = np.asarray(drums[c, :n], np.float32)
+        d = np.pad(d, (0, max(0, n - len(d))))
+        D = np.abs(stft(d))
+        share = D ** 2 / (D ** 2 + np.abs(V) ** 2 + 1e-12)
+        keep_out = np.clip((share - lo) / (hi - lo), 0, 1)
+        out[c] = istft(V * (1 - keep_out), n).astype(np.float32)
+    return out
+
+
 def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
     """The instrumental is the original minus the singing: a stronger vocal model (Roformer when installed,
     otherwise the vocal part of htdemucs_ft) runs only on the sung parts; elsewhere the original is used as it
@@ -345,6 +368,7 @@ def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
         else:
             other = first                     # the quick split's own vocals are the second opinion: no extra run
         vocals = _louder_where(vocals, other, spots, sr)
+    vocals = _protect_drums(vocals, out.get("drums"), n)
     # singing out of the centre; out of the sides only where the side is mostly singing
     mid = 0.5 * (vocals[0] + vocals[1])
     side_v = 0.5 * (vocals[0] - vocals[1])

@@ -20,7 +20,7 @@ from . import separate as SEP
 from . import updater as UP
 from . import installer as INST
 from . import __version__
-from .audio import load_audio, wav_bytes, log
+from .audio import load_audio, wav_bytes, log, song_title, is_placeholder_name
 from . import proc as PR
 from . import diag as DG
 
@@ -355,6 +355,9 @@ def _job_song(path, mode=None, fresh=False):
             nice_name = m_.group(1) if m_ else os.path.basename(os.path.dirname(path)) or nice_name
         except OSError:
             nice_name = os.path.basename(os.path.dirname(path)) or nice_name
+    if is_placeholder_name(nice_name):
+        # still no real name (a copy called "source" from somewhere else): the file's own tags say which song it is
+        nice_name = song_title(path) or nice_name
     root = _slug(nice_name)
     p = _Project()(root)
     p.meta["name"] = nice_name
@@ -664,9 +667,8 @@ def _job_extract(path, project_id, kind, mode, min_count=8):
         p.detect(lambda f, m: _progress(None if f is None else 0.86 + 0.08 * f, f"Finding the hits and loops: {m}"))
     _progress(0.95, "Saving the samples")
     nm = p.meta.get("name", "song")
-    if str(nm).lower() == "source":
-        nm = os.path.basename(p.root.rstrip("/\\")) or "song"
-        p.meta["name"] = nm
+    if is_placeholder_name(nm):
+        nm = p.fix_name()
     name = re.sub(r"[^\w\- ()]", "", nm) or "song"
     folder = os.path.join(EXPORTS, name, f"{name} - samples")
     what = (["samples_raw"] if kind in ("single", "both") else []) + (["samples_merged"] if kind in ("merged", "both") else [])

@@ -1,5 +1,13 @@
 # What's new
 
+## 1.45.0
+
+- **Drums keep their hi-hats and cymbals in "Keeps every detail".** Vocal models file some hi-hat, cymbal and snare sound as singing, so taking the singing out of the original left the drums dull in every sung part (measured on a real export: the cymbals 10 dB down as soon as the singing starts). Now wherever the drum track clearly owns a moment and frequency, the singing estimate is kept out of it. On a test with a vocal model that grabs hi-hats: 26.5 dB to 32.1 dB, cymbals back near their real level.
+- **No more singing in "nobody sings" parts.** The build uses the original recording where nobody sings, but "nobody sings" only meant quiet next to the band, so soft singing (whispers, ad-libs, backing voices) in an intro could pass, and the original went in with the singing. Now the vocal track itself must also be 35 dB under its usual level there.
+- **Repeated riffs are off by default** (tick "Rebuild riffs and patterns that repeat" to use them). On a real song they lowered the backing instruments under the singing from 12.4 dB to 8.0 dB: a different take of the same part pasted in sounds duller than the part repaired in place.
+- **New extra step: Clean against the repeats.** Every part an instrument plays more than once is compared with what all its copies agree on, and anything only one copy has (leftover singing, breaths, separation fizz) is turned down, at most 12 dB, under the singing. What the copies share is left exactly as it is. Drums are only touched where something is clearly extra (8 dB) in the voice's range, since hits naturally vary. Tick it in the build list; best on songs built from repeating parts.
+- **Songs are no longer named "source".** A song opened from the app's own copy of a file could be saved as "source", and its exports were named that way. Those songs now get their real name back (from the file's tags or its project folder) when they're opened or exported.
+
 ## 1.44.0
 
 - **Cleaner builds: Build the best instrumental no longer makes things worse.** Tested against songs whose clean instrumental is known, the old default build lost a lot of quality compared with the plain split (on a real song: 23.5 dB down to 15.9 dB; the bass under the singing went from 46 dB to 16 dB). With 1.44 the same build stays at 22.6 dB and leaves the bass untouched.

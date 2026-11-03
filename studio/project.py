@@ -3658,7 +3658,7 @@ class Project:
         add up to the exported mix and keep the balance you heard (they used to be turned down one by one
         when they came near clipping). match_level: bring everything to the original song's level."""
         os.makedirs(folder, exist_ok=True)
-        name = os.path.splitext(self.meta.get("name") or "song")[0]
+        name = os.path.splitext(self.fix_name() or "song")[0]
         ext = "." + fmt
         b = 16 if (fmt == "wav" and bits == 16) else 32
         written = []
@@ -3773,6 +3773,24 @@ class Project:
                   **{f"{k}__env": v for k, v in self.stem_env.items()}} if hasattr(self, "stem_feats") and self.display else None)
         return {"patches": patches, "display": display, "features": feats}
 
+    def fix_name(self):
+        """A song saved under the app's own file name ("source") gets its real name back: from the file's tags,
+        else from its project folder. Returns the name."""
+        from .audio import song_title, is_placeholder_name
+        import re as _re
+        nm = self.meta.get("name")
+        if not is_placeholder_name(nm):
+            return nm
+        src = self.meta.get("source")
+        new = song_title(src) if src and os.path.isfile(str(src)) else None
+        if not new:
+            folder = _re.sub(r" \(\d+\)$", "", os.path.basename(str(self.root).rstrip("/\\")))
+            new = folder if not is_placeholder_name(folder) else None
+        if new:
+            self.meta["name"] = new
+            return new
+        return nm or "song"
+
     def save(self):
         """Write the project. Only the parts that changed are written (the repairs file, timeline and
         analysis can be hundreds of MB, and this runs after every edit), and the song is only locked
@@ -3824,6 +3842,10 @@ class Project:
         p.mixer.setdefault("eq_ranges", [])
         p.mixer.setdefault("mute_ranges", [])
         p.mixer.setdefault("sides", [])
+        try:
+            p.fix_name()                 # songs saved as "source" by earlier versions get their real name back
+        except Exception:
+            pass
         for x in p.suggestions.values():
             if x.get("status") == "auto":     # made by an older version without asking: ask now
                 x["status"] = "pending"
@@ -4916,6 +4938,92 @@ class Project:
                     ids.append(rid)
         return ids
 
+    CONSENSUS_MAX_CUT_DB = 12.0    # how far "Clean against the repeats" may turn a moment/frequency down
+    CONSENSUS_MARGIN = 1.4         # only what's clearly (3 dB) louder than the copies agree on counts as extra
+
+    def consensus_clean(self, sung_only=True, ks=None):
+        """Clean against the repeats: every part an instrument plays more than once (a 1-4 bar loop or riff, all
+        its copies, sung over or not) is compared with what its copies agree on, moment by moment and frequency
+        by frequency. Whatever one copy has that the others don't (leftover singing, a breath, separation fizz)
+        is turned down, up to CONSENSUS_MAX_CUT_DB; what the copies share is left exactly as it is.
+        sung_only: only where there's singing (the rest is usually the original recording anyway).
+        One review item per copy that changes. Returns ids."""
+        from scipy.ndimage import gaussian_filter, uniform_filter1d
+        ids = []
+        sr = self.sr
+        floor = 10 ** (-self.CONSENSUS_MAX_CUT_DB / 20)
+        vc = self._vocal_curve(0, self.original.shape[1])
+        for k in (ks or [x for x in self.instruments if x not in NOT_REPAIRED]):
+            src = self.render_stem(k)
+            try:
+                groups = self.find_loops(self.stems[k], drums=k in self.PERCUSSIVE, limit=8)
+            except Exception as e:
+                log(f"clean against repeats skipped for {k}: {e}")
+                continue
+            for gi, g in enumerate(groups):
+                spans = [(int(self.beats[u[0]] * HOP), int(self.beats[u[1]] * HOP)) for u in g["members"]]
+                spans = [(a, b) for a, b in spans if b - a > N_FFT * 4 and b <= src.shape[1]]
+                if len(spans) < 3:
+                    continue                                   # a median of two can't tell which one is off
+                L = min(b - a for a, b in spans)
+                mags = []
+                for a, b in spans:                             # every copy stretched to the same length
+                    M = np.abs(stft(src[:, a:b].mean(0)))
+                    xi = np.linspace(0, M.shape[1] - 1, L // HOP + 1)
+                    mags.append(np.stack([np.interp(xi, np.arange(M.shape[1]), row) for row in M]))
+                cons = np.exp(np.median(np.log(np.stack(mags) + 1e-9), axis=0))
+                for j, (a, b) in enumerate(spans):
+                    w_sung = uniform_filter1d(vc[a:b], int(0.1 * sr)) if sung_only else np.ones(b - a)
+                    if sung_only and float(w_sung.max(initial=0)) < 0.05:
+                        continue
+                    lo, hi = a - XFADE // 2 - N_FFT, b + XFADE // 2 + N_FFT
+                    if lo < 0 or hi > src.shape[1]:
+                        continue
+                    seg = src[:, lo:hi]
+                    X = [stft(seg[c]) for c in range(seg.shape[0])]
+                    Xm = np.abs(np.mean(X, axis=0))
+                    nf = Xm.shape[1]
+                    f0 = (a - lo) // HOP
+                    C = np.ones_like(Xm) * np.inf               # outside the copy: no limit
+                    xi = np.linspace(0, cons.shape[1] - 1, (b - a) // HOP + 1)
+                    cj = np.stack([np.interp(xi, np.arange(cons.shape[1]), row) for row in cons])
+                    m_ = min(cj.shape[1], nf - f0)
+                    C[:, f0:f0 + m_] = cj[:, :m_]
+                    if k in self.PERCUSSIVE:
+                        # drums vary from hit to hit by nature (velocity, hi-hat openness): only clearly extra sound
+                        # (8 dB over the copies) in the voice's range counts, cymbals above it are left alone
+                        G = np.clip(2.5 * C / (Xm + 1e-9), floor, 1.0)
+                        fr = np.fft.rfftfreq(N_FFT, 1.0 / sr)
+                        G[(fr < 150) | (fr > 5000)] = 1.0
+                    else:
+                        G = np.clip(self.CONSENSUS_MARGIN * C / (Xm + 1e-9), floor, 1.0)
+                    G = gaussian_filter(G, (1, 1))
+                    wv = np.zeros(nf)
+                    wf = np.clip(w_sung[::HOP] * 4, 0, 1) if sung_only else np.ones(len(w_sung[::HOP]))
+                    wv[f0:f0 + len(wf)] = wf[:nf - f0]
+                    G = 1 - (1 - G) * wv[None, :]
+                    out = np.stack([istft(Xc * G, hi - lo) for Xc in X]).astype(np.float32)
+                    w = _window_weight(hi - lo, a - lo, b - lo)
+                    d = (out - seg) * w[None, :]
+                    tot = float((seg ** 2).sum()) + 1e-12
+                    rem = float((d ** 2).sum())
+                    if rem < 1e-4 * tot:
+                        continue
+                    rid = f"cc_{k}_{a}"
+                    if rid in self.suggestions and self.suggestions[rid]["status"] != "pending" \
+                            and not self.suggestions[rid].get("by_build"):
+                        continue
+                    si = self._section_of(a / sr)
+                    self.suggestions[rid] = {
+                        "id": rid, "type": "bleed", "stem": k, "status": "pending", "start": a / sr, "end": b / sr,
+                        "section": si, "conf": 0.8, "severity": round(min(1.0, 10 * rem / tot), 3), "strength": 1.0,
+                        "donors": [], "smart": "consensus", "removed_db": round(float(10 * np.log10(rem / tot + 1e-12)), 1),
+                        "note": f"Turns down what this copy of a repeating {k} part has that its {len(spans) - 1} other "
+                                f"copies don't (leftover singing, breaths, separation fizz)"}
+                    self.patches[rid] = (lo, d.astype(np.float16))
+                    ids.append(rid)
+        return ids
+
     # ------------------------------------------------------------------ rebuild from notes / from patterns
     def _note_end(self, x_env, pos, i, n):
         p0 = int(pos[i])
@@ -5102,7 +5210,7 @@ class Project:
 
     # ------------------------------------------------------------------ build the best instrumental
     AUTO_STEPS = ("keep", "gaps", "refs", "bestof", "versions", "bars", "hits", "pattern", "notes", "loops", "repairs",
-                  "recover", "deep", "leftovers", "smartclean",
+                  "recover", "deep", "leftovers", "consensus", "smartclean",
                   "clicks", "improve", "mutes", "acappella", "acappella_hard", "notch", "tone", "seams")
 
     def vocal_gaps(self, min_len=1.0):
@@ -5148,9 +5256,31 @@ class Project:
             a = int(np.searchsorted(self.beat_times, sec["start"]))
             b = int(np.searchsorted(self.beat_times, sec["end"]))
             va = np.asarray(self.VA[a:max(b, a + 1)])
-            if len(va) and float(va.max()) < 0.04:
+            if len(va) and float(va.max()) < 0.04 \
+                    and self._vocals_quiet(int(sec["start"] * self.sr), int(sec["end"] * self.sr)):
                 out.append(sec)
         return out
+
+    FREE_VOCAL_DB = -35.0     # a part only counts as "nobody sings" if the vocal track stays this far under its
+                              # usual singing level there (not just quiet next to the band)
+
+    def _vocals_quiet(self, a, b):
+        """No soft singing in [a, b) either: the vocal track (and backing vocals) stay FREE_VOCAL_DB under how
+        loud the singing usually is, for nearly all of the part. Comparing with the band alone let whispers,
+        ad-libs and backing voices 14 dB under the instruments pass as 'nobody sings', and then the original
+        recording, singing and all, was used there."""
+        v = np.asarray(self.stems["vocals"][:, a:b], np.float32)
+        if "backing_vocals" in self.stems:
+            v = v + np.asarray(self.stems["backing_vocals"][:, a:b], np.float32)
+        blk = v.mean(0)[:v.shape[1] // 2048 * 2048].reshape(-1, 2048)
+        if not len(blk):
+            return True
+        ref = self.__dict__.get("_voc_loud")
+        if ref is None:
+            x = np.asarray(self.stems["vocals"], np.float32).mean(0)
+            bl = x[:len(x) // 4096 * 4096].reshape(-1, 4096)
+            ref = self.__dict__["_voc_loud"] = float(np.percentile((bl ** 2).mean(1), 95)) + 1e-12
+        return float(np.percentile((blk ** 2).mean(1), 95)) < ref * 10 ** (self.FREE_VOCAL_DB / 10)
 
     # A simple build is the default: the best split, the original wherever nobody sings, your clean tracks,
     # careful repairs and cleanup. These guess more (and can guess wrong), so they're extras you tick yourself.
@@ -5158,8 +5288,10 @@ class Project:
     # The default build is kept small: separation, the original where nobody sings, whole-part copies, close-match
     # repairs, leftover singing and clicks, then the never-worse check. Each extra pass (smart clean-up, notches,
     # tone matching, ...) adds a little processing of its own, and stacked they cost more clarity than they win.
-    EXTRA_STEPS = ("versions", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
-                   "acappella_hard", "gaps", "acappella", "smartclean")
+    # "bars" is an extra too: even with the strict same-notes check it lowered backing instruments on real songs
+    # (a different take of the same part pasted in; tested against a known clean instrumental).
+    EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
+                   "acappella_hard", "gaps", "acappella", "smartclean", "consensus")
 
     def _safe_runs(self, aggressive):
         try:
@@ -5212,6 +5344,11 @@ class Project:
             ("loops", "Loop-based songs: play each loop again from its clean copies",
              "Where an instrument repeats a 1-4 bar loop, copies under the singing are replaced by a merge of the clean "
              "copies. Best for electronic and loop-based music; off by default.",
+             len([x for x in self.instruments if x not in NOT_REPAIRED])),
+            ("consensus", "Clean against the repeats: turn down what one copy has and the others don't",
+             "Every part an instrument plays more than once is compared with what all its copies agree on; anything "
+             "only one copy has (leftover singing, breaths, separation fizz) is turned down, at most 12 dB, under the "
+             "singing. What the copies share is left exactly as it is. Best on songs built from repeating parts.",
              len([x for x in self.instruments if x not in NOT_REPAIRED])),
             ("smartclean", "Clean up: learn what belongs on each track and turn down the rest",
              "Drums: anything beyond each sound's normal hit and decay. Pitched parts: what isn't at the notes being "
@@ -5385,6 +5522,12 @@ class Project:
                     self.make_pattern_rebuilds()
                 except Exception as e:
                     log(f"build: loop rebuild skipped: {e}")
+            if "consensus" in steps:
+                progress(0.355, "Cleaning against the repeats")
+                try:
+                    self.consensus_clean()
+                except Exception as e:
+                    log(f"build: clean against repeats skipped: {e}")
             if "smartclean" in steps:
                 progress(0.36, "Learning what belongs on each track")
                 try:
@@ -5477,7 +5620,11 @@ class Project:
                         accept.add(i)
             if "smartclean" in steps:
                 for i, x in S.items():
-                    if x["status"] == "pending" and not inside_kept(x) and x.get("smart"):
+                    if x["status"] == "pending" and not inside_kept(x) and x.get("smart") and x["smart"] != "consensus":
+                        accept.add(i)
+            if "consensus" in steps:
+                for i, x in S.items():
+                    if x["status"] == "pending" and not inside_kept(x) and x.get("smart") == "consensus":
                         accept.add(i)
             if "clicks" in steps:
                 for i, x in S.items():
