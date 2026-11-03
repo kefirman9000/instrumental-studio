@@ -255,6 +255,7 @@ class Project:
             self.display["damage"][k] = np.zeros((DISPLAY_BANDS, disp_cols), np.float32)
             self._render_cache.pop(("stem", k), None)
         self.suggestions, self.patches, self.history = {}, {}, []
+        self.__dict__.pop("_clean_bar_set", None)
         self.level_floor = {}
         jobs = [(k, w) for k in inst_names if k not in NOT_REPAIRED for w in range(len(windows))]
         total = max(len(jobs), 1)
@@ -3287,6 +3288,153 @@ class Project:
             self.take_w[sid] = (a, W.astype(np.float16))
             return sid
 
+    # ------------------------------------------------------------------ the whole track from its clean repeats
+    REBUILD_COPIES = 5        # at most this many clean copies make up each rebuilt bar
+    REBUILD_FIT = 0.9         # a copy, lined up, must match the damaged bar this closely where the singing left it alone
+    REBUILD_DAMAGE = 0.1      # only bars at least this damaged are rebuilt (the rest are better left as they are)
+
+    def _fine_lag(self, k, t0, t1, src, lag, reach=1024):
+        """Sample-accurate alignment of a copy: beats are only known to a frame (~12 ms), and copies a few ms
+        apart cancel each other when merged. Cross-correlates the bar with the copy within +-reach samples."""
+        from scipy.signal import fftconvolve
+        x = self.stems[k][:, t0:t1].mean(0).astype(np.float32)
+        a, b = t0 + lag - reach, t1 + lag + reach
+        if a < 0 or b > src.shape[1] or len(x) < 2 * reach:
+            return lag
+        y = src[:, a:b].mean(0).astype(np.float32)
+        c = fftconvolve(y, x[::-1], mode="valid")              # c[i]: x against y[i:i+len(x)]
+        if not len(c) or not np.isfinite(c).all():
+            return lag
+        return int(lag - reach + int(np.argmax(c)))
+
+    def _copy_fit(self, k, t0, t1, src_seg):
+        """How well a lined-up copy matches the bar it would replace, judged only on the moments and frequencies
+        the singing didn't cover (correlation of log levels there). The feature checks alone let different
+        parts through on real songs; this compares the actual sound."""
+        tgt = self.stems[k][:, t0:t1].mean(0)
+        Xt = np.abs(stft(tgt))
+        Xd = np.abs(stft(np.asarray(src_seg, np.float32).mean(0)))[:, :Xt.shape[1]]
+        V = np.abs(stft(self.stems["vocals"][:, t0:t1].mean(0)))[:, :Xt.shape[1]]
+        I = np.abs(stft(self.inst_sum[:, t0:t1].mean(0)))[:, :Xt.shape[1]]
+        r = V ** 2 / (V ** 2 + I ** 2 + EPS)
+        floor = np.percentile(Xt, 70)
+        m = (r < 0.15) & (Xt > floor)
+        if m.sum() < 200:
+            return 0.0
+        a, b = Xt[m], Xd[m]
+        g = float((a * b).sum() / ((b * b).sum() + EPS))           # best level match
+        snr = float((a * a).sum() / (((a - g * b) ** 2).sum() + EPS))
+        return float(1 - 1 / snr)                                  # 0.9 = the copy is within 10 dB of the bar
+
+    def _clean_bars(self):
+        """Bars where nobody sings at all (vocal track quiet in absolute terms, not just next to the band)."""
+        if "_clean_bar_set" not in self.__dict__:
+            out = set()
+            for w, (s0, L) in enumerate(self.windows):
+                if not L or float(np.max(self.VA[s0:s0 + L])) >= 0.04:
+                    continue
+                a, b = self._window_samples(s0, L)
+                if self._vocals_quiet(a, b):
+                    out.add(w)
+            self.__dict__["_clean_bar_set"] = out
+        return self.__dict__["_clean_bar_set"]
+
+    def rebuild_track(self, ks=None):
+        """Rebuild the whole track from its clean repeats: every bar with singing, on every instrument, is
+        played again from the copies of the same bar where nobody sings (same notes in the same order, same
+        chords, close in sound), lined up to the beat, level-matched, and built from the best part of each copy
+        (_merge_clips), so no trace of the singing is carried over. Bars with no clean copy stay as they are.
+        Made for songs built from repeats (house, pop, hip-hop loops). One review item per instrument and run
+        of bars. Returns (ids, bars rebuilt, bars with singing)."""
+        with self.lock:
+            clean = self._clean_bars()
+            sung = [w for w, (s0, L) in enumerate(self.windows)
+                    if L and w not in clean and float(np.max(self.VA[s0:s0 + L])) >= self.meta["settings"]["vocal_threshold"]]
+            ids, done_bars = [], set()
+            for k in [x for x in self.instruments if x not in NOT_REPAIRED and x in self.stem_feats]:
+                F, C, R = self.stem_feats[k]
+                src = self.render_stem(k)
+                raw = self.stems[k]
+                n = raw.shape[1]
+                plans = {}
+                for w in sung:
+                    s0, L = self.windows[w]
+                    if self._bar_cover(k, w)[0] < self.REBUILD_DAMAGE:
+                        continue                               # not damaged: nothing to gain, something to lose
+                    cands = []
+                    for v in clean:
+                        if self.windows[v][1] != L:
+                            continue
+                        d = self._bar_dist(k, w, v)
+                        if not d or d[0] >= self.BAR_MAX_BAND or d[1] >= self.BAR_MAX_CHORD:
+                            continue
+                        if not self.chords_match(w, v) or self._bar_notes_match(k, w, v) < self.BAR_MIN_NOTES:
+                            continue
+                        cands.append((d[0] / self.BAR_MAX_BAND + d[1] / self.BAR_MAX_CHORD, v))
+                    if cands:
+                        plans[w] = [v for _, v in sorted(cands)[:self.REBUILD_COPIES]]
+                if not plans:
+                    continue
+                # runs of neighbouring bars in the same section become one review item
+                runs, cur = [], []
+                for w in sorted(plans):
+                    if cur and (w != cur[-1] + 1 or self._section_of(self.beat_times[self.windows[w][0]])
+                                != self._section_of(self.beat_times[self.windows[cur[-1]][0]])):
+                        runs.append(cur); cur = []
+                    cur.append(w)
+                if cur:
+                    runs.append(cur)
+                for run in runs:
+                    spans = [self._window_samples(*self.windows[w]) for w in run]
+                    a = max(0, spans[0][0] - XFADE)
+                    b = min(n, spans[-1][1] + XFADE)
+                    acc = np.zeros((raw.shape[0], b - a), np.float32)
+                    W = np.zeros(b - a, np.float32)
+                    for w, (t0, t1) in zip(run, spans):
+                        st_, Lt = self.windows[w]
+                        lo, hi = max(a, t0 - XFADE // 2), min(b, t1 + XFADE // 2)
+                        clips = []
+                        for v in plans[w]:
+                            sv = self.windows[v][0]
+                            lag = refine_lag(self.stem_env[k], self.beats[st_], self.beats[st_ + Lt], self.beats[sv])
+                            lag = self._fine_lag(k, t0, t1, src, lag)
+                            if self._copy_fit(k, t0, t1, segment(src, t0 + lag, t1 + lag)) < self.REBUILD_FIT:
+                                continue                       # not really the same part: never pasted in
+                            rel = (1 - R[st_:st_ + Lt]) * (1 - R[sv:sv + Lt])
+                            dlog = float((rel * (F[st_:st_ + Lt] - F[sv:sv + Lt])).sum() / (rel.sum() + EPS))
+                            g = float(np.clip(np.exp(dlog / 2), 0.5, 2.0))
+                            clips.append(segment(src, lo + lag, hi + lag) * g)
+                        if not clips:
+                            continue                           # this bar stays as it is
+                        y = self._merge_clips(clips) if len(clips) >= 2 else clips[0]
+                        ww = _window_weight(hi - lo, t0 - lo, t1 - lo)
+                        acc[:, lo - a:hi - a] += y[:, :hi - lo] * ww[None, :]
+                        W[lo - a:hi - a] += ww
+                    if W.max(initial=0) < 0.5:
+                        continue
+                    W = np.clip(W, 0, 1)
+                    sid = f"rt_{k}_{run[0]}"
+                    if sid in self.suggestions and self.suggestions[sid]["status"] != "pending" \
+                            and not self.suggestions[sid].get("by_build"):
+                        continue
+                    self.suggestions[sid] = {
+                        "id": sid, "type": "bars", "stem": k, "status": "pending", "start": spans[0][0] / self.sr,
+                        "end": spans[-1][1] / self.sr, "section": self._section_of(spans[0][0] / self.sr),
+                        "conf": 1.0, "severity": 0.0, "strength": 1.0, "bars": [int(w) for w in run], "blend": True,
+                        "members": [], "rebuilt": True,
+                        "donors": [{"beat": int(self.windows[plans[run[0]][0]][0]),
+                                    "start": self.beat_times[self.windows[plans[run[0]][0]][0]],
+                                    "end": self.beat_times[self.windows[plans[run[0]][0]][0] + self.windows[run[0]][1]],
+                                    "section": self._section_of(self.beat_times[self.windows[plans[run[0]][0]][0]]),
+                                    "match": 1.0, "vocal_overlap": 0.0}],
+                        "note": f"Plays {len(run)} sung bar{'s' if len(run) != 1 else ''} of the {k} again from the "
+                                f"clean copies of the same bars (up to {self.REBUILD_COPIES} each, best part of each)"}
+                    self.patches[sid] = (a, (acc - raw[:, a:b] * W[None, :]).astype(np.float16))
+                    self.take_w[sid] = (a, W.astype(np.float16))
+                    ids.append(sid)
+                    done_bars.update(run)
+            return ids, len(done_bars), len(sung)
+
     # ------------------------------------------------------------------ rebuild a part the person points at
     def rebuild_range(self, start, end, stem=None, strength=0.8):
         """Rebuild [start, end) of one instrument (or every one) from the bars that match it best,
@@ -5210,7 +5358,7 @@ class Project:
 
     # ------------------------------------------------------------------ build the best instrumental
     AUTO_STEPS = ("keep", "gaps", "refs", "bestof", "versions", "bars", "hits", "pattern", "notes", "loops", "repairs",
-                  "recover", "deep", "leftovers", "consensus", "smartclean",
+                  "recover", "deep", "leftovers", "rebuild", "consensus", "smartclean",
                   "clicks", "improve", "mutes", "acappella", "acappella_hard", "notch", "tone", "seams")
 
     def vocal_gaps(self, min_len=1.0):
@@ -5291,7 +5439,7 @@ class Project:
     # "bars" is an extra too: even with the strict same-notes check it lowered backing instruments on real songs
     # (a different take of the same part pasted in; tested against a known clean instrumental).
     EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
-                   "acappella_hard", "gaps", "acappella", "smartclean", "consensus")
+                   "acappella_hard", "gaps", "acappella", "smartclean", "consensus", "rebuild")
 
     def _safe_runs(self, aggressive):
         try:
@@ -5344,6 +5492,12 @@ class Project:
             ("loops", "Loop-based songs: play each loop again from its clean copies",
              "Where an instrument repeats a 1-4 bar loop, copies under the singing are replaced by a merge of the clean "
              "copies. Best for electronic and loop-based music; off by default.",
+             len([x for x in self.instruments if x not in NOT_REPAIRED])),
+            ("rebuild", "Rebuild the whole track from its clean repeats",
+             "Every bar with singing is played again, instrument by instrument, from the copies of the same bar where "
+             "nobody sings (same notes, same chords), lined up and level-matched and built from the best part of each "
+             "copy, so no singing is carried over. Bars with no clean copy stay as they are. Made for songs built from "
+             "repeats (house, pop, loops); on live playing a copy can sound different from the original take.",
              len([x for x in self.instruments if x not in NOT_REPAIRED])),
             ("consensus", "Clean against the repeats: turn down what one copy has and the others don't",
              "Every part an instrument plays more than once is compared with what all its copies agree on; anything "
@@ -5522,6 +5676,15 @@ class Project:
                     self.make_pattern_rebuilds()
                 except Exception as e:
                     log(f"build: loop rebuild skipped: {e}")
+            if "rebuild" in steps:
+                progress(0.35, "Rebuilding the track from its clean repeats")
+                try:
+                    rb_ids, n_rb, n_sung = self.rebuild_track()
+                    if n_sung:
+                        report.append(f"Rebuilt {n_rb} of {n_sung} sung bars from their clean repeats"
+                                      + ("" if n_rb == n_sung else " (the rest have no clean copy and were repaired instead)"))
+                except Exception as e:
+                    log(f"build: rebuild from repeats skipped: {e}")
             if "consensus" in steps:
                 progress(0.355, "Cleaning against the repeats")
                 try:
@@ -5597,8 +5760,10 @@ class Project:
             for k_, ys in active("alt").items():          # your clean tracks cover what they replace
                 takes_on.setdefault(k_, []).extend(y for y in ys if y.get("alt_mode") == "imported")
             covered = lambda x: any(ov(y, x) for y in takes_on.get(x["stem"], ()))
+            if "rebuild" in steps:
+                pick("bars", lambda x: x.get("rebuilt"))
             if "bars" in steps:
-                pick("bars", lambda x: not covered(x) and (x.get("check") or {}).get("u", 1) < 0.15)
+                pick("bars", lambda x: not x.get("rebuilt") and not covered(x) and (x.get("check") or {}).get("u", 1) < 0.15)
             drum = lambda x: x["stem"] in self.PERCUSSIVE
             if "hits" in steps:
                 pick("hits", lambda x: drum(x) and not x.get("pattern") and not covered(x))
