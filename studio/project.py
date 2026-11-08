@@ -6317,7 +6317,7 @@ class Project:
             md = self._frames(sig.sosfilt(md_sos, ym), hop)[:nf]
             tilt = 10 * np.log10(smooth(hi, 4) / smooth(md, 4))
             ref = float(np.median(tilt[free]))
-            air = np.clip(0.5 * (ref - tilt), 0, 3) * np.clip(vc / 0.3, 0, 1)
+            air = np.clip(0.5 * (ref - tilt), 0, 1.5) * np.clip(vc / 0.3, 0, 1)   # more lifts leftover s sounds
             air = smooth(air, 2)
             progress(0.7, "Evening out the level")
             e_y = 10 * np.log10(smooth(self._frames(ym, hop)[:nf], 3))
