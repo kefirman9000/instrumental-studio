@@ -1,5 +1,13 @@
 # What's new
 
+## 1.50.0
+
+**Rebuild with samples now rebuilds (nearly) every drum hit**, not just the ones the grid had grouped:
+
+- The grid only groups hits into its top 10 sounds, with at least 3 alike. On a real song (tested on a dance track) that was only about half the hits. The rest were simply left out of the rebuild, and 1.49 then kept the split's drums wherever too much was missing.
+- Now every hit outside those groups is played by the sound it's most like. If it isn't like any of them, the split's own hit is kept just there. Before, the whole stretch was kept as split.
+- On the test song, the rebuilt drums now match the split's level within about 1–2 dB almost everywhere, and 88 of 90 seconds are rebuilt.
+
 ## 1.49.0
 
 **Rebuild with samples** no longer makes drums disappear or the result muddy:
