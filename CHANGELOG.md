@@ -1,5 +1,15 @@
 # What's new
 
+## 1.51.0
+
+**Rebuilt drums no longer get messed up by the wrong sample:**
+
+- Each hit is now checked before it's replaced: does the sample actually sound like the hit it replaces? If not, that hit keeps the split's own sound, so a kick never turns into a snare.
+  - Hits the grid grouped are only kept when their sample is clearly a different sound (rare: about 1 in 250 on the test song).
+  - Hits it didn't group must sound very close to the sample, or they keep the split's sound.
+- Ungrouped hits are matched to a sound much more strictly than in 1.50, which was too loose and caused the wrong sounds.
+- Your own grid edits (moved hits, levels, "this hit is really…") are always followed.
+
 ## 1.50.0
 
 **Rebuild with samples now rebuilds (nearly) every drum hit**, not just the ones the grid had grouped:
