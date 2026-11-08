@@ -1,5 +1,15 @@
 # What's new
 
+## 1.48.0
+
+Less singing left in **Make enhanced instrumental** and the **"Keeps every detail"** split:
+
+- **Quiet singing counts now.** Ad-libs, backing vocals and the ends of words were too quiet to be treated as singing, so they were left in. Much quieter singing is now taken out, with more room around each line.
+- **Leftover pass.** After the singing is taken out, the vocal model listens again to what's left on the sung parts and takes out any singing it still hears. It only does that where it's clearly singing, not an instrument. This adds one more model pass over the sung parts.
+- **Wide backing vocals and vocal reverb in the sides come out more readily.**
+- **Finishing touches lift the top end less** (at most +1.5 dB), so leftover "s" sounds aren't made louder.
+- If the song was split another way before, Make enhanced instrumental uses that split and now says so. For the cleanest result, use **Split again → "Keeps every detail"** first.
+
 ## 1.47.0
 
 - **Opening a song always shows that it's working.** From the start screen (Open a song, dropping a file, Recent songs, Import stems, the demo), a loading window comes up the moment you start, instead of a few seconds of nothing. Copying a big file into the app shows its progress, and a spinner and moving bar show the app is busy even between messages.

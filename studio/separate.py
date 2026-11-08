@@ -40,7 +40,7 @@ PASSES = {"htdemucs_ft": 4, "htdemucs": 1, "htdemucs_6s": 1}
 
 def passes(mode, options=None):
     """How much work a split is, in single-model passes (for time estimates)."""
-    n = sum(PASSES.get(m, 1) for m in MODELS[mode][1]) + (3 if mode in NEEDS_EXTRA else 0) + (1 if mode == "detail" else 0)
+    n = sum(PASSES.get(m, 1) for m in MODELS[mode][1]) + (3 if mode in NEEDS_EXTRA else 0) + (2 if mode == "detail" else 0)
     return n + (2 if (options or {}).get("backing") else 0) + (1 if (options or {}).get("drums") else 0)
 
 
@@ -218,7 +218,7 @@ def _agreement(arrs):
     return out
 
 
-def _singing_regions(vocals, sr, pad=1.0, floor_db=-35.0, min_len=0.4):
+def _singing_regions(vocals, sr, pad=1.5, floor_db=-50.0, min_len=0.3):
     """Where the singing is, as merged (start, end) sample ranges with some room around each."""
     mono = np.abs(vocals).mean(0)
     hop = int(sr * 0.05)
@@ -321,16 +321,17 @@ def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
     n = min(audio.shape[1], out["vocals"].shape[1])
     audio = audio[:, :n].astype(np.float32)
     first = out["vocals"][:, :n]
-    regions = _singing_regions(first, sr)
+    regions = _singing_regions(first, sr)        # quiet ad-libs, backing vocals and tails count as singing too
     roformer = extra_installed("roformer")
 
-    def run(model, regs, f0, f1, label, tag):
+    def run(model, regs, f0, f1, label, tag, src=None):
         """A vocal model on just these parts of the song, put back in place (with short fades)."""
         vocals = np.zeros((2, n), np.float32)
         if not regs:
             return vocals
         gap = int(0.5 * sr)
-        clip = np.concatenate([np.concatenate([audio[:, a:b], np.zeros((2, gap), np.float32)], 1) for a, b in regs], 1)
+        src = audio if src is None else src
+        clip = np.concatenate([np.concatenate([src[:, a:b], np.zeros((2, gap), np.float32)], 1) for a, b in regs], 1)
         os.makedirs(workdir, exist_ok=True)
         wav = os.path.join(workdir, f"{tag}.wav")
         wavfile.write(wav, sr, clip.T)
@@ -352,7 +353,8 @@ def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
             at += (b - a) + gap
         return vocals
 
-    mid_f = frac0 + (frac1 - frac0) * 0.75
+    mid_f = frac0 + (frac1 - frac0) * 0.45
+    left_f = frac0 + (frac1 - frac0) * 0.7
     if regions:
         log(f"keep detail: {len(regions)} sung parts, {sum(b - a for a, b in regions) / sr:.0f} s of {n / sr:.0f} s")
     main = "roformer" if roformer else "htdemucs_ft:vocals"
@@ -364,10 +366,23 @@ def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
     if spots:
         log(f"keep detail: second opinion on {len(spots)} spots, {sum(b - a for a, b in spots) / sr:.1f} s")
         if roformer:
-            other = run("htdemucs_ft:vocals", spots, mid_f, frac1, "Second opinion on the trouble spots", "spots")
+            other = run("htdemucs_ft:vocals", spots, mid_f, left_f, "Second opinion on the trouble spots", "spots")
         else:
             other = first                     # the quick split's own vocals are the second opinion: no extra run
         vocals = _louder_where(vocals, other, spots, sr)
+    # leftover pass: the vocal model listens again to what's left (the original minus the singing found so far)
+    # on the sung parts, and what singing it still hears comes out too - where it's clearly singing, not an instrument
+    if regions:
+        rest = audio - vocals
+        more = run(main, regions, left_f, frac1, "Taking out leftover singing", "leftover", src=rest)
+        kept = np.zeros_like(more)
+        for c in range(2):
+            M, R = stft(more[c]), stft(rest[c])
+            share = np.abs(M) / (np.abs(R) + 1e-9)
+            kept[c] = istft(M * np.clip((share - 0.25) / 0.35, 0, 1), n).astype(np.float32)
+            del M, R, share
+        log(f"keep detail: leftover singing taken out: {20 * np.log10(np.sqrt((kept ** 2).mean()) / (np.sqrt((vocals ** 2).mean()) + 1e-9) + 1e-9):.0f} dB vs the singing")
+        vocals = vocals + kept
     vocals = _protect_drums(vocals, out.get("drums"), n)
     # singing out of the centre; out of the sides only where the side is mostly singing
     mid = 0.5 * (vocals[0] + vocals[1])
@@ -375,7 +390,7 @@ def _keep_detail(audio, out, sr, workdir, progress, frac0, frac1):
     side_m = 0.5 * (audio[0] - audio[1])
     S_v, S_m = stft(side_v), stft(side_m)
     r = np.abs(S_v) / (np.abs(S_m) + 1e-9)
-    side_v = istft(S_v * np.clip((r - 0.4) / 0.4, 0, 1), n).astype(np.float32)
+    side_v = istft(S_v * np.clip((r - 0.25) / 0.35, 0, 1), n).astype(np.float32)
     del S_v, S_m, r
     vocals = np.stack([mid + side_v, mid - side_v]).astype(np.float32)
     inst = audio - vocals

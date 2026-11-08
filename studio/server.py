@@ -774,6 +774,9 @@ def _job_enhanced():
     _progress(0.98, "Checking nothing was lost")
     lines, ok = p.detail_check()
     report += lines
+    if p.meta.get("source") != "demo" and not str(p.meta.get("sep_mode") or "").startswith("detail"):
+        report.append("This song was split another way before, so that split was used. For the least singing left, use "
+                      "Split again → \"Keeps every detail\", then Make enhanced instrumental again.")
     p.save()
     S.job["result"] = {"title": "Enhanced instrumental ready" + ("" if ok else " (check the notes)"),
                        "report": report + ["Play it, then Export to save it."]}
