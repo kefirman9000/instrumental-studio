@@ -699,16 +699,24 @@ def _job_clean(rebuild_drums=True):
             _progress(0.17, f"Rebuilding the {k} from its cleanest hits")
             try:
                 n_odd = p.drum_repair_odd(k)
-                p.drum_edit(k, {"rebuild": {"start": 0.0, "end": dur}})
-                report.append(f"The {k} is played again from merged clean samples at every hit"
+                p._push(f"Grid: {k}", [])
+                done, kept = p.drum_rebuild_safe(k)
+                if done < 1:
+                    report.append(f"The {k} were kept as split: rebuilding from samples would have lost hits")
+                    continue
+                report.append(f"The {k} are played again from merged clean samples at every hit"
+                              + (f", except {kept:.0f} s where that would have lost hits (kept as split)" if kept >= 2 else "")
                               + (f" ({n_odd} odd hit{'s' if n_odd != 1 else ''} put right by their place in the bar)" if n_odd else ""))
             except Exception as e:
                 log(f"clean instrumental: drum rebuild skipped for {k}: {e}")
     plan = {x["key"]: x for x in p.build_plan()}
     # everything that rebuilds or cleans, but not the steps that cut things out (mutes, aggressive a cappella)
     # everything that rebuilds or cleans; not the steps that cut, dip or switch (they make the level jump around)
-    steps = [k for k, x in plan.items() if x["count"] and k not in ("deep", "recover", "mutes", "acappella_hard",
-                                                                    "acappella", "gaps", "check")]
+    # the usual steps plus the sample rebuilds; not the extra processing (cleanup gates, notches, tone curves,
+    # merged whole bars) - layered on top of each other they made the result muddy
+    steps = [k for k, x in plan.items() if x["count"] and (x["on"] or k in ("hits", "notes"))
+             and k not in ("deep", "recover", "mutes", "acappella_hard", "acappella", "gaps", "check", "smartclean",
+                           "notch", "tone", "consensus", "rebuild", "improve", "pattern")]
     _pre_build(p, steps, 0.2, 0.3)
     res = p.build_best(steps, lambda f, m: _progress(None if f is None else 0.3 + 0.67 * f, m))
     _progress(0.98, "Saving")
