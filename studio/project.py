@@ -1784,7 +1784,37 @@ class Project:
         cache[(k, sid)] = (y, float(np.median([lv[i] for i in ranked[:5]])))
         return cache[(k, sid)]
 
-    def _stray_hits(self, k, dm, min_fit=0.7):
+    HIT_FIT_GROUPED = 0.5     # a grouped hit is replaced unless its sample is clearly a different sound
+    HIT_FIT_STRAY = 0.8       # an ungrouped hit only when its closest sample really sounds like it
+
+    def _hit_sig(self, x):
+        """A hit's sound in short: log energy in 20 bands (40 Hz-16 kHz) over its first ~46 ms."""
+        x = np.asarray(x, np.float32)
+        if x.ndim > 1:
+            x = x.mean(0)
+        x = np.pad(x[:2048], (0, max(0, 2048 - len(x))))
+        S = np.abs(np.fft.rfft(x * np.hanning(2048))) ** 2
+        f = np.fft.rfftfreq(2048, 1 / self.sr)
+        edges = np.geomspace(40, 16000, 21)
+        return np.log10(np.array([S[(f >= lo) & (f < hi)].sum() for lo, hi in zip(edges[:-1], edges[1:])]) + 1e-10)
+
+    def _hit_fit(self, k, ci, y, p):
+        """How alike sample ci and the hit at sample p sound (correlation of their band shapes, -1..1)."""
+        cache = self.__dict__.setdefault("_sample_sig", {})
+        try:
+            smp = self._drum_sample(k, ci)[0]
+            key = (k, ci, id(smp))                 # a new sample (grouping changed, one loaded) gets measured again
+            if key not in cache:
+                cache[key] = self._hit_sig(smp)
+            a = cache[key]
+        except Exception:
+            return 0.0
+        pre = int(0.003 * self.sr)
+        b = self._hit_sig(y[:, max(0, p - pre):p - pre + 2048])
+        a, b = a - a.mean(), b - b.mean()
+        return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+
+    def _stray_hits(self, k, dm, min_fit=0.85):
         """Hits find_sounds found but didn't put in a row (too few like them, or past the top rows): each matched
         to the row it sounds most like, {sample pos: (row id, level)}, when it's alike enough (else left out)."""
         cache = self.__dict__.setdefault("_stray", {})
@@ -2101,36 +2131,39 @@ class Project:
             if b - a < 64:
                 continue
             synth = np.zeros((2, n), np.float32)
-            for p in pos:
-                t = p / sr
-                if q["start"] <= t < q["end"] and not any(abs(t - o) < 0.012 for o in offs) and int(p) in lvl_of:
-                    ci, lv = lvl_of[int(p)]
-                    re_ = next((a for a in e.get("assign", []) if abs(a["t"] - t) < 0.012), None)
-                    if re_ is not None:                      # repaired as the sound it really is, at its usual level
-                        ci = re_["s"]
-                        try:
-                            lv = self._drum_sample(k, ci)[1]
-                        except Exception:
-                            pass
-                    place(synth, moves.get(round(t, 3), t), ci, vels.get(round(t, 3), 1.0), lv)
-            # hits the grid didn't group (a ghost note, a fill, a crash): played by the sound they're most like, or
-            # if they aren't like any of them, kept as the split had them, so no hit drops out of a rebuilt bar
+            user_t = {round(x["t"], 3) for x in e.get("assign", [])} | set(moves) | set(vels)
             for i, p in enumerate(pos):
                 t = p / sr
-                if not (q["start"] <= t < q["end"]) or int(p) in lvl_of or any(abs(t - o) < 0.012 for o in offs):
+                if not (q["start"] <= t < q["end"]) or any(abs(t - o) < 0.012 for o in offs):
                     continue
-                st = stray.get(int(p))
-                if st is not None:
-                    place(synth, t, st[0], 1.0, st[1])
+                if int(p) in lvl_of:
+                    ci, lv = lvl_of[int(p)]
+                    need = self.HIT_FIT_GROUPED
+                elif int(p) in stray:
+                    ci, lv = stray[int(p)]
+                    need = self.HIT_FIT_STRAY
                 else:
-                    a0 = max(0, int(p) - pre)
-                    a1 = min(n, int(nxt[i]), int(p) + int(0.5 * sr))
-                    if a1 - a0 > 64:
-                        fw = np.ones(a1 - a0, np.float32)
-                        f2 = min(int(0.005 * sr), (a1 - a0) // 4)
-                        fw[:f2] = np.linspace(0, 1, f2)
-                        fw[-f2:] = np.linspace(1, 0, f2)
-                        synth[:, a0:a1] += y[:, a0:a1] * fw[None, :]
+                    ci, need = None, 1.0
+                re_ = next((a_ for a_ in e.get("assign", []) if abs(a_["t"] - t) < 0.012), None)
+                if re_ is not None:                      # repaired as the sound it really is, at its usual level
+                    ci = re_["s"]
+                    try:
+                        lv = self._drum_sample(k, ci)[1]
+                    except Exception:
+                        pass
+                # a sample that doesn't sound like the hit it replaces (wrong sound picked) would mess the beat up:
+                # that hit keeps the split's own sound instead (your own grid edits are always followed)
+                if ci is not None and (round(t, 3) in user_t or self._hit_fit(k, ci, y, int(p)) >= need):
+                    place(synth, moves.get(round(t, 3), t), ci, vels.get(round(t, 3), 1.0), lv)
+                    continue
+                a0 = max(0, int(p) - pre)
+                a1 = min(n, int(nxt[i]), int(p) + int(0.5 * sr))
+                if a1 - a0 > 64:
+                    fw = np.ones(a1 - a0, np.float32)
+                    f2 = min(int(0.005 * sr), (a1 - a0) // 4)
+                    fw[:f2] = np.linspace(0, 1, f2)
+                    fw[-f2:] = np.linspace(1, 0, f2)
+                    synth[:, a0:a1] += y[:, a0:a1] * fw[None, :]
             for ad in e.get("add", []):
                 if q["start"] <= ad["t"] < q["end"]:
                     place(synth, ad["t"], ad["s"], ad.get("v", 1.0))
