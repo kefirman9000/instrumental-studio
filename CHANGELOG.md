@@ -1,5 +1,14 @@
 # What's new
 
+## 1.49.0
+
+**Rebuild with samples** no longer makes drums disappear or the result muddy:
+
+- **The drums are only rebuilt from samples where that keeps them.** Before, the whole drum track was replaced with samples at the hits the grid knew. Any hits it didn't know (ghost notes, a ride or cymbal wash, fills) vanished. Now the rebuild is compared with the split first. Wherever the rebuilt drums come out clearly quieter, those stretches keep the split's drums, and the report says how much was kept.
+- **Less mud.** It now runs the usual repair steps plus the sample rebuilds only. It no longer stacks the extra processing on top (cleanup gates, notches, tone curves, merged whole bars).
+- **Drums the split lost are rebuilt.** Where a bar's drums are much quieter than the same bar in another copy of that section, and the original shows they were played, that bar's drums are rebuilt from the clean copy. This applies to every repair.
+- **Safety net in every repair:** where a fix or mute left the drums much quieter than the split had them, it comes back out there.
+
 ## 1.48.0
 
 Less singing left in **Make enhanced instrumental** and the **"Keeps every detail"** split:

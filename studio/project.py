@@ -1784,6 +1784,47 @@ class Project:
         cache[(k, sid)] = (y, float(np.median([lv[i] for i in ranked[:5]])))
         return cache[(k, sid)]
 
+    def drum_rebuild_safe(self, k, win=2.0, max_loss_db=4.0):
+        """Rebuild the drums from clean samples only where that keeps them: hits the grid doesn't know (ghost
+        notes, a ride or cymbal wash, fills it didn't group) would otherwise vanish with the old sound. The whole
+        track is rebuilt once to compare; every stretch where the rebuilt drums are clearly quieter than the
+        split's (or there's nothing to rebuild) keeps the split's drums. Returns (seconds rebuilt, seconds kept)."""
+        with self.lock:
+            raw = np.asarray(self.stems[k], np.float32)
+            n = raw.shape[1]
+            dur = n / self.sr
+            e = self.mixer.setdefault("drum_edits", {}).setdefault(k, {"add": [], "off": [], "rebuild": []})
+            old = list(e.get("rebuild", []))
+            e["rebuild"] = [{"start": 0.0, "end": dur}]
+            try:
+                synth = self._apply_drum_edits(k, raw)
+            finally:
+                e["rebuild"] = old
+            h = int(win * self.sr)
+            m = n // h
+            if m == 0:
+                return 0.0, dur
+            fr = lambda x: (x[:, :m * h] ** 2).mean(0).reshape(m, h).mean(1) + 1e-12
+            er, es = fr(raw), fr(synth)
+            alive = er > er.max() * 1e-4
+            ok = ~alive | (10 * np.log10(er / es) <= max_loss_db)
+            ok &= alive                       # silent stretches: nothing to rebuild there
+            runs, i = [], 0
+            while i < m:
+                if ok[i]:
+                    j = i
+                    while j < m and ok[j]:
+                        j += 1
+                    runs.append((i * win, min(dur, j * win if j < m else dur)))
+                    i = j
+                else:
+                    i += 1
+            for a, b in runs:
+                self.drum_edit(k, {"rebuild": {"start": a, "end": b}, "_no_undo": True})
+            done = sum(b - a for a, b in runs)
+            log(f"drum rebuild {k}: {done:.0f} s rebuilt, {dur - done:.0f} s kept as split (rebuild would have lost hits)")
+            return done, dur - done
+
     def drum_edits(self, k):
         return (self.mixer.get("drum_edits") or {}).get(k) or {"add": [], "off": [], "rebuild": []}
 
@@ -3287,6 +3328,95 @@ class Project:
             self.patches[sid] = (a, (acc - raw[:, a:b] * W[None, :]).astype(np.float16))
             self.take_w[sid] = (a, W.astype(np.float16))
             return sid
+
+    # ------------------------------------------------------------------ drums that dropped out
+    DRUM_GONE_DB = 9.0        # a bar's drums this much quieter than the same bar elsewhere = they dropped out
+    DRUM_PLAYED_DB = 4.0      # ...while the original there is about as busy as there (so it isn't a breakdown)
+
+    def _fill_missing_drums(self):
+        """Bars where the split lost the drums (they went into the vocals, or got taken out with them): the
+        same bar of another copy of that section has drums, and the original here is about as busy as there,
+        so the drums were played. Each is rebuilt from that bar's drums (beat-aligned, level-matched, a merge
+        when there are several clean copies). Returns the new ids."""
+        from scipy import signal as sig
+        ids = []
+        if not self.windows or not self.sections:
+            return ids
+        sr = self.sr
+        by_beat = {w[0]: i for i, w in enumerate(self.windows)}
+        sos = sig.butter(2, (40.0, 150.0), "bandpass", fs=sr, output="sos")
+        orig_low = sig.sosfilt(sos, self.original.mean(0)).astype(np.float32)
+
+        def busy(t0, t1):                       # the original's low-end punch (kick and bass hits) in the bar
+            x = orig_low[t0:t1]
+            if len(x) < 2048:
+                return 1e-12
+            e = (x[:len(x) // 512 * 512].reshape(-1, 512) ** 2).mean(1)
+            return float(np.maximum(np.diff(e), 0).sum()) + 1e-12
+
+        for k in [x for x in self.instruments if x in self.PERCUSSIVE]:
+            raw = self.stems[k]
+            e = lambda t0, t1: float((raw[:, t0:t1] ** 2).mean()) + 1e-12
+            peak = max(e(*self._window_samples(*w)) for w in self.windows)
+            for wi, (sb, L) in enumerate(self.windows):
+                t0, t1 = self._window_samples(sb, L)
+                own = e(t0, t1)
+                best = None
+                for ob in self._same_bar_elsewhere(wi):
+                    o0, o1 = self._window_samples(ob, L)
+                    eo = e(o0, o1)
+                    if eo < peak * 1e-3:
+                        continue
+                    if 10 * np.log10(eo / own) < self.DRUM_GONE_DB:
+                        continue
+                    if abs(10 * np.log10(busy(t0, t1) / busy(o0, o1))) > self.DRUM_PLAYED_DB:
+                        continue
+                    if best is None or eo > best[1]:
+                        best = (ob, eo)
+                if best is None or best[0] not in by_beat:
+                    continue
+                donor = by_beat[best[0]]
+                members = [by_beat[b] for b in self._same_bar_elsewhere(wi) if b in by_beat] + [wi]
+                try:
+                    sid = self.make_bars(k, donor, [wi], members=members, blend=len(members) > 2)
+                except Exception as ex:
+                    log(f"drum fill skipped at bar {wi}: {ex}")
+                    continue
+                x = self.suggestions[sid]
+                x["drum_fill"] = True
+                x["note"] = f"The split lost the {k} in this bar: rebuilt from the same bar where they're clean"
+                ids.append(sid)
+        log(f"drum fill: {len(ids)} bars where the drums dropped out")
+        return ids
+
+    def _drums_lost(self, win=0.5, drop_db=6.0):
+        """Where the repaired drums are much quieter than the split's own drums: (stem, start s, end s)."""
+        from scipy.ndimage import uniform_filter1d
+        out = []
+        h = int(win * self.sr)
+        for k in [x for x in self.instruments if x in self.PERCUSSIVE]:
+            self._render_cache.pop(("stem", k), None)
+            now, raw = self.render_stem(k), self.stems[k]
+            m = min(now.shape[1], raw.shape[1]) // h
+            if m < 4:
+                continue
+            fr = lambda x: (np.asarray(x[:, :m * h], np.float32) ** 2).mean(0).reshape(m, h).mean(1) + 1e-12
+            er, en = uniform_filter1d(fr(raw), 4), uniform_filter1d(fr(now), 4)
+            mm = self.mute_mask(0, m * h, stem=k)
+            if mm is not None:
+                en = en * (1 - np.asarray(mm[:m * h]).reshape(m, h).mean(1)) ** 2 + 1e-12
+            lost = (er > er.max() * 1e-4) & (10 * np.log10(er / en) > drop_db)
+            i = 0
+            while i < m:
+                if lost[i]:
+                    j = i
+                    while j < m and lost[j]:
+                        j += 1
+                    out.append((k, i * win, j * win))
+                    i = j
+                else:
+                    i += 1
+        return out
 
     # ------------------------------------------------------------------ the whole track from its clean repeats
     REBUILD_COPIES = 5        # at most this many clean copies make up each rebuilt bar
@@ -5893,6 +6023,19 @@ class Project:
                 except Exception as e:
                     log(f"build: seams skipped: {e}")
 
+            filled = []
+            if "hits" in steps:
+                progress(0.88, "Rebuilding drums the split lost")
+                try:
+                    for i in self._fill_missing_drums():
+                        if not inside_kept(S[i]):
+                            mark(i, "accepted")
+                            filled.append(i)
+                    if filled:
+                        self._render_cache.clear()
+                except Exception as e:
+                    log(f"build: drum fill skipped: {e}")
+
             # -- final check: nothing applied may disagree with the original
             progress(0.9, "Checking the result against the original")
             applied = [i for i, x in S.items() if x["type"] in self.CHECK_TYPES and x["status"] in ("accepted", "auto")]
@@ -5920,6 +6063,26 @@ class Project:
                         self._render_cache.clear()
                 except Exception as e:
                     log(f"build: score check skipped: {e}")
+
+            # -- drums never just disappear: where a fix or a mute left the drums much quieter than the split had
+            #    them, those fixes and mutes come back out there
+            drums_back = 0
+            try:
+                for k_, t0_, t1_ in self._drums_lost():
+                    rng = {"start": t0_, "end": t1_}
+                    back = [i for i, x in S.items() if x.get("by_build") and x["status"] == "accepted"
+                            and x.get("stem") == k_ and not x.get("drum_fill") and ov(x, rng)]
+                    for i in back:
+                        mark(i, "rejected", "Made the drums disappear here")
+                    before = len(self.mixer.get("mute_ranges", []))
+                    self.mixer["mute_ranges"] = [r for r in self.mixer.get("mute_ranges", [])
+                                                 if not ((r.get("auto") or r.get("acappella")) and r.get("start", 0) < t1_
+                                                         and t0_ < r.get("end", 0) and r.get("stem") in (None, k_))]
+                    drums_back += len(back) + before - len(self.mixer["mute_ranges"])
+                if drums_back:
+                    self._render_cache.clear()
+            except Exception as e:
+                log(f"build: drum check skipped: {e}")
 
             settled = 0
             if fresh:
@@ -6004,6 +6167,12 @@ class Project:
             sm = [x for x in self.mixer.get("seams", []) if x.get("fade", 0) > 0.05]
             if "seams" in steps and sm:
                 report.append(f"Lengthened {len(sm)} crossfade{'s' if len(sm) != 1 else ''} where the original recording takes over")
+            if filled:
+                report.append(f"Rebuilt the drums in {len(filled)} bar{'s' if len(filled) != 1 else ''} where the split had lost them, "
+                              f"from the same bar where they're clean")
+            if drums_back:
+                report.append(f"Took {drums_back} fix{'es' if drums_back != 1 else ''} or mute{'s' if drums_back != 1 else ''} back out "
+                              f"where {'it' if drums_back == 1 else 'they'} made the drums disappear")
             if worse:
                 report.append(f"Took the fixes back out of {', '.join(worse)}: they made {'it' if len(worse) == 1 else 'those parts'} "
                               f"score lower than before")
