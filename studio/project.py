@@ -1784,6 +1784,37 @@ class Project:
         cache[(k, sid)] = (y, float(np.median([lv[i] for i in ranked[:5]])))
         return cache[(k, sid)]
 
+    def _stray_hits(self, k, dm, min_fit=0.7):
+        """Hits find_sounds found but didn't put in a row (too few like them, or past the top rows): each matched
+        to the row it sounds most like, {sample pos: (row id, level)}, when it's alike enough (else left out)."""
+        cache = self.__dict__.setdefault("_stray", {})
+        key = (k, id(dm))
+        if key in cache:
+            return cache[key]
+        out = {}
+        F, pos, lv = dm.get("_F"), dm["_pos"], dm["_lv"]
+        rows = [r["id"] for r in dm["rows"]]
+        if F is not None and len(F) and rows:
+            Z = F - F.mean(1, keepdims=True)
+            Z /= np.linalg.norm(Z, axis=1, keepdims=True) + 1e-9
+            grouped = set()
+            cens = []
+            for ci in rows:
+                c = dm["_clusters"][ci]
+                grouped.update(int(i) for i in c)
+                cen = Z[c].mean(0)
+                cens.append(cen / (np.linalg.norm(cen) + 1e-9))
+            C = np.stack(cens)
+            for i in range(len(pos)):
+                if i in grouped:
+                    continue
+                sims = C @ Z[i]
+                j = int(np.argmax(sims))
+                if sims[j] >= min_fit:
+                    out[int(pos[i])] = (rows[j], float(lv[i]))
+        cache[key] = out
+        return out
+
     def drum_rebuild_safe(self, k, win=2.0, max_loss_db=4.0):
         """Rebuild the drums from clean samples only where that keeps them: hits the grid doesn't know (ghost
         notes, a ride or cymbal wash, fills it didn't group) would otherwise vanish with the old sound. The whole
@@ -2027,6 +2058,7 @@ class Project:
                 out[:, a0:a1] += smp[:, a0 - a:a1 - a] * gain
         y = y.copy()
         nxt = np.r_[pos[1:], n] if len(pos) else pos
+        stray = self._stray_hits(k, dm) if e.get("rebuild") else {}
         def take_out(i, amount=1.0):
             """Remove (part of) one hit's sound, not everything under it: its clean sample, lined up and
             level-matched, is subtracted frequency by frequency, so a cymbal ringing underneath stays."""
@@ -2081,6 +2113,24 @@ class Project:
                         except Exception:
                             pass
                     place(synth, moves.get(round(t, 3), t), ci, vels.get(round(t, 3), 1.0), lv)
+            # hits the grid didn't group (a ghost note, a fill, a crash): played by the sound they're most like, or
+            # if they aren't like any of them, kept as the split had them, so no hit drops out of a rebuilt bar
+            for i, p in enumerate(pos):
+                t = p / sr
+                if not (q["start"] <= t < q["end"]) or int(p) in lvl_of or any(abs(t - o) < 0.012 for o in offs):
+                    continue
+                st = stray.get(int(p))
+                if st is not None:
+                    place(synth, t, st[0], 1.0, st[1])
+                else:
+                    a0 = max(0, int(p) - pre)
+                    a1 = min(n, int(nxt[i]), int(p) + int(0.5 * sr))
+                    if a1 - a0 > 64:
+                        fw = np.ones(a1 - a0, np.float32)
+                        f2 = min(int(0.005 * sr), (a1 - a0) // 4)
+                        fw[:f2] = np.linspace(0, 1, f2)
+                        fw[-f2:] = np.linspace(1, 0, f2)
+                        synth[:, a0:a1] += y[:, a0:a1] * fw[None, :]
             for ad in e.get("add", []):
                 if q["start"] <= ad["t"] < q["end"]:
                     place(synth, ad["t"], ad["s"], ad.get("v", 1.0))
