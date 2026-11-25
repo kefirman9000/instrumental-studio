@@ -1222,7 +1222,7 @@ $("#btnStudioLab").onclick = async () => {
   if (!st.ov) return;
   const split = st.ov.stems.length > 0;
   if (!confirm("Make the Studio Lab instrumental?\n\n" + (split ? "" : "The song is split with \"Keeps every detail\" first. ")
-      + "Everything the singing damaged is rebuilt from the song's own clean copies: drum hits and bass notes, loops, "
+      + "Everything the singing damaged is rebuilt from the song's own clean copies: drum hits and bass notes, "
       + "whole bars from clean repeats, and what one copy has that the others don't is turned down. Best on songs built "
       + "from repeating parts.\n\nUndo takes it back. Export to save it.")) return;
   try {

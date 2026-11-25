@@ -790,7 +790,9 @@ def _job_enhanced():
                        "report": report + ["Play it, then Export to save it."]}
 
 
-STUDIOLAB_STEPS = ("hits", "notes", "loops", "rebuild", "consensus", "check")
+# not "loops": it replays whole loops and, on a song that isn't strictly loop-based, took the drums under the
+# singing from 16.8 dB to 4.3 dB in a known-answer test; "rebuild" does the same job with a check on every copy
+STUDIOLAB_STEPS = ("hits", "notes", "rebuild", "consensus", "check")
 
 
 def _job_studiolab():

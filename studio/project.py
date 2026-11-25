@@ -5378,7 +5378,9 @@ class Project:
         sr = self.sr
         floor = 10 ** (-self.CONSENSUS_MAX_CUT_DB / 20)
         vc = self._vocal_curve(0, self.original.shape[1])
-        for k in (ks or [x for x in self.instruments if x not in NOT_REPAIRED]):
+        # not the bass: a bass line plays different notes in each copy, so "what the copies don't share" is the
+        # music itself (tested: the bass under the singing went from 46 dB to 25 dB)
+        for k in (ks or [x for x in self.instruments if x not in NOT_REPAIRED and x != "bass"]):
             src = self.render_stem(k)
             try:
                 groups = self.find_loops(self.stems[k], drums=k in self.PERCUSSIVE, limit=8)
