@@ -1,5 +1,22 @@
 # What's new
 
+## 1.53.0
+
+- **New: 🧪 Studio Lab button** (next to Make enhanced instrumental). Everything learned from Studio Lab in one go: it splits with "Keeps every detail" if needed, then runs the usual repairs plus every rebuild from the song's own repeats:
+  - drum hits and bass notes rebuilt from their clean copies
+  - whole bars played again from clean repeats
+  - clean against the repeats
+
+  Then the finishing touches and the never-worse check. Tested against a known clean instrumental:
+  - On a loop-based song, the instrumental went from 24.7 dB to 28.3 dB (the normal build: 24.7 dB). The backing instruments under the singing went from 8.4 dB to 12.9 dB.
+  - On a song without exact repeats, it matches the normal build.
+
+  Two things were tried for it and left out because they made results worse:
+  - Studio Lab drum and bass voices for sounds the song never has clean. The drum voices lowered the drums; the bass voice can't tell how loud a missing note should be.
+  - The "loops" step. It took the drums from 16.8 dB to 4.3 dB on a song that isn't strictly loop-based.
+- **Fixed: "Rebuild damaged bass notes" could wreck a healthy bass.** It compared each note's level over its whole length, so long notes and quiet tails read as "weaker". On a loop-based song it rebuilt 46 healthy notes about 3x too loud (the bass went from 48 dB to 1 dB; the never-worse check had been catching it). Now levels are compared over each note's first 120 ms. A note only counts as damaged when the split lost the low end the original recording has there (with the other instruments taken out). Truly damaged notes are rebuilt as before.
+- **Fixed: "Clean against the repeats" lowered real bass notes** (46 dB to 25 dB in a test): a bass line plays different notes in each copy. It now leaves the bass alone.
+
 ## 1.52.0
 
 **New: installers with everything inside.** The release now has a Windows installer (`InstrumentalStudio-Setup-1.52.0.exe`) and Mac disk images for Apple silicon and Intel Macs. Each carries its own Python and ffmpeg, so there's nothing else to install. The separation model downloads itself the first time you start the app, matched to your graphics card. Before every release, each installer is built, installed, tested on the engine and on opening a song, and uninstalled again. (Ported from Studio Lab.)
