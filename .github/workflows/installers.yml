@@ -74,6 +74,7 @@ jobs:
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Instrumental Studio.lnk")) { throw 'no Start menu shortcut' }
           $py = "$app\runtime\python\python.exe"
           $env:INSTRUMENTAL_STUDIO_HOME = "$env:RUNNER_TEMP\home"
+          $env:PYTHONUTF8 = '1'                    # the test prints arrows; the runner's console is cp1252
           # (tests aren't shipped in the app: the repository's engine test, run with the installed app's Python)
           & $py tests\test_engine.py
           if ($LASTEXITCODE -ne 0) { throw 'engine test failed with the installed Python' }
