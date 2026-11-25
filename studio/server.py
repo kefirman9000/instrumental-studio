@@ -1650,7 +1650,8 @@ class Handler(BaseHTTPRequestHandler):
                 k_ = str(d["stem"])
                 folder = os.path.join(EXPORTS, re.sub(r"[^\w\- ()]", "", p.meta.get("name", "song")) or "song")
                 os.makedirs(folder, exist_ok=True)
-                out = p.drum_midi_export(k_, os.path.join(folder, f"{re.sub(r'[^\w\- ()]', '', p.meta.get('name', 'song'))} - {k_} grid.mid"))
+                safe = re.sub(r"[^\w\- ()]", "", p.meta.get("name", "song"))     # (no backslash inside an f-string: Python 3.10/3.11)
+                out = p.drum_midi_export(k_, os.path.join(folder, f"{safe} - {k_} grid.mid"))
                 reveal(out)
                 return self._send(200, {"ok": True, "path": out})
             elif path == "/api/drums/midi_import":
