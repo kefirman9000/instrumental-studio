@@ -52,7 +52,8 @@ PLIST
 
 # self-test: the bundled Python runs the engine test, and the bundled ffmpeg opens a compressed song
 TESTHOME="$PWD/build/testhome"; rm -rf "$TESTHOME"; mkdir -p "$TESTHOME"
-(cd "$APP/Contents/Resources/app" && INSTRUMENTAL_STUDIO_HOME="$TESTHOME" "$PWD/../python/bin/python3" tests/test_engine.py)
+# (tests aren't shipped in the app: run the repository's engine test with the app's own Python)
+INSTRUMENTAL_STUDIO_HOME="$TESTHOME" "$APP/Contents/Resources/python/bin/python3" tests/test_engine.py
 "$APP/Contents/Resources/app/bin/ffmpeg" -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=2" -c:a libmp3lame "$TESTHOME/t.mp3" \
   || "$APP/Contents/Resources/app/bin/ffmpeg" -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=2" "$TESTHOME/t.m4a"
 T="$(ls "$TESTHOME"/t.* | head -1)"

@@ -26,7 +26,21 @@ When you remove the vocals from a song, the instruments playing underneath the s
 
 You do this once. It takes about 10 minutes, most of it waiting for downloads.
 
-### The easy way: one file installs everything
+### The easiest way: the installer (nothing else to install)
+
+Go to the [latest release](https://github.com/kefirman9000/instrumental-studio/releases/latest) and download the installer for your computer. It carries its own Python and ffmpeg, so you don't need to install anything else. The separation model downloads itself the first time you start the app, matched to your graphics card.
+
+| | |
+|---|---|
+| **Windows** | Download `InstrumentalStudio-Setup-<version>.exe` and double-click it. If Windows shows *"Windows protected your PC"*, click **More info → Run anyway** (the installer isn't signed with a paid certificate). No admin password needed. Instrumental Studio appears in the Start menu (and on the desktop, if you tick the box). |
+| **Mac (M1 / M2 / M3 / M4)** | Download `InstrumentalStudio-<version>-Mac-AppleSilicon.dmg`, open it and drag **Instrumental Studio** onto **Applications**. |
+| **Mac (older Intel Macs)** | Same, with `InstrumentalStudio-<version>-Mac-Intel.dmg`. |
+
+*First time on a Mac:* macOS will say it can't check the app for malicious software (it isn't signed with a paid Apple developer ID). Click **Done**, then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to Instrumental Studio. You only need to do this once.
+
+Updates work as always, from inside the app. Your songs stay in your **InstrumentalStudio** folder when you update, reinstall or uninstall.
+
+### Or: one file installs everything (from the zip)
 
 Download and unzip the app (step 1 below), then double-click the installer for your computer. It installs Python, ffmpeg and the app's parts if they're missing, then offers the separation model:
 

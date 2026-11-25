@@ -74,9 +74,10 @@ jobs:
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Instrumental Studio.lnk")) { throw 'no Start menu shortcut' }
           $py = "$app\runtime\python\python.exe"
           $env:INSTRUMENTAL_STUDIO_HOME = "$env:RUNNER_TEMP\home"
-          Push-Location $app
+          # (tests aren't shipped in the app: the repository's engine test, run with the installed app's Python)
           & $py tests\test_engine.py
-          if ($LASTEXITCODE -ne 0) { throw 'engine test failed in the installed app' }
+          if ($LASTEXITCODE -ne 0) { throw 'engine test failed with the installed Python' }
+          Push-Location $app
           & "$app\bin\ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=2" "$env:RUNNER_TEMP\t.mp3"
           if ($LASTEXITCODE -ne 0) { & "$app\bin\ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=2" "$env:RUNNER_TEMP\t.m4a" }
           $t = (Get-ChildItem "$env:RUNNER_TEMP\t.*" | Select-Object -First 1).FullName
