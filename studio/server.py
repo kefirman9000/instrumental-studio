@@ -1197,7 +1197,7 @@ class Handler(BaseHTTPRequestHandler):
                     "job": S.job, "rev": S.rev, "has_project": S.project is not None,
                     "project": S.project.meta.get("name") if S.project else None,
                     "demucs": have, "device": devname,
-                    "models": {k: v[0] for k, v in SEP.MODELS.items()}, "home": HOME,
+                    "models": {k: v[0] for k, v in SEP.MODELS.items() if k not in SEP.HIDDEN_MODES}, "home": HOME,
                     "projects": list_projects(), "model": S.model, "extras": extras_state(), "version": __version__, "repo": UP.REPO,
                     "backup_home": UP.backup_home(), "app_dir": UP.APP_DIR,
                     "split_estimates": _split_estimates(),
@@ -1285,6 +1285,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/split":
                 p = self._proj()
                 mode = d.get("mode", "4stem")
+                mode = SEP.HIDDEN_MODES.get(mode, mode)          # a remembered Roformer-first choice: its replacement
                 if (p.meta.get("source") != "demo" and not SEP.demucs_available()
                         and not _reuse_stems(p.meta.get("source_hash"), mode, exclude=p.root)):
                     return self._send(409, {"error": "need_model", "plan": _model_plan()})
@@ -1422,7 +1423,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if path == "/api/extract_samples":
                 kind = d.get("kind") if d.get("kind") in ("single", "merged", "both") else "both"
-                mode = d.get("mode") if d.get("mode") in SEP.MODELS else "4stem_fast"
+                mode = SEP.HIDDEN_MODES.get(d.get("mode"), d.get("mode"))
+                mode = mode if mode in SEP.MODELS else "4stem_fast"
                 pid = d.get("project")
                 src = None
                 if not pid:

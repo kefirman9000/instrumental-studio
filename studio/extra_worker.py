@@ -24,13 +24,39 @@ def _read(path):
     return rate, (x[:, None] if x.ndim == 1 else x)
 
 
+HEADROOM = 0.5     # the level the song is handed to the model at
+
+
+def _fit_back(x, v, i):
+    """Gains (a, b) so a*vocals + b*instrumental adds back up to the song as closely as possible (least squares,
+    all channels). The model's own level changes are undone this way even when they were not a plain peak scale."""
+    xv, xi = v.reshape(-1).astype(np.float64), i.reshape(-1).astype(np.float64)
+    y = x.reshape(-1).astype(np.float64)
+    M = np.array([[xv @ xv, xv @ xi], [xv @ xi, xi @ xi]]) + 1e-9 * np.eye(2)
+    a, b = np.linalg.solve(M, np.array([xv @ y, xi @ y]))
+    return float(a), float(b)
+
+
 def roformer(model, inp, outdir, models_dir):
+    """Roformer through audio-separator, which (whatever its settings allow) turns a song peaking over 0.9 down
+    before separating it, turns each result down again on its own, and saves them as 16-bit files. Vocals and
+    instrumental then no longer add back up to the song: every place the app puts original and separated audio
+    side by side jumped in level, and the instrumental kept about a tenth of the singing. So the song goes in at
+    half level (none of that kicks in), comes back at its own level, and both parts are matched so they add up
+    to the song again."""
     from audio_separator.separator import Separator
     os.makedirs(outdir, exist_ok=True)
     os.makedirs(models_dir, exist_ok=True)
-    sep = Separator(output_dir=outdir, output_format="WAV", model_file_dir=models_dir)
+    rate, x = _read(inp)
+    peak = float(np.abs(x).max()) or 1.0
+    scale = HEADROOM / peak
+    work = os.path.join(outdir, "_input_headroom.wav")
+    wavfile.write(work, rate, (x * scale).astype(np.float32))
+    sep = Separator(output_dir=outdir, output_format="WAV", model_file_dir=models_dir,
+                    normalization_threshold=1.0, sample_rate=rate)
     sep.load_model(model_filename=model)
-    files = sep.separate(inp)
+    files = sep.separate(work)
+    os.remove(work)
     found = {}
     for f in files:
         path = f if os.path.isabs(f) else os.path.join(outdir, os.path.basename(f))
@@ -41,8 +67,19 @@ def roformer(model, inp, outdir, models_dir):
             found["vocals"] = path
     if set(found) != {"vocals", "instrumental"}:
         raise SystemExit("Unexpected output from the model: " + ", ".join(os.path.basename(f) for f in files))
+    parts = {}
     for k, path in found.items():
-        shutil.move(path, os.path.join(outdir, k + ".wav"))
+        _, y = _read(path)
+        os.remove(path)
+        parts[k] = y / scale
+    n = min(len(x), *(len(y) for y in parts.values()))
+    v, i = parts["vocals"][:n], parts["instrumental"][:n]
+    a, b = _fit_back(x[:n], v, i)
+    if 0.7 < a < 1.4 and 0.7 < b < 1.4:          # a plain level fix; anything else would be a model problem
+        v, i = v * a, i * b
+    print(f"level match: vocals x{a:.3f}, instrumental x{b:.3f}", flush=True)
+    for k, y in (("vocals", v), ("instrumental", i)):
+        wavfile.write(os.path.join(outdir, k + ".wav"), rate, y.astype(np.float32))
     print("DONE vocals instrumental", flush=True)
 
 

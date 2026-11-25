@@ -35,6 +35,10 @@ MODELS = {
                 ["drums", "bass", "guitar", "piano", "other", "vocals"]),
 }
 NEEDS_EXTRA = {"hybrid": "roformer", "hybrid6": "roformer"}
+# No longer offered for new splits: Roformer-first splits rebuilt the whole song from separated parts and sounded
+# broken next to the original. Roformer is used where it helps instead: as the vocal model of "Keeps every detail"
+# and in the leftover-singing passes (Settings: Use Roformer for extra passes). Old projects keep their label.
+HIDDEN_MODES = {"hybrid": "detail", "hybrid6": "6stem_best"}
 PASSES = {"htdemucs_ft": 4, "htdemucs": 1, "htdemucs_6s": 1}
 
 

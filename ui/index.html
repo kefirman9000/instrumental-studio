@@ -223,7 +223,7 @@
         <label class="check"><input type="checkbox" id="showLeftover" checked><span>Show where leftover singing remains: pink marks along the top of each instrument's lane</span></label>
       </div>
       <div class="setting">
-        <label class="check"><input type="checkbox" id="prefRoformer"><span>Use Roformer for extra passes (the second vocal-removal pass, and suggestions to try it). Cleaner, but much slower. Off: the faster standard model is used. Roformer splits you choose yourself are unaffected.</span></label>
+        <label class="check"><input type="checkbox" id="prefRoformer"><span>Use Roformer for the leftover-singing passes (the second vocal-removal pass after a split, and suggestions to try it). Cleaner, but much slower. Off: the faster standard model is used. Roformer always takes the singing out in "Keeps every detail" when it's installed; it's no longer a split of its own.</span></label>
       </div>
       <div class="setting">
         <label for="autoConf">Mark repairs as recommended at or above <b id="autoConfVal"></b> match. Nothing is applied until you choose.</label>
