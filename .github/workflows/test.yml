@@ -1,0 +1,60 @@
+# Checks every change before it can reach anyone (ported from Studio Lab's test workflow).
+# Releases (release.yml) still run the pipeline test once more before publishing.
+name: test
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install flake8
+      # real errors only: undefined names, syntax problems, unused imports / variables
+      - run: flake8 --select=F821,F822,F823,F63,F7,F82 --max-line-length=200 studio tests app.py check_setup.py update.py clear_stems.py
+      - name: UI script parses
+        run: node --check ui/app.js
+
+  oldest-python:
+    # check_setup accepts Python 3.10+: everything must at least import and the engine test pass there
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install numpy scipy
+      - run: python -m compileall -q studio tests app.py check_setup.py update.py clear_stems.py
+      - run: python tests/test_engine.py
+
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [engine, pipeline, ui]
+    name: ${{ matrix.suite }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - run: pip install numpy scipy
+      - if: matrix.suite == 'ui'
+        run: pip install playwright && python -m playwright install --with-deps chromium
+      - if: matrix.suite == 'engine'
+        run: python tests/test_engine.py
+      - if: matrix.suite == 'pipeline'
+        run: python tests/test_pipeline.py
+      - if: matrix.suite == 'ui'
+        run: mkdir -p shots && python tests/ui_check.py shots
+      - if: failure() && matrix.suite == 'ui'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: shots/*.png

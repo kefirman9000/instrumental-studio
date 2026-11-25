@@ -16,7 +16,7 @@ with sync_playwright() as p:
     pg = b.new_page(viewport={"width": 1480, "height": 920})
     pg.on("console", lambda m: m.type in ("error", "warning") and errors.append(m.text))
     pg.on("pageerror", lambda e: errors.append(str(e)))
-    pg.goto(url); pg.wait_for_timeout(800)
+    pg.goto(url + "#t=" + TOKEN); pg.wait_for_timeout(800)
     pg.screenshot(path=f"{OUT}/1_welcome.png")
     pg.click("#btnDemo")
     pg.wait_for_timeout(1500); pg.screenshot(path=f"{OUT}/2_busy.png")
@@ -42,7 +42,7 @@ with sync_playwright() as p:
     pg.click(".tabs button[data-tab=levels]"); pg.wait_for_timeout(300)
     pg.fill("#levelsWrap input >> nth=1", "3"); pg.press("#levelsWrap input >> nth=1", "Tab"); pg.wait_for_timeout(1500)
     pg.screenshot(path=f"{OUT}/7_levels.png")
-    pg.click(".tabs button[data-tab=review]"); pg.click("#filters button[data-f=bleed]"); pg.wait_for_timeout(300)
+    pg.click(".tabs button[data-tab=review]"); pg.click("#filters button[data-f=all]"); pg.wait_for_timeout(300)
     pg.locator("#sugList .sug").first.click(); pg.wait_for_timeout(500)
     pg.click(".sug.sel .decide button >> nth=0"); pg.wait_for_timeout(1500)
     pg.screenshot(path=f"{OUT}/8_bleed.png")
@@ -54,3 +54,7 @@ with sync_playwright() as p:
     print("export:", r["files"])
     b.close()
 print("console errors:", errors)
+# known harmless browser noise only; anything else fails the check
+real = [e for e in errors if "favicon" not in e.lower()]
+if real:
+    sys.exit("UI check failed: " + "; ".join(real[:5]))

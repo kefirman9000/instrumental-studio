@@ -37,12 +37,12 @@ def _open_setup_check(why, then_exit=True):
     """Something the app needs is missing or broken: open the setup checker in its own window (it
     explains and offers to install), instead of failing silently with no console."""
     diag.line(f"can't start: {why}. Opening the setup check.")
-    _launch_setup_check()
+    _launch_setup_check(why)
     if then_exit:
         sys.exit(1)
 
 
-def _launch_setup_check():
+def _launch_setup_check(why="something it needs is missing"):
     script = os.path.join(APP_DIR, "check_setup.py")
     try:
         if sys.platform.startswith("win"):
