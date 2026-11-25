@@ -790,14 +790,15 @@ def _job_enhanced():
                        "report": report + ["Play it, then Export to save it."]}
 
 
-STUDIOLAB_STEPS = ("hits", "notes", "loops", "rebuild", "consensus", "studiolab", "check")
+STUDIOLAB_STEPS = ("hits", "notes", "loops", "rebuild", "consensus", "check")
 
 
 def _job_studiolab():
     """The Studio Lab button: everything learned from Studio Lab in one go. Split with "Keeps every detail" if
     needed, find the damage, then the usual repairs plus every rebuild from the song's own repeats (hits and
-    notes from clean copies, loops, whole bars from clean repeats, clean against the repeats) and Studio Lab
-    voices for what has no clean copy anywhere; finishing touches and the never-worse check last."""
+    notes from clean copies, loops, whole bars from clean repeats, clean against the repeats); finishing touches
+    and the never-worse check last. (Studio Lab voices for what has no clean copy were tried and left out: on a
+    known-answer test they made the drums worse, and the bass voice can't tell how loud a note should be.)"""
     p = S.project
     report = []
     if not p.instruments:
