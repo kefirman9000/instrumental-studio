@@ -1748,6 +1748,12 @@ function renderBadges() {
     const s = st.ov.stem_summary[k]; const el = $(`.stem-lane[data-stem="${k}"] .badges`); if (!el) continue;
     if (st.ov.stage !== "detected") { el.innerHTML = "<span>Not checked for damage yet</span>"; continue; }
     el.innerHTML = s.count ? `<span>Damage <b>${pct(Math.min(1, s.damage))}</b></span><span>Fixable <b>${pct(s.repairability)}</b></span>` : `<span>No damage found</span>`;
+    if (s.leak_db != null && s.leak_db >= 6) {
+      const b = document.createElement("span"); b.className = "leak";
+      b.title = `This track has ${s.leak_db} dB more sound in the voice's range when someone sings than when nobody does: `
+        + "singing has likely leaked into it. Try Split again with another model, or the second vocal-removal pass.";
+      b.innerHTML = `Singing leaks in <b>+${s.leak_db} dB</b>`; el.append(b);
+    }
   }
 }
 

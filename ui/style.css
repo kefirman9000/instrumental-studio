@@ -396,3 +396,4 @@ label.check input { margin-top: 3px; }
 .step-row b { display: block; }
 .step-row .dim.small { display: block; }
 #dlgSteps { width: min(760px, 94vw); }
+.stem-lane .badges .leak { color: var(--vocal); }

@@ -3971,7 +3971,33 @@ class Project:
             rep = float((w * np.array([s["conf"] for s in sugs])).sum() / w.sum()) if sugs else 1.0
             x = self.stems[k]
             self.stem_summary[k] = {"damage": float(dmg), "repairability": rep, "count": len(sugs),
-                                    "rms_db": float(20 * np.log10(np.sqrt(np.mean(x ** 2)) + 1e-9))}
+                                    "rms_db": float(20 * np.log10(np.sqrt(np.mean(x ** 2)) + 1e-9)),
+                                    "leak_db": self._voice_leak_db(k)}
+
+    LEAK_DB = 6.0      # a track whose share of voice-range sound is this much higher when someone sings is flagged
+
+    def _voice_leak_db(self, k):
+        """Does singing leak into this instrument? (After Studio Lab's stem study, which measured how each kind
+        of stem shares its energy across the spectrum.) A fixed target per instrument fails on real songs (a bass
+        guitar has more highs than a synth sub), so the track is compared with itself: its share of energy in the
+        voice's range (250 Hz - 4 kHz) on beats with singing, against beats with none. Returns dB, or None when
+        the song has too few of either."""
+        try:
+            F = self.stem_feats[k][0]
+        except Exception:
+            return None
+        n = min(len(F), len(self.VA))
+        if n < 16:
+            return None
+        P = np.exp(F[:n])
+        voice = (self.centers >= 250) & (self.centers <= 4000)
+        share = P[:, voice].sum(1) / (P.sum(1) + EPS)
+        loud = P.sum(1) > np.percentile(P.sum(1), 20)              # beats where the instrument plays
+        va = np.asarray(self.VA[:n])
+        sung, free = loud & (va > 0.3), loud & (va < 0.02)
+        if sung.sum() < 8 or free.sum() < 8:
+            return None
+        return round(float(10 * np.log10((np.median(share[sung]) + EPS) / (np.median(share[free]) + EPS))), 1)
 
     def section_levels(self):
         """RMS level (dBFS) of every instrument in every section, after repairs."""
