@@ -790,6 +790,40 @@ def _job_enhanced():
                        "report": report + ["Play it, then Export to save it."]}
 
 
+STUDIOLAB_STEPS = ("hits", "notes", "loops", "rebuild", "consensus", "studiolab", "check")
+
+
+def _job_studiolab():
+    """The Studio Lab button: everything learned from Studio Lab in one go. Split with "Keeps every detail" if
+    needed, find the damage, then the usual repairs plus every rebuild from the song's own repeats (hits and
+    notes from clean copies, loops, whole bars from clean repeats, clean against the repeats) and Studio Lab
+    voices for what has no clean copy anywhere; finishing touches and the never-worse check last."""
+    p = S.project
+    report = []
+    if not p.instruments:
+        _job_split("detail", {})
+        p = S.project
+        report.append("Split with \"Keeps every detail\" (only the singing taken out of the original)")
+    if p.stage != "detected":
+        lo, span = (0.86, 0.03) if report else (0.05, 0.2)
+        p.detect(lambda f, m: _progress(None if f is None else lo + span * f, f"Finding damage: {m}"))
+    plan = {x["key"]: x for x in p.build_plan()}
+    steps = [k for k, x in plan.items() if x["on"]] + [k for k in STUDIOLAB_STEPS if k in plan]
+    steps = list(dict.fromkeys(steps))
+    f0 = 0.89 if report else 0.25
+    _pre_build(p, steps, f0, f0 + (0.95 - f0) * 0.2)
+    res = p.build_best(steps, lambda f, m: _progress(None if f is None else f0 + (0.95 - f0) * (0.2 + 0.7 * f), m))
+    report += res["report"]
+    _progress(0.95, "Finishing touches")
+    report += p.finish()
+    _progress(0.98, "Checking nothing was lost")
+    lines, ok = p.detail_check()
+    report += lines
+    p.save()
+    S.job["result"] = {"title": "Studio Lab instrumental ready" + ("" if ok else " (check the notes)"),
+                       "report": report + ["Play it, then Export to save it. Undo takes it back."]}
+
+
 def _job_finish():
     p = S.project
     rep = p.finish(lambda f, m: _progress(f, m))
@@ -1382,6 +1416,13 @@ class Handler(BaseHTTPRequestHandler):
                         and not _reuse_stems(p.meta.get("source_hash"), "detail", exclude=p.root):
                     return self._send(409, {"error": "need_model", "plan": _model_plan()})
                 _start_job(_job_enhanced)
+                return self._send(200, {"ok": True})
+            if path == "/api/studiolab":
+                p = self._proj()
+                if not p.instruments and p.meta.get("source") != "demo" and not SEP.demucs_available() \
+                        and not _reuse_stems(p.meta.get("source_hash"), "detail", exclude=p.root):
+                    return self._send(409, {"error": "need_model", "plan": _model_plan()})
+                _start_job(_job_studiolab)
                 return self._send(200, {"ok": True})
             if path == "/api/finish":
                 if self._proj().stage not in ("split", "detected") or not self._proj().instruments:

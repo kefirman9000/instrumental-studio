@@ -1218,6 +1218,20 @@ $("#btnEnhanced").onclick = async () => {
     showBusy(0.02, "Making the enhanced instrumental"); watchJob();
   } catch (e) { if (e.message === "need_model") installModelFromStep(); else fail(e); }
 };
+$("#btnStudioLab").onclick = async () => {
+  if (!st.ov) return;
+  const split = st.ov.stems.length > 0;
+  if (!confirm("Make the Studio Lab instrumental?\n\n" + (split ? "" : "The song is split with \"Keeps every detail\" first. ")
+      + "Everything the singing damaged is rebuilt from the song's own clean copies (hits, notes, loops, whole bars), "
+      + "and what the song never has clean is played by Studio Lab voices fitted to it: a bass with the song's own tone, "
+      + "drum-machine voices matched to each drum sound. Those won't sound exactly like the original.\n\nUndo takes it back. Export to save it.")) return;
+  try {
+    stopPreview(); player.pause();
+    showLoading(0.02, "Making the Studio Lab instrumental");
+    await api.post("/api/studiolab", {});
+    watchJob();
+  } catch (e) { hideBusy(); if (e.message === "need_model") installModelFromStep(); else fail(e); }
+};
 $("#btnFinish").onclick = async () => {
   try { stopPreview(); player.pause(); await api.post("/api/finish", {}); showBusy(0.05, "Finishing touches"); watchJob(); } catch (e) { fail(e); }
 };
@@ -1594,7 +1608,7 @@ function renderSteps() {
   $("#refBox").hidden = true;          // the toolbar's "+ Clean stems / samples" does this (it crowded step 4)
   $("#btnRefOpen2").hidden = !ov.stems.length;
   $("#btnClean").hidden = !ov.stems.length;
-  $("#btnEnhanced").hidden = false;
+  $("#btnEnhanced").hidden = false; $("#btnStudioLab").hidden = false;
   $("#btnEnhance").hidden = !ov.stems.length;
   const vy = ov.meta.vinyl;
   $("#btnVinylUndo").hidden = !vy;

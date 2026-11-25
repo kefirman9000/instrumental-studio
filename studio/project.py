@@ -5553,6 +5553,134 @@ class Project:
         self.check_ids(ids)
         return ids
 
+    # ------------------------------------------------------------------ Studio Lab voices: what has no clean copy
+    LAB_MIN_LOSS = 0.6        # a drum hit must have lost at least this share of its level (8 dB) to get a Studio Lab voice
+
+    def studiolab_fill(self):
+        """Studio Lab voices for what the song itself can't give back (labsynth). Bass notes under the singing that
+        came out weak and have no clean copy within 3 semitones are played again by a bass voice with the song's
+        own harmonics and decay; drum sounds that are never heard without singing over them get a drum-machine
+        voice fitted to their sound, added where a hit lost level. Notes and hits that have clean copies are left
+        to the song's own rebuilds. Returns (ids, bass notes played, drum hits filled)."""
+        from . import labsynth as LS
+        ids, n_bass, n_drum = [], 0, 0
+        sr = self.sr
+        rng = np.random.default_rng(7)
+        # ---- bass
+        if "bass" in self.instruments:
+            try:
+                dm = self.drum_map("bass")
+                rows = dm["rows"] if dm["rows"] and dm["rows"][0].get("midi") is not None else []
+            except Exception as e:
+                log(f"Studio Lab bass skipped: {e}")
+                rows = []
+            if rows:
+                x = self.stems["bass"]
+                n = x.shape[1]
+                mono = x.mean(0)
+                pos = dm["_pos"]
+                env = np.sqrt(np.convolve(mono ** 2, np.ones(1024) / 1024, mode="same"))
+                vc = self._vocal_curve(0, n)
+                midi_of = {int(i): r["midi"] for r in rows for i in dm["_clusters"][r["id"]]}
+                ends = {i: self._note_end(env, pos, i, n) for i in midi_of}
+                lvl = lambda i: float(np.sqrt(np.mean(x[:, int(pos[i]):ends[i]] ** 2) + 1e-12))
+                hz = lambda m: 440.0 * 2 ** ((m - 69) / 12)
+                clean = [i for i in midi_of if float(vc[int(pos[i]):ends[i]].max(initial=0)) < 0.05
+                         and ends[i] - int(pos[i]) > int(0.15 * sr)]
+                clean_m = {midi_of[i] for i in clean}
+                ref = sorted(clean, key=lvl, reverse=True)[:12] or sorted(midi_of, key=lvl, reverse=True)[:12]
+                prof = LS.bass_profile([mono[int(pos[i]):ends[i]] for i in ref], [hz(midi_of[i]) for i in ref], sr)
+                typical = float(np.median([lvl(i) for i in ref])) if ref else 0.0
+                items = []
+                for i, m in midi_of.items():
+                    if prof is None or float(vc[int(pos[i]):ends[i]].mean()) <= 0.3:
+                        continue
+                    if any(abs(q - m) <= 3 for q in clean_m):
+                        continue                               # the song's own note rebuild covers it
+                    if lvl(i) > typical * 10 ** (-3 / 20):
+                        continue                               # not weakened
+                    a0, b0 = int(pos[i]), ends[i]
+                    y = LS.bass_note(hz(m), (b0 - a0) / sr, prof, sr, rng)[:b0 - a0 + int(0.02 * sr)]
+                    y *= typical / (float(np.sqrt(np.mean(y[:b0 - a0] ** 2))) + 1e-12)
+                    items.append((a0, y, m))
+                if items:
+                    lo = max(0, min(a for a, *_ in items) - XFADE)
+                    hi = min(n, max(a + len(y) for a, y, _ in items) + XFADE)
+                    tgt = np.asarray(x[:, lo:hi], np.float32).copy()
+                    W = np.zeros(hi - lo, np.float32)
+                    rmp = int(0.008 * sr)
+                    for a, y, m in items:
+                        L = min(len(y), hi - a)
+                        w = np.ones(L, np.float32)
+                        w[:rmp] = np.linspace(0, 1, rmp)
+                        w[-rmp:] = np.linspace(1, 0, rmp)
+                        tgt[:, a - lo:a - lo + L] = y[None, :L]
+                        W[a - lo:a - lo + L] = np.maximum(W[a - lo:a - lo + L], w)
+                    names = sorted({self.NOTE_NAMES[m % 12] + str(m // 12 - 1) for *_, m in items})
+                    rid = "lab_bass"
+                    self.suggestions[rid] = {
+                        "id": rid, "type": "alt", "stem": "bass", "status": "pending", "start": lo / sr, "end": hi / sr,
+                        "section": self._section_of(lo / sr), "conf": 0.7, "severity": 0.0, "strength": 1.0, "donors": [],
+                        "alt_mode": "studiolab", "blend": 0.0,
+                        "note": f"Studio Lab bass plays {len(items)} damaged note{'s' if len(items) != 1 else ''} "
+                                f"({', '.join(names[:6])}{'...' if len(names) > 6 else ''}) that are never heard clean, "
+                                f"with the harmonics and decay of the song's own bass"}
+                    self.patches[rid] = (lo, (W[None, :] * (tgt - x[:, lo:hi])).astype(np.float16))
+                    self.take_w[rid] = (lo, W.astype(np.float16))
+                    ids.append(rid)
+                    n_bass = len(items)
+        # ---- drums
+        for k in [x for x in self.instruments if x in self.PERCUSSIVE]:
+            x = self.stems[k]
+            mono = x.mean(0)
+            n = x.shape[1]
+            try:
+                pos, clusters, F, lv, centers = HT.find_sounds(mono, sr, beat_times=self.beat_times)
+            except Exception as e:
+                log(f"Studio Lab drums skipped for {k}: {e}")
+                continue
+            vc = self._vocal_curve(0, n)
+            cov = vc[np.clip(pos + int(0.02 * sr), 0, n - 1)] if len(pos) else np.zeros(0)
+            add = np.zeros(n, np.float32)
+            filled, kinds = 0, set()
+            for c in clusters:
+                if sum(1 for i in c if cov[i] < 0.08) >= 2:
+                    continue                                   # heard clean: the song's own hit rebuild covers it
+                kind = HT.name_sound(F[c].mean(0), centers)
+                # what the sound is like when it isn't damaged: its hits with the least singing over them
+                calm = [i for i in c if cov[i] < 0.3] or list(c)
+                ref_lv = float(np.median(lv[calm]))
+                voice = LS.drum_voice(kind, F[c].mean(0), LS.decay_of(mono, pos[c], sr), sr, seed=len(kinds))
+                vf, vl = HT._hit_features(voice, np.array([0]), sr, HT._bands(sr)[0])
+                for i in c:
+                    if cov[i] < 0.3:
+                        continue
+                    loss = 1 - float(np.exp((lv[i] - ref_lv) / 2))        # share of amplitude the hit lost
+                    if loss < self.LAB_MIN_LOSS:
+                        continue
+                    g = float(np.exp((ref_lv - vl[0]) / 2)) * (loss - 0.3)   # make up what's missing, not more
+                    p0 = int(pos[i])
+                    L = min(len(voice), n - p0)
+                    add[p0:p0 + L] += voice[:L] * g
+                    filled += 1
+                    kinds.add(kind)
+            if not filled:
+                continue
+            idx = np.flatnonzero(np.abs(add) > 1e-7)
+            lo, hi = int(idx[0]), int(idx[-1]) + 1
+            rid = f"lab_{k}"
+            self.suggestions[rid] = {
+                "id": rid, "type": "bleed", "stem": k, "status": "pending", "start": lo / sr, "end": hi / sr,
+                "section": self._section_of(lo / sr), "conf": 0.7, "severity": 0.1, "strength": 1.0, "donors": [],
+                "smart": "studiolab",
+                "note": f"Studio Lab drum voices fill {filled} hit{'s' if filled != 1 else ''} "
+                        f"({', '.join(sorted(kinds))}) whose sound is never heard without singing over it, fitted to "
+                        f"that sound and added by what each hit lost"}
+            self.patches[rid] = (lo, np.repeat(add[None, lo:hi], x.shape[0], 0).astype(np.float16))
+            ids.append(rid)
+            n_drum += filled
+        return ids, n_bass, n_drum
+
     def make_pattern_rebuilds(self, ks=None):
         """For loop-based songs: in parts with singing, each instrument's loop is played again from a merge of
         its clean copies (stretched to each copy's exact length), instead of patching the damaged copy. Only
@@ -5635,7 +5763,7 @@ class Project:
 
     # ------------------------------------------------------------------ build the best instrumental
     AUTO_STEPS = ("keep", "gaps", "refs", "bestof", "versions", "bars", "hits", "pattern", "notes", "loops", "repairs",
-                  "recover", "deep", "leftovers", "rebuild", "consensus", "smartclean",
+                  "recover", "deep", "leftovers", "rebuild", "studiolab", "consensus", "smartclean",
                   "clicks", "improve", "mutes", "acappella", "acappella_hard", "notch", "tone", "seams")
 
     def vocal_gaps(self, min_len=1.0):
@@ -5716,7 +5844,7 @@ class Project:
     # "bars" is an extra too: even with the strict same-notes check it lowered backing instruments on real songs
     # (a different take of the same part pasted in; tested against a known clean instrumental).
     EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
-                   "acappella_hard", "gaps", "acappella", "smartclean", "consensus", "rebuild")
+                   "acappella_hard", "gaps", "acappella", "smartclean", "consensus", "rebuild", "studiolab")
 
     def _safe_runs(self, aggressive):
         try:
@@ -5776,6 +5904,11 @@ class Project:
              "copy, so no singing is carried over. Bars with no clean copy stay as they are. Made for songs built from "
              "repeats (house, pop, loops); on live playing a copy can sound different from the original take.",
              len([x for x in self.instruments if x not in NOT_REPAIRED])),
+            ("studiolab", "Studio Lab voices for what has no clean copy",
+             "Bass notes and drum sounds the song never has without singing over them are played by Studio Lab voices "
+             "fitted to the song: a bass with the harmonics and decay of the song's own bass, drum-machine voices "
+             "matched to each sound. Everything that has a clean copy is rebuilt from the song itself instead.",
+             1 if any(x in self.instruments for x in ["bass"] + list(self.PERCUSSIVE)) else 0),
             ("consensus", "Clean against the repeats: turn down what one copy has and the others don't",
              "Every part an instrument plays more than once is compared with what all its copies agree on; anything "
              "only one copy has (leftover singing, breaths, separation fizz) is turned down, at most 12 dB, under the "
@@ -5962,6 +6095,17 @@ class Project:
                                       + ("" if n_rb == n_sung else " (the rest have no clean copy and were repaired instead)"))
                 except Exception as e:
                     log(f"build: rebuild from repeats skipped: {e}")
+            if "studiolab" in steps:
+                progress(0.353, "Studio Lab voices for what has no clean copy")
+                try:
+                    _, nb_, nd_ = self.studiolab_fill()
+                    if nb_ or nd_:
+                        report.append("Studio Lab voices played " + " and ".join(
+                            ([f"{nb_} bass note{'s' if nb_ != 1 else ''}"] if nb_ else [])
+                            + ([f"{nd_} drum hit{'s' if nd_ != 1 else ''}"] if nd_ else []))
+                            + " the song never has clean")
+                except Exception as e:
+                    log(f"build: Studio Lab voices skipped: {e}")
             if "consensus" in steps:
                 progress(0.355, "Cleaning against the repeats")
                 try:
@@ -6062,11 +6206,15 @@ class Project:
                         accept.add(i)
             if "smartclean" in steps:
                 for i, x in S.items():
-                    if x["status"] == "pending" and not inside_kept(x) and x.get("smart") and x["smart"] != "consensus":
+                    if x["status"] == "pending" and not inside_kept(x) and x.get("smart") and x["smart"] not in ("consensus", "studiolab"):
                         accept.add(i)
             if "consensus" in steps:
                 for i, x in S.items():
                     if x["status"] == "pending" and not inside_kept(x) and x.get("smart") == "consensus":
+                        accept.add(i)
+            if "studiolab" in steps:
+                for i, x in S.items():
+                    if x["status"] == "pending" and (x.get("smart") == "studiolab" or x.get("alt_mode") == "studiolab"):
                         accept.add(i)
 
             if "clicks" in steps:
