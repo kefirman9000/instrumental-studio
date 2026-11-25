@@ -1,5 +1,25 @@
 # What's new
 
+## 1.52.0
+
+**New: installers with everything inside.** The release now has a Windows installer (`InstrumentalStudio-Setup-1.52.0.exe`) and Mac disk images for Apple silicon and Intel Macs. Each carries its own Python and ffmpeg, so there's nothing else to install. The separation model downloads itself the first time you start the app, matched to your graphics card. Before every release, each installer is built, installed, tested on the engine and on opening a song, and uninstalled again. (Ported from Studio Lab.)
+
+**Roformer fixed:**
+
+- **Roformer kept turning songs down.** The library that runs it turned any song peaking above 0.9 down before separating it, turned the vocals and the instrumental down again separately, and saved them as 16-bit files. So the two parts no longer added back up to the song: the instrumental's level was off, by about 16 dB under the singing in a test. Every place the app joins original and separated audio could jump. Now the song goes in at half level so none of that kicks in, comes back at its own level, and both parts are matched so they add up again. In a test with the library's level handling, the parts add back to the song within 76 dB instead of 20 dB.
+- **"Cleanest vocal removal (Roformer first)" splits are no longer offered.** They rebuilt the whole song from separated parts. Roformer is used where it helps instead: it takes the singing out in **"Keeps every detail"** when installed, and runs the leftover-singing passes if you turn that on in Settings. Old projects split that way keep working.
+
+**Found by the new automatic tests:**
+
+- **The app didn't start on Python 3.10 or 3.11 since 1.30.0.** One line used syntax only Python 3.12+ allows. Fixed.
+- On Linux, when the app couldn't start, it crashed instead of saying why. Fixed.
+- Every change is now tested before it can be released: an error check, Python 3.10, the engine, the whole pipeline, and the app in a real browser. (Ported from Studio Lab.)
+
+**Also new:**
+
+- **"Singing leaks in" flag on an instrument's lane.** It shows when a track has clearly more sound in the voice's range while someone sings than when nobody does. In a test with singing leaked into the bass, the bass read +15 dB while clean tracks stayed between -2 and 0 dB. It catches obvious leaks; a faint one into a busy track can stay under it.
+- **Export → "Bass and instrument notes as MIDI":** the notes the bass and other instruments play, one MIDI track each, on the song's own tempo map. On the demo, 214 of 215 bass notes match the clean bass.
+
 ## 1.51.0
 
 **Rebuilt drums no longer get messed up by the wrong sample:**
