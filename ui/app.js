@@ -2184,7 +2184,7 @@ $("#btnExport").onclick = () => $("#dlgExport").showModal();
 $("#dlgExport").addEventListener("close", async () => {
   const dlg = $("#dlgExport"); if (dlg.returnValue !== "ok") return;
   const f = dlg.querySelector("form");
-  const what = ["mix", "stems", "raw", "vocals", "report", "samples_raw", "samples_merged", "tempo", "drum_midi"].filter(n => f.elements[n] && f.elements[n].checked);
+  const what = ["mix", "stems", "raw", "vocals", "report", "samples_raw", "samples_merged", "tempo", "drum_midi", "notes_midi"].filter(n => f.elements[n] && f.elements[n].checked);
   const format = f.elements.fmt.value;
   showBusy(0.3, "Writing files");
   try {
