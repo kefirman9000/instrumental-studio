@@ -5489,15 +5489,39 @@ class Project:
                     midi_of[int(i)] = r["midi"]
             ends = {i: self._note_end(env, pos, i, n) for i in midi_of}
             sung = lambda i: float(vc[int(pos[i]):ends[i]].mean()) > 0.3
-            lvl = lambda i: float(np.sqrt(np.mean(x[:, int(pos[i]):ends[i]] ** 2) + 1e-12))
+            # level over the same first 120 ms of every note: over the whole note, a long note counts its quiet
+            # decay and reads "weaker" (tested on a loop: 46 healthy notes were rebuilt, 3x too loud)
+            head = int(0.12 * sr)
+            lvl = lambda i: float(np.sqrt(np.mean(x[:, int(pos[i]):min(ends[i], int(pos[i]) + head)] ** 2) + 1e-12))
             clean = {}
             for i, m in midi_of.items():
                 if float(vc[int(pos[i]):ends[i]].max(initial=0)) < 0.05 and ends[i] - int(pos[i]) > int(0.08 * sr):
                     clean.setdefault(m, []).append(i)
             med = {m: float(np.median([lvl(i) for i in v])) for m, v in clean.items()}
+            # the real damage test: the singing has almost nothing below 150 Hz, so there the original recording
+            # shows what the bass should be. A note whose split still holds the original's low end isn't damaged,
+            # however it compares with louder copies (quiet tails and retriggers were read as "weaker" notes).
+            from scipy.signal import butter, sosfiltfilt
+            sos = butter(4, 150, "lowpass", fs=sr, output="sos")
+            lo_x = sosfiltfilt(sos, x.mean(0)).astype(np.float32)
+            if self.original is not None:
+                # what the bass should be: the original's low end minus the other instruments' (the kick sits there)
+                rest = self.original.mean(0)[:n].astype(np.float32).copy()
+                for o in self.instruments:
+                    if o != k and o in self.stems:
+                        rest[:self.stems[o].shape[1]] -= self.stems[o].mean(0)[:n]
+                lo_o = sosfiltfilt(sos, rest).astype(np.float32)
+            else:
+                lo_o = None
+            def holds_low_end(i):
+                if lo_o is None:
+                    return False
+                a_, b_ = int(pos[i]), min(ends[i], int(pos[i]) + head)
+                eo = float(np.sqrt(np.mean(lo_o[a_:b_] ** 2) + 1e-12))
+                return float(np.sqrt(np.mean(lo_x[a_:b_] ** 2) + 1e-12)) >= eo * 10 ** (-6 / 20)
             by_sec = {}
             for i, m in midi_of.items():
-                if not sung(i):
+                if not sung(i) or holds_low_end(i):
                     continue
                 src_m = m if m in clean else min(clean, key=lambda q: abs(q - m), default=None)
                 if src_m is None or abs(src_m - m) > 3:
@@ -5521,7 +5545,7 @@ class Project:
                 if not clips:
                     continue
                 y = self._merge_clips(clips) if len(clips) >= 2 else clips[0]
-                y *= med[src_m] / (float(np.sqrt(np.mean(y ** 2) + 1e-12)))
+                y *= med[src_m] / (float(np.sqrt(np.mean(y[:, pre:pre + head] ** 2) + 1e-12)))
                 by_sec.setdefault(self._section_of(a0 / sr), []).append((a0, y, m, src_m))
             for si, items in by_sec.items():
                 rid = f"nt_{k}_{si}"
