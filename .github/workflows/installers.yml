@@ -1,0 +1,131 @@
+name: installers
+# One-click installers with their own Python and ffmpeg inside (nothing else to install), after Studio Lab's:
+#   Windows: InstrumentalStudio-Setup-<ver>.exe     macOS: InstrumentalStudio-<ver>-Mac-AppleSilicon.dmg / -Mac-Intel.dmg
+# The separation model (PyTorch + Demucs) installs itself on first start, matched to the graphics card, so the
+# installers stay small. Called by release.yml for every new version (attached to the GitHub release). Pushing
+# installer changes to any other branch, or running it by hand, builds them as downloadable artifacts for testing.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        default: ''
+  workflow_dispatch:
+  schedule:
+    - cron: '41 7 * * 1'                 # every Monday: build and self-test all three, so a broken one is found early
+  push:
+    branches-ignore: [main]
+    paths: ['installer/**', '.github/workflows/installers.yml']
+permissions:
+  contents: write
+env:
+  PY_SERIES: '3.12'
+  PKGS: 'numpy scipy pywebview imageio-ffmpeg'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage the app with a private Python and ffmpeg
+        run: |
+          VER=$(python -c "import re;print(re.search(r'__version__\s*=\s*[\"\x27]([^\"\x27]+)', open('studio/__init__.py').read()).group(1))")
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          gh release download --repo astral-sh/python-build-standalone --dir pbs \
+             --pattern "cpython-${PY_SERIES}.*-x86_64-pc-windows-msvc-install_only.tar.gz"
+          mkdir -p build/win/app/runtime build/win/app/bin
+          git archive HEAD | tar -x -C build/win/app
+          tar -xzf pbs/*.tar.gz -C build/win/app/runtime              # -> runtime/python/python.exe
+          PY=build/win/app/runtime/python/python.exe
+          "$PY" -m pip install --disable-pip-version-check --no-warn-script-location -q $PKGS
+          "$PY" -c "import numpy, scipy; print('bundled python ok')"
+          FF=$("$PY" -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
+          cp "$FF" build/win/app/bin/ffmpeg.exe
+          build/win/app/bin/ffmpeg.exe -hide_banner -version | head -1
+          cp installer/windows/instrumental-studio.ico build/win/app/
+          "$PY" -m compileall -q -j 0 --invalidation-mode checked-hash build/win/app/studio build/win/app/app.py
+      - name: Build InstrumentalStudio.exe (the launcher you pin to the taskbar)
+        shell: pwsh
+        run: |
+          $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          & $csc /nologo /target:winexe /optimize+ /win32icon:installer\windows\instrumental-studio.ico /out:build\win\app\InstrumentalStudio.exe installer\windows\launcher.cs
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path build\win\app\InstrumentalStudio.exe)) { throw 'launcher build failed' }
+      - name: Build Setup.exe
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $src = (Resolve-Path build\win\app).Path
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DAppVer=$env:VER" "/DSrc=$src" installer\windows\instrumental-studio.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Self-test - install silently, run the engine and open a song with the installed app, uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\InstrumentalStudio-Setup-*.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/TASKS=desktopicon' -Wait
+          $app = "$env:LOCALAPPDATA\Programs\Instrumental Studio"
+          if (-not (Test-Path "$app\runtime\python\pythonw.exe")) { throw 'not installed' }
+          if (-not (Test-Path "$app\InstrumentalStudio.exe")) { throw 'no launcher' }
+          if (-not (Test-Path "$app\bin\ffmpeg.exe")) { throw 'no ffmpeg' }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Instrumental Studio.lnk")) { throw 'no Start menu shortcut' }
+          $py = "$app\runtime\python\python.exe"
+          $env:INSTRUMENTAL_STUDIO_HOME = "$env:RUNNER_TEMP\home"
+          Push-Location $app
+          & $py tests\test_engine.py
+          if ($LASTEXITCODE -ne 0) { throw 'engine test failed in the installed app' }
+          & "$app\bin\ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=2" "$env:RUNNER_TEMP\t.mp3"
+          if ($LASTEXITCODE -ne 0) { & "$app\bin\ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=2" "$env:RUNNER_TEMP\t.m4a" }
+          $t = (Get-ChildItem "$env:RUNNER_TEMP\t.*" | Select-Object -First 1).FullName
+          $env:PATH = "$app\bin;$env:PATH"
+          & $py -c "import sys; sys.path.insert(0, '.'); from studio.audio import load_audio; x, sr = load_audio(sys.argv[1])[:2]; assert x.shape[1] > sr, x.shape; print('installed app opens songs ok')" $t
+          if ($LASTEXITCODE -ne 0) { throw 'the installed app could not open a song' }
+          & $py -c "import sys; sys.path.insert(0, '.'); import studio.server; print('server imports ok')"
+          if ($LASTEXITCODE -ne 0) { throw 'the installed app does not start' }
+          Pop-Location
+          Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path "$app\runtime"); $i++) { Start-Sleep 1 }   # the uninstaller re-launches itself
+          if (Test-Path "$app\runtime") { throw 'uninstall left the program behind' }
+          'installer self-test ok'
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: windows-installer
+          path: dist/*.exe
+      - name: Attach to the release
+        if: inputs.tag != ''
+        run: gh release upload "${{ inputs.tag }}" dist/*.exe --clobber
+
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            triple: aarch64-apple-darwin
+            label: AppleSilicon
+          - runner: macos-15-intel
+            triple: x86_64-apple-darwin
+            label: Intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Instrumental Studio.app and the .dmg (includes a self-test)
+        run: |
+          VER=$(python3 -c "import re;print(re.search(r'__version__\s*=\s*[\"\x27]([^\"\x27]+)', open('studio/__init__.py').read()).group(1))")
+          gh release download --repo astral-sh/python-build-standalone --dir pbs \
+             --pattern "cpython-${PY_SERIES}.*-${{ matrix.triple }}-install_only.tar.gz"
+          bash installer/mac/build.sh pbs/*.tar.gz "${{ matrix.label }}" "$VER"
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: mac-${{ matrix.label }}
+          path: dist/*.dmg
+      - name: Attach to the release
+        if: inputs.tag != ''
+        run: gh release upload "${{ inputs.tag }}" dist/*.dmg --clobber

@@ -24,6 +24,10 @@ import webbrowser
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, APP_DIR)
+# the installers bring their own ffmpeg (bin/ next to the app): found first, before anything else starts
+_BIN = os.path.join(APP_DIR, "bin")
+if os.path.isdir(_BIN):
+    os.environ["PATH"] = _BIN + os.pathsep + os.environ.get("PATH", "")
 from studio import diag  # noqa: E402
 diag.setup(tag="window")   # the log, crash and freeze recording start before anything else loads
 diag.mark("starting")

@@ -17,6 +17,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      ver: ${{ steps.v.outputs.version }}
+      exists: ${{ steps.chk.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
 
@@ -59,7 +62,7 @@ jobs:
           cat >> notes.md <<'EOF'
 
           ---
-          **New here?** Download **InstrumentalStudio-${{ steps.v.outputs.version }}.zip** below, unzip it, and follow the steps in the [README](https://github.com/${{ github.repository }}#install).
+          **New here?** Download the installer for your computer below (it appears a few minutes after the release): **InstrumentalStudio-Setup-${{ steps.v.outputs.version }}.exe** for Windows, or **InstrumentalStudio-${{ steps.v.outputs.version }}-Mac-AppleSilicon.dmg** / **-Mac-Intel.dmg** for a Mac. Nothing else to install: the separation model installs itself the first time the app starts. (The zip is the same app without Python, for installing by hand: see the [README](https://github.com/${{ github.repository }}#install).)
           **Already installed?** Open the app and go to Settings → Check for updates.
           EOF
 
@@ -70,3 +73,10 @@ jobs:
         run: |
           V="${{ steps.v.outputs.version }}"
           gh release create "v$V" "InstrumentalStudio-$V.zip" SHA256SUMS --title "Instrumental Studio $V" --notes-file notes.md --target "$GITHUB_SHA"
+
+  installers:
+    needs: release
+    if: needs.release.outputs.exists == 'false'
+    uses: ./.github/workflows/installers.yml
+    with:
+      tag: v${{ needs.release.outputs.ver }}

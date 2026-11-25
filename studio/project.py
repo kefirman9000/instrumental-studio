@@ -3007,75 +3007,6 @@ class Project:
                         "sounds": sounds}
         return cache[k]
 
-    SNAP_MIN_DB = 1.5     # a hit's attack must be this much softer than its sound's clean hits to be given back snap
-    SNAP_MAX_DB = 6.0     # ...and gets back at most this much
-
-    @staticmethod
-    def _attack_db(x, p, sr):
-        """How much a hit's first 8 ms stand out over the 40 ms after them (dB): high for a crisp snare, lower
-        once separation has smeared its attack."""
-        a, b, c = p, p + int(0.008 * sr), p + int(0.048 * sr)
-        if c > len(x) or a < 0:
-            return None
-        return float(10 * np.log10((np.mean(x[a:b] ** 2) + 1e-12) / (np.mean(x[b:c] ** 2) + 1e-12)))
-
-    def restore_snap(self, ks=None):
-        """Drum snap: every hit under the singing is compared with the same drum sound's hits where nobody sings.
-        Where its attack came out softer (separation smears the crack of a snare or the click of a kick), the
-        first few milliseconds are lifted by what it lost, at most SNAP_MAX_DB; hits that kept their attack are
-        left alone. (After Studio Lab's transient shaper, but measured per hit instead of applied everywhere.)
-        One review item per drum track. Returns ids."""
-        ids = []
-        sr = self.sr
-        for k in (ks or [x for x in self.instruments if x in self.PERCUSSIVE]):
-            try:
-                sd = self._sounds(k)
-            except Exception as e:
-                log(f"drum snap skipped for {k}: {e}")
-                continue
-            src = self.render_stem(k)
-            x = src.mean(0)
-            n = src.shape[1]
-            gain = np.ones(n, np.float32)
-            fixed = 0
-            pre, att, rel = int(0.002 * sr), int(0.008 * sr), int(0.012 * sr)
-            for snd in sd["sounds"]:
-                clean = [i for i in snd["members"] if i not in snd["damaged"]]
-                ref = [v for v in (self._attack_db(x, int(sd["pos"][i]), sr) for i in clean) if v is not None]
-                if len(ref) < 3:
-                    continue
-                ref_db = float(np.median(ref))
-                for i in snd["damaged"]:
-                    p = int(sd["pos"][i])
-                    have = self._attack_db(x, p, sr)
-                    if have is None or ref_db - have < self.SNAP_MIN_DB:
-                        continue
-                    lift = 10 ** (min(ref_db - have, self.SNAP_MAX_DB) / 20)
-                    a, b, c = max(0, p - pre), p + att, min(n, p + att + rel)
-                    env = np.ones(c - a, np.float32)
-                    env[:p - a] = np.linspace(1, lift, p - a) if p > a else env[:0]
-                    env[p - a:b - a] = lift
-                    env[b - a:] = np.linspace(lift, 1, c - b)
-                    gain[a:c] = np.maximum(gain[a:c], env)
-                    fixed += 1
-            if not fixed:
-                continue
-            idx = np.flatnonzero(gain > 1.0001)
-            lo, hi = int(idx[0]), int(idx[-1]) + 1
-            d = (src[:, lo:hi] * (gain[lo:hi] - 1)[None, :]).astype(np.float16)
-            rid = f"snap_{k}"
-            if rid in self.suggestions and self.suggestions[rid]["status"] != "pending" \
-                    and not self.suggestions[rid].get("by_build"):
-                continue
-            self.suggestions[rid] = {
-                "id": rid, "type": "bleed", "stem": k, "status": "pending", "start": lo / sr, "end": hi / sr,
-                "section": self._section_of(lo / sr), "conf": 0.8, "severity": 0.1, "strength": 1.0, "donors": [],
-                "smart": "snap", "note": f"Gives {fixed} {k} hit{'s' if fixed != 1 else ''} under the singing back the "
-                                         f"attack the same drum has where nobody sings (at most +{self.SNAP_MAX_DB:.0f} dB)"}
-            self.patches[rid] = (lo, d)
-            ids.append(rid)
-        return ids
-
     def best_hits(self, lazy=False):
         if self.stage != "detected":
             return []
@@ -5704,7 +5635,7 @@ class Project:
 
     # ------------------------------------------------------------------ build the best instrumental
     AUTO_STEPS = ("keep", "gaps", "refs", "bestof", "versions", "bars", "hits", "pattern", "notes", "loops", "repairs",
-                  "recover", "deep", "leftovers", "rebuild", "snap", "consensus", "smartclean",
+                  "recover", "deep", "leftovers", "rebuild", "consensus", "smartclean",
                   "clicks", "improve", "mutes", "acappella", "acappella_hard", "notch", "tone", "seams")
 
     def vocal_gaps(self, min_len=1.0):
@@ -5785,7 +5716,7 @@ class Project:
     # "bars" is an extra too: even with the strict same-notes check it lowered backing instruments on real songs
     # (a different take of the same part pasted in; tested against a known clean instrumental).
     EXTRA_STEPS = ("versions", "bars", "pattern", "loops", "recover", "deep", "improve", "mutes", "notch", "tone",
-                   "acappella_hard", "gaps", "acappella", "smartclean", "consensus", "rebuild", "snap")
+                   "acappella_hard", "gaps", "acappella", "smartclean", "consensus", "rebuild")
 
     def _safe_runs(self, aggressive):
         try:
@@ -5845,11 +5776,6 @@ class Project:
              "copy, so no singing is carried over. Bars with no clean copy stay as they are. Made for songs built from "
              "repeats (house, pop, loops); on live playing a copy can sound different from the original take.",
              len([x for x in self.instruments if x not in NOT_REPAIRED])),
-            ("snap", "Drum snap: give hits under the singing back their attack",
-             "Each drum hit under the singing is compared with the same drum where nobody sings; where separation "
-             "softened its attack (a snare's crack, a kick's click), the first few milliseconds get back what they "
-             "lost, at most 6 dB. Hits that kept their attack are left alone.",
-             len([x for x in self.instruments if x in self.PERCUSSIVE])),
             ("consensus", "Clean against the repeats: turn down what one copy has and the others don't",
              "Every part an instrument plays more than once is compared with what all its copies agree on; anything "
              "only one copy has (leftover singing, breaths, separation fizz) is turned down, at most 12 dB, under the "
@@ -6036,12 +5962,6 @@ class Project:
                                       + ("" if n_rb == n_sung else " (the rest have no clean copy and were repaired instead)"))
                 except Exception as e:
                     log(f"build: rebuild from repeats skipped: {e}")
-            if "snap" in steps:
-                progress(0.352, "Giving drum hits back their attack")
-                try:
-                    self.restore_snap()
-                except Exception as e:
-                    log(f"build: drum snap skipped: {e}")
             if "consensus" in steps:
                 progress(0.355, "Cleaning against the repeats")
                 try:
@@ -6142,16 +6062,13 @@ class Project:
                         accept.add(i)
             if "smartclean" in steps:
                 for i, x in S.items():
-                    if x["status"] == "pending" and not inside_kept(x) and x.get("smart") and x["smart"] not in ("consensus", "snap"):
+                    if x["status"] == "pending" and not inside_kept(x) and x.get("smart") and x["smart"] != "consensus":
                         accept.add(i)
             if "consensus" in steps:
                 for i, x in S.items():
                     if x["status"] == "pending" and not inside_kept(x) and x.get("smart") == "consensus":
                         accept.add(i)
-            if "snap" in steps:
-                for i, x in S.items():
-                    if x["status"] == "pending" and x.get("smart") == "snap":
-                        accept.add(i)
+
             if "clicks" in steps:
                 for i, x in S.items():
                     if x["type"] == "glitch" and x["status"] == "pending":
